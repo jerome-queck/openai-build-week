@@ -5,7 +5,7 @@
 - Use one GitHub Issue per independently deliverable feature, fix, or maintenance task.
 - `/to-spec` publishes the approved spec as a `ready-for-agent` GitHub Issue.
 - `/to-tickets` creates `ready-for-agent` tracer-bullet Issues with explicit blockers. Generated tickets do not need `/triage`.
-- Work the unblocked frontier one ticket at a time. Start each `/implement` ticket in a fresh context.
+- Work the unblocked implementation frontier one ticket at a time. Start each `/implement` ticket in a fresh context.
 - For tracked work, reference the ticket as `Refs #<number>` in at least one branch commit and `Closes #<number>` in the pull request.
 
 ## Branches
