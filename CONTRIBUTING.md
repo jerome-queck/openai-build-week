@@ -37,14 +37,13 @@ Prototypes are different: capture them on a clearly named throwaway branch outsi
 
 ### Review ordering
 
-The installed `/implement` ordering says to review before committing, but `/code-review` reads committed `HEAD` and cannot see uncommitted changes. This repository therefore uses the following explicit override:
+Follow Matt's intended order. This repository's vendored `/code-review` is patched to include committed, staged, unstaged, and untracked changes:
 
-1. Commit locally without pushing.
+1. Finish the implementation without committing it.
 2. Run `/code-review main` for separate Standards and Spec reviews.
-3. Fix findings, amend or add commits, and rerun review when material.
-4. Push only after the branch passes review and tests.
-
-Repeat this checkpoint for later draft-pull-request changes, then run a final review before marking the pull request ready.
+3. Fix findings and rerun review when material.
+4. Commit only after the implementation passes review and tests.
+5. Push and open the pull request.
 
 ## AI attribution
 
@@ -59,11 +58,12 @@ Do not add attribution for an agent that did not materially contribute.
 
 ## Pull requests
 
-- Open a draft pull request after the first coherent commit is pushed when collaborative visibility is useful.
+- Open a normal pull request after review, commit, and push. Use a draft only if the repository's current GitHub plan supports private draft pull requests.
 - Keep the pull request focused on its ticket.
-- Include `Closes #<issue-number>` in the body.
+- Include `Closes #<issue-number>` in the body and target `main` so GitHub closes the Issue on merge.
 - Explain the change and list verification performed.
-- Ensure `/code-review main` and all relevant checks pass before marking it ready.
-- Squash-merge after review and checks pass, then delete the branch.
+- If `main` advances, update the branch, resolve conflicts, then rerun affected tests and review.
+- Ensure `/code-review main` and all relevant checks pass before merging.
+- Squash-merge after review and checks pass. Before confirming the merge, ensure the squash-commit message contains each applicable AI attribution trailer exactly once. Then delete the branch.
 
 Trivial repository setup or documentation corrections may go directly to `main`; product work should use a pull request.
