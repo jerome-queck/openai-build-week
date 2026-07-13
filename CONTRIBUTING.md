@@ -37,13 +37,13 @@ Prototypes are different: capture them on a clearly named throwaway branch outsi
 
 ### Review ordering
 
-Follow Matt's intended order. This repository's vendored `/code-review` is patched to include committed, staged, unstaged, and untracked changes:
+Use committed branch review with upstream `/code-review`:
 
-1. Finish the implementation without committing it.
-2. Run `/code-review main` for separate Standards and Spec reviews.
-3. Fix findings and rerun review when material.
-4. Commit only after the implementation passes review and tests.
-5. Push and open the pull request.
+1. Finish the implementation and commit it to the feature branch.
+2. Push the branch and open the pull request.
+3. Run `/code-review main` for separate Standards and Spec reviews.
+4. Fix findings, commit and push the fixes, then rerun review when material.
+5. Merge only after review and tests pass.
 
 ## AI attribution
 
@@ -58,7 +58,7 @@ Do not add attribution for an agent that did not materially contribute.
 
 ## Pull requests
 
-- Open a normal pull request after review, commit, and push. Use a draft only if the repository's current GitHub plan supports private draft pull requests.
+- Open a normal pull request after committing and pushing. Use a draft only if the repository's current GitHub plan supports private draft pull requests.
 - Keep the pull request focused on its ticket.
 - Include `Closes #<issue-number>` in the body and target `main` so GitHub closes the Issue on merge.
 - Explain the change and list verification performed.
