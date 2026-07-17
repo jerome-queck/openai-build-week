@@ -1,0 +1,9 @@
+# Divide long material into linked learning slices
+
+Long proofs, solutions, and chapters will not be expanded into one exhaustive teaching session. The Teaching Orchestrator will first build a lightweight Argument Roadmap of the whole source, preserving its major claims, stages, dependencies, and source anchors without generating a detailed explanation of every part. It will then propose one editable Learning Slice as the scope of the current Learning Session.
+
+The remaining slices will become linked future Learning Sessions under the same Study Mission so the learner retains orientation and a clear return path without receiving a ten- or twenty-page artifact at once. The learner may revise the proposed boundaries or choose a different slice, but each active session remains centered on one coherent outcome and only its immediate prerequisites.
+
+Small prerequisite gaps, such as an unfamiliar definition or lemma, will appear as on-demand Concept Peeks anchored directly to the relevant mathematical step. A learner can open and close a peek without permanently lengthening the proof or leaving the current session. A substantial gap will instead produce a proposed Prerequisite Branch with two-way navigation and a retained Return Point at the exact originating step. The learner may accept, defer, or override either recommendation.
+
+In version one, a Prerequisite Branch will replace the main canvas with its own full Mathematical Workbench rather than compress the original and branch into a split view. A persistent Branch Trail, an always-visible action returning to the exact Return Point, and the branch relationship in the session sidebar will preserve orientation while the learner works inside the branch; later interface testing may refine this presentation without changing the branch relationship.

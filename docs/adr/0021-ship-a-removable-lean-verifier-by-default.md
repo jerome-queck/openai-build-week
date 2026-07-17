@@ -1,0 +1,11 @@
+# Ship a removable Lean verifier by default
+
+The macOS product will ship with a version-pinned Bundled Lean Runtime installed and ready for formal verification by default. Learners will not need to configure an external theorem prover before the Teaching Orchestrator can perform Verification Escalation. Lean runs as a local Verifier Runtime independently from the Codex Runtime and records its exact tool and dependency versions with every successful formal check.
+
+The Default Verification Environment will include the compatible mathlib release, precompiled library caches, and app-specific formalization support needed for broad undergraduate mathematics rather than only a bare Lean executable. This environment may expand as later app releases support more mathematical domains. Each release remains explicitly versioned, and every formal result retains a Verification Environment Manifest identifying the environment that accepted it.
+
+The learner may remove the Bundled Lean Runtime from settings and reinstall it later. Removing it does not impair ordinary teaching, delete sessions, or erase prior verification evidence; it makes new Lean checks unavailable until reinstallation and requires the interface to fall back transparently to the appropriate lower Verification Level.
+
+After a successful environment upgrade, only the current Default Verification Environment remains installed by default. An older bundle is removed unless the learner has made it a Pinned Verification Environment. Historical proof source and Verification Environment Manifests remain preserved, so prior results continue to state the environment that accepted them even when its executable bundle is no longer installed.
+
+The Verifier Environment Registry will store each environment as an isolated immutable directory such as `verifiers/<environment-id>/`, with separate manifest, toolchain, libraries, precompiled cache, and app-support components. New bundles are downloaded or unpacked into staging, validated, and then activated by updating an environment identifier in app metadata; libraries are never mixed in place across versions. Unpinned superseded bundles are cleaned up only after activation succeeds, keeping upgrades and rollback predictable.

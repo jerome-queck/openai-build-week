@@ -1,0 +1,3 @@
+# Build macOS first with a portable Electron core
+
+Version one will use Electron with React and TypeScript and will be developed, tested, packaged, and released only for macOS until the product is fully featured; Windows and Linux builds, CI, packaging, and platform QA are explicitly deferred. Electron was chosen because one Chromium renderer and a Node main process reduce integration risk for the interactive PDF and mathematics interface, Codex app-server, and Lean. Future portability will be preserved by keeping domain logic, persisted formats, and renderer behavior platform-neutral while isolating macOS facilities behind narrow adapters, so portability is an architectural constraint rather than a current platform deliverable.

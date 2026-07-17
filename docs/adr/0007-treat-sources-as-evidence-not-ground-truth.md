@@ -1,0 +1,7 @@
+# Treat sources as evidence, not ground truth
+
+Learner-provided textbooks, lecture notes, exercises, and solutions will serve as the Pedagogical Baseline for notation, definitions, sequencing, and course context, but will not be treated as infallible mathematical authority. Before relying on a substantive result, the system will identify the underlying theorem, check that its assumptions and conclusion match the current use, look for known errata when available, and perform Source Corroboration against independent authoritative material. Online sources are also weighted evidence rather than ground truth; agreement among weak or derivative sources is not sufficient by itself.
+
+When no Pedagogical Baseline exists, the system may identify the relevant known result and research established statements and proof approaches before constructing the explanation. A material conflict becomes a visible Source Discrepancy. The system may preserve a course-specific convention when it is mathematically coherent, but it will not silently copy, correct, or replace a disputed claim.
+
+Every substantive proof task will begin with a lightweight automatic Corroboration Pass, even when the supplied material appears correct. This pass identifies the relevant known result, compares its assumptions and conclusion, checks for known errata when practical, and seeks suitable independent support. Deeper research is conditional on missing, sparse, disputed, or conflicting sources, or on a proposed teaching route that materially departs from established approaches.

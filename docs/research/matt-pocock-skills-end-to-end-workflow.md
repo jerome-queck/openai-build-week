@@ -169,7 +169,7 @@ If this research note and those files ever disagree, the layered policy above wi
 - Because the installed `/code-review` reviews committed `HEAD`, implementation uses a verified local review commit before `/code-review main`, then remediates and re-reviews material fixes before publication. This adapter remains temporary while [mattpocock/skills#511](https://github.com/mattpocock/skills/issues/511) is unresolved.
 - [`.github/pull_request_template.md`](../../.github/pull_request_template.md) captures the Issue, optional parent spec, verification results, review outcome, demo evidence, and final squash-attribution reminder.
 - GitHub is configured for squash merging only and automatic deletion of merged branches, matching the documented outer loop.
-- A missing root `CONTEXT.md` remains intentional: domain language and ADRs are created lazily only when the work earns them.
+- The root `CONTEXT.md` and ADRs now capture the domain language and decisions earned through product grilling; future additions remain lazy and evidence-driven.
 
 ### Safe skill maintenance
 

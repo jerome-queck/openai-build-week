@@ -1,0 +1,5 @@
+# Separate agent work logs from learning output
+
+Complete observable multi-agent execution logs will be stored locally for continuity, debugging, and verification, but they will not be surfaced as learner-facing content. The Mathematical Workbench will present a curated projection of learner inputs, anchored Teaching Moves, Learning Artifacts, verification and provenance, and Trail Items, while raw agent messages and tool events remain an internal source from which the system can recover context. This preserves recoverability and auditability without turning the learning experience into a multi-agent transcript.
+
+The Session Record owns learner actions, learner-visible Teaching Orchestrator interaction, and the structured learning state produced from that interaction. The Agent Work Log owns raw Specialist Agent messages, orchestration dispatches, tool calls, intermediate outputs, and retries. A Session Record may reference relevant log events for provenance without copying their raw transcript into the learner-facing record.
