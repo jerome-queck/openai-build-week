@@ -17,7 +17,7 @@ export function App() {
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
   if (state.screen === "workbench" && state.activeSessionId) {
-    return <Workbench state={state} onState={setState} />;
+    return <Workbench key={state.activeSessionId} state={state} onState={setState} />;
   }
   return <Dashboard state={state} onState={setState} />;
 }

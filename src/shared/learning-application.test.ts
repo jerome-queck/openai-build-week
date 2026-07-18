@@ -214,4 +214,22 @@ describe("Learning Application", () => {
       }]
     });
   });
+
+  it("pauses an active Learning Session when hierarchy navigation returns to the dashboard", async () => {
+    const { application } = await launch();
+    const started = await application.submit({ type: "startQuickStudy", mathematics: "Find the derivative of sine." });
+    const sessionId = started.activeSessionId!;
+
+    const navigated = await application.submit({
+      type: "navigateToWorkspace",
+      workspaceId: "quick-study-workspace"
+    });
+
+    expect(navigated).toMatchObject({
+      screen: "dashboard",
+      activeSessionId: null,
+      resumeSessionId: sessionId,
+      sessions: [{ id: sessionId, status: "paused" }]
+    });
+  });
 });

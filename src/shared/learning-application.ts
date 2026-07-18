@@ -148,6 +148,7 @@ export class LearningApplication {
       case "navigateToWorkspace": {
         const workspace = this.state.workspaces.find((candidate) => candidate.id === action.workspaceId);
         if (!workspace) throw new Error("Choose an existing Study Workspace.");
+        this.pauseActiveSessionForNavigation();
         const currentMission = this.state.missions.find(
           (mission) => mission.id === this.state.navigation.missionId && mission.workspaceId === workspace.id
         );
@@ -161,6 +162,7 @@ export class LearningApplication {
       }
       case "navigateToMission": {
         this.requireMission(action.workspaceId, action.missionId);
+        this.pauseActiveSessionForNavigation();
         this.state.navigation = { workspaceId: action.workspaceId, missionId: action.missionId };
         this.state.screen = "dashboard";
         break;
@@ -283,6 +285,15 @@ export class LearningApplication {
   private pauseActiveSession(): void {
     if (!this.state.activeSessionId) return;
     this.requireSession(this.state.activeSessionId).status = "paused";
+  }
+
+  private pauseActiveSessionForNavigation(): void {
+    if (!this.state.activeSessionId) return;
+    const session = this.requireSession(this.state.activeSessionId);
+    session.status = "paused";
+    session.activityOrder = this.nextActivityOrder();
+    this.state.resumeSessionId = session.id;
+    this.state.activeSessionId = null;
   }
 
   private nextActivityOrder(): number {

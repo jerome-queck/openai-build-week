@@ -71,6 +71,14 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await page.getByLabel("Destination Study Mission").selectOption({ label: "Abstract Algebra — Finite group structure" });
     await page.getByRole("button", { name: "File Quick Study session" }).click();
 
+    await page.getByLabel("Typed mathematics").fill("Determine the subgroups of a cyclic group of order 12.");
+    await page.getByRole("button", { name: "Start Quick Study" }).click();
+    await page.getByLabel("Learning Goal").fill("Relate subgroups to divisors");
+    await page.getByRole("button", { name: "Leave session" }).click();
+    await page.getByLabel("Destination Study Mission").selectOption({ label: "Abstract Algebra — Finite group structure" });
+    await page.getByRole("button", { name: "File Quick Study session" }).click();
+    await page.getByRole("button", { name: "Resume Learning Session", exact: true }).click();
+
     const workspaceControl = page.getByRole("button", { name: "Open Study Workspace Abstract Algebra" });
     await workspaceControl.focus();
     await page.keyboard.press("Enter");
@@ -86,6 +94,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await groupedSessionControl.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "Mathematical Workbench" })).toBeVisible();
+    await expect(page.getByLabel("Learning Goal")).toHaveValue("Understand where convergence controls the tail");
     await page.getByRole("button", { name: "Leave session" }).click();
     await quit();
 
