@@ -20,9 +20,10 @@ export interface PendingQuestion {
   text: string;
 }
 
-export interface QuestionCard {
+export interface SubmittedPendingQuestion {
   id: string;
   text: string;
+  teachingCard: TeachingCardState;
 }
 
 export interface TeachingCardState {
@@ -98,7 +99,8 @@ export interface LearningSession {
   };
   teachingCard: TeachingCardState;
   teachingCardHistory: TeachingCardState[];
-  questionCards: QuestionCard[];
+  submittedPendingQuestions: SubmittedPendingQuestion[];
+  currentTeachingInput: { kind: "sessionIntake"; text: string } | { kind: "pendingQuestion"; submissionId: string; text: string };
   pendingQuestion: PendingQuestion | null;
   accessPolicy: "focused";
 }
@@ -142,7 +144,6 @@ export type LearnerAction =
   | { type: "editPendingQuestion"; text: string }
   | { type: "discardPendingQuestion" }
   | { type: "submitPendingQuestion" }
-  | { type: "submitQuestion"; text: string }
   | {
       type: "reviseSessionProposal";
       learningGoal: string;
@@ -190,7 +191,7 @@ export class LearningApplication {
       for (const session of persisted.sessions) {
         if (session.status === "active") session.status = "paused";
         if (session.teachingCard.status === "streaming") {
-          session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+          replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
         }
       }
       persisted.activeSessionId = null;
@@ -279,7 +280,7 @@ export class LearningApplication {
     const activeWorks = [...this.modelWorks.entries()];
     for (const [sessionId, work] of activeWorks) {
       const session = this.requireSession(sessionId);
-      session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+      replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
       work.controller.abort();
     }
     if (activeWorks.length > 0) {
@@ -365,7 +366,8 @@ export class LearningApplication {
           proposal: defaultAcceptedProposal(),
           teachingCard: emptyTeachingCard(),
           teachingCardHistory: [],
-          questionCards: [],
+          submittedPendingQuestions: [],
+          currentTeachingInput: { kind: "sessionIntake", text: mathematics },
           pendingQuestion: null,
           accessPolicy: "focused"
         };
@@ -425,7 +427,8 @@ export class LearningApplication {
           },
           teachingCard: emptyTeachingCard(),
           teachingCardHistory: [],
-          questionCards: [],
+          submittedPendingQuestions: [],
+          currentTeachingInput: { kind: "sessionIntake", text: mathematics },
           pendingQuestion: null,
           accessPolicy: "focused"
         };
@@ -473,7 +476,11 @@ export class LearningApplication {
         this.requireModelAccess();
         if (!session.teachingCard.retryable) throw new Error("This Teaching Card is not ready to retry.");
         if (this.modelWorks.has(session.id)) throw new Error("Restart Codex before retrying this Teaching Card.");
-        this.beginTeaching(session);
+        const input = session.currentTeachingInput;
+        const submission = input.kind === "pendingQuestion"
+          ? session.submittedPendingQuestions.find((candidate) => candidate.id === input.submissionId) ?? null
+          : null;
+        this.beginTeaching(session, input.text, submission);
         break;
       }
       case "startChatGptLogin": {
@@ -543,15 +550,12 @@ export class LearningApplication {
         const session = this.requireActiveSession();
         if (!session.pendingQuestion) throw new Error("There is no Pending Question to submit.");
         const question = { ...session.pendingQuestion };
-        this.beginTeaching(session, question.text, question);
+        const submission: SubmittedPendingQuestion = {
+          ...question,
+          teachingCard: emptyTeachingCard()
+        };
+        this.beginTeaching(session, question.text, submission);
         session.pendingQuestion = null;
-        break;
-      }
-      case "submitQuestion": {
-        this.requireModelAccess();
-        const session = this.requireActiveSession();
-        const text = requiredText(action.text, "Ask Bar question");
-        this.beginTeaching(session, text, { id: crypto.randomUUID(), text });
         break;
       }
       case "resumeSession": {
@@ -619,19 +623,24 @@ export class LearningApplication {
   private beginTeaching(
     session: LearningSession,
     mathematics = session.mathematics,
-    questionCard: QuestionCard | null = null
+    submission: SubmittedPendingQuestion | null = null
   ): void {
     this.requireModelAccess();
     if (this.modelWorks.has(session.id)) throw new Error("Model teaching is already active for this Learning Session.");
-    if (questionCard) {
-      if (session.teachingCard.status !== "idle") {
+    if (submission) {
+      if (session.currentTeachingInput.kind === "sessionIntake" && session.teachingCard.status !== "idle") {
         session.teachingCardHistory.push(structuredClone(session.teachingCard));
       }
-      session.questionCards.push(questionCard);
+      if (!session.submittedPendingQuestions.some((candidate) => candidate.id === submission.id)) {
+        session.submittedPendingQuestions.push(submission);
+      }
+      session.currentTeachingInput = { kind: "pendingQuestion", submissionId: submission.id, text: submission.text };
+    } else {
+      session.currentTeachingInput = { kind: "sessionIntake", text: mathematics };
     }
     const controller = new AbortController();
     session.proposal.status = "accepted";
-    session.teachingCard = { status: "streaming", content: "", error: null, retryable: false };
+    replaceTeachingCard(session, { status: "streaming", content: "", error: null, retryable: false });
     const runtime = this.modelRuntime!;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
@@ -659,12 +668,12 @@ export class LearningApplication {
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       const message = usefulRuntimeError(error);
-      session.teachingCard = {
+      replaceTeachingCard(session, {
         ...session.teachingCard,
         status: "failed",
         error: message,
         retryable: true
-      };
+      });
       this.recordModelAccessLoss(error);
     }).finally(() => {
       if (this.modelWorks.get(session.id)?.promise === promise) this.modelWorks.delete(session.id);
@@ -677,7 +686,7 @@ export class LearningApplication {
   private async stopModelWork(session: LearningSession): Promise<boolean> {
     const work = this.modelWorks.get(session.id);
     if (!this.modelRuntime || !work) throw new Error("There is no active model work to stop.");
-    session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+    replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
     work.controller.abort();
     try {
       await this.modelRuntime.cancelTeaching(session.id);
@@ -863,7 +872,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       proposal: session.proposal ?? defaultAcceptedProposal(),
       teachingCard: session.teachingCard ?? emptyTeachingCard(),
       teachingCardHistory: session.teachingCardHistory ?? [],
-      questionCards: session.questionCards ?? [],
+      submittedPendingQuestions: session.submittedPendingQuestions ?? [],
+      currentTeachingInput: session.currentTeachingInput ?? { kind: "sessionIntake", text: session.mathematics },
       pendingQuestion: session.pendingQuestion ?? null,
       accessPolicy: session.accessPolicy ?? "focused"
     }));
@@ -883,7 +893,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       proposal: defaultAcceptedProposal(),
       teachingCard: emptyTeachingCard(),
       teachingCardHistory: [],
-      questionCards: [],
+      submittedPendingQuestions: [],
+      currentTeachingInput: { kind: "sessionIntake", text: legacy.session.mathematics },
       pendingQuestion: null,
       accessPolicy: "focused"
     };
@@ -921,6 +932,16 @@ function interruptedTeachingCard(content: string): LearningSession["teachingCard
     error: "Teaching stopped. You can retry without losing this Learning Session.",
     retryable: true
   };
+}
+
+function replaceTeachingCard(session: LearningSession, teachingCard: TeachingCardState): void {
+  session.teachingCard = teachingCard;
+  if (session.currentTeachingInput.kind !== "pendingQuestion") return;
+  const submissionId = session.currentTeachingInput.submissionId;
+  const submission = session.submittedPendingQuestions.find(
+    (candidate) => candidate.id === submissionId
+  );
+  if (submission) submission.teachingCard = teachingCard;
 }
 
 function emptyWorkspaceContext(): WorkspaceContext {

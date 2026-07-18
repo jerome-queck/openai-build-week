@@ -577,18 +577,25 @@ function TeachingCard({ session, modelAvailable, onState }: { session: LearningS
 }
 
 function SessionRecord({ session }: { session: LearningSession }) {
-  if (session.questionCards.length === 0 && session.teachingCardHistory.length === 0) return null;
+  if (session.submittedPendingQuestions.length === 0 && session.teachingCardHistory.length === 0) return null;
   return (
     <section className="session-record" aria-labelledby="session-record-title">
       <p className="eyebrow">Session Record</p>
-      <h2 id="session-record-title">Earlier questions and Teaching Cards</h2>
-      {session.questionCards.map((question, index) => (
-        <article key={question.id}>
-          <h3>Question Card {index + 1}</h3>
-          <p>{question.text}</p>
-          {session.teachingCardHistory[index]?.content && (
-            <details><summary>Earlier Teaching Card</summary><p>{session.teachingCardHistory[index].content}</p></details>
-          )}
+      <h2 id="session-record-title">Submitted questions and earlier teaching</h2>
+      {session.teachingCardHistory.map((card, index) => (
+        <article key={`teaching-${index}`}>
+          <h3>Earlier Teaching Card</h3>
+          <p>{card.content || card.error}</p>
+        </article>
+      ))}
+      {session.submittedPendingQuestions.map((submission) => (
+        <article key={submission.id}>
+          <h3>Submitted Pending Question</h3>
+          <p>{submission.text}</p>
+          <details>
+            <summary>Teaching Card · {teachingStatusLabel(submission.teachingCard.status)}</summary>
+            <p>{submission.teachingCard.content || submission.teachingCard.error || "Teaching has not produced content."}</p>
+          </details>
         </article>
       ))}
     </section>
@@ -619,9 +626,10 @@ function AskBar({ session, modelAvailable, onState }: {
       else await save();
       return;
     }
-    if (modelAvailable) onState(await window.quickStudy.submit({ type: "submitQuestion", text }));
-    else await save();
+    await save();
   };
+
+  if (!pending && modelAvailable) return null;
 
   return (
     <section className="ask-bar" aria-labelledby="ask-bar-title">
@@ -633,7 +641,7 @@ function AskBar({ session, modelAvailable, onState }: {
         <div className="ask-actions">
           {pending && <button type="button" className="text-button" onClick={() => void window.quickStudy.submit({ type: "discardPendingQuestion" }).then(onState)}>Discard Pending Question</button>}
           <button className="primary" disabled={!text.trim()}>
-            {pending ? (modelAvailable ? "Submit Pending Question" : "Save Pending Question changes") : (modelAvailable ? "Ask Codex" : "Save Pending Question")}
+            {pending ? (modelAvailable ? "Submit Pending Question" : "Save Pending Question changes") : "Save Pending Question"}
           </button>
         </div>
       </form>

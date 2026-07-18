@@ -38,7 +38,6 @@ function isLearnerAction(value: unknown): value is LearnerAction {
       return "mathematics" in action && typeof action.mathematics === "string";
     case "savePendingQuestion":
     case "editPendingQuestion":
-    case "submitQuestion":
       return "text" in action && typeof action.text === "string";
     case "loginWithApiKey":
       return "apiKey" in action && typeof action.apiKey === "string";

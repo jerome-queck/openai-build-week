@@ -479,7 +479,7 @@ describe("Learning Application", () => {
     expect(runtime.teachingRequests).toHaveLength(0);
   });
 
-  it("retains questions and earlier Teaching Cards while allowing only one active turn", async () => {
+  it("bundles a submitted Pending Question with its Teaching Card and retries the same input", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand compactness",
       scope: "Use an open cover",
@@ -490,15 +490,22 @@ describe("Learning Application", () => {
     const { application } = await launchWithRuntime(runtime);
     await application.submit({ type: "submitSessionIntake", mathematics: "Explain compactness." });
 
-    await expect(application.submit({ type: "submitQuestion", text: "Why finite?" }))
-      .rejects.toThrow("already active");
     runtime.emitTeaching("First explanation");
     runtime.completeTeaching();
     await application.waitForModelWork();
 
-    let state = await application.submit({ type: "submitQuestion", text: "Why finite?" });
-    expect(state.sessions[0].questionCards).toEqual([
-      expect.objectContaining({ text: "Why finite?" })
+    runtime.proposalError = new ModelAccessError("network", "Network connection is unavailable.");
+    await application.submit({ type: "submitSessionIntake", mathematics: "Start another session." });
+    await application.submit({ type: "savePendingQuestion", text: "Why finite?" });
+    runtime.proposalError = null;
+    await application.submit({ type: "refreshAuthentication" });
+    let state = await application.submit({ type: "submitPendingQuestion" });
+
+    expect(state.sessions[0].submittedPendingQuestions).toEqual([
+      expect.objectContaining({
+        text: "Why finite?",
+        teachingCard: expect.objectContaining({ status: "streaming" })
+      })
     ]);
     expect(state.sessions[0].teachingCardHistory).toEqual([
       expect.objectContaining({ status: "completed", content: "First explanation" })
@@ -507,8 +514,16 @@ describe("Learning Application", () => {
     await application.waitForModelWork();
 
     state = application.getState();
-    expect(state.sessions[0].questionCards[0].text).toBe("Why finite?");
-    expect(state.sessions[0].teachingCard).toMatchObject({ status: "failed" });
+    expect(state.sessions[0].submittedPendingQuestions[0]).toMatchObject({
+      text: "Why finite?",
+      teachingCard: { status: "failed" }
+    });
+
+    await application.submit({ type: "refreshAuthentication" });
+    await application.submit({ type: "retryModelWork" });
+    expect(runtime.teachingRequests.at(-1)?.mathematics).toBe("Why finite?");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
   });
 
   it("tracks every teaching job and persists stopped retryable cards across shutdown and relaunch", async () => {
