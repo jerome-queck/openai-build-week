@@ -164,6 +164,21 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .workbench-source > label { margin-top: 18px; }
 .workbench-source > select { max-width: 420px; }
 .open-workbench-source { margin-top: 18px; }
+.argument-roadmap { margin: 0 0 20px; padding: 22px; border: 1px solid #c7d5c9; border-radius: 16px; background: #f4f7ef; }
+.argument-roadmap h2 { font-size: 25px; }
+.argument-roadmap > .subtle { margin: 8px 0 18px; }
+.roadmap-stages { margin: 0; padding-left: 24px; }
+.roadmap-stages li { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 10px; border-top: 1px solid #d7dfd4; }
+.roadmap-stages li.selected { border-radius: 10px; background: #e7efe5; }
+.roadmap-stages p { margin: 4px 0; color: #385950; line-height: 1.45; }
+.roadmap-stages small { color: #667b74; }
+.roadmap-stages .secondary { flex: 0 0 auto; }
+.roadmap-stage-actions { display: flex; align-items: flex-end; gap: 6px; flex: 0 0 auto; flex-direction: column; }
+.roadmap-stage-actions .text-button { padding: 4px 0; }
+.learning-slice-editor { display: grid; gap: 8px; margin-top: 18px; padding: 18px; border-radius: 12px; background: #fffdf7; }
+.learning-slice-editor .proposal-label { margin: 0 0 4px; }
+.learning-slice-editor textarea { width: 100%; min-height: 70px; padding: 10px; resize: vertical; border: 1px solid #c8d0c8; border-radius: 9px; color: #17332e; background: #fff; }
+.learning-slice-editor .secondary { justify-self: end; }
 .source-selection-controls { display: flex; gap: 8px; flex-wrap: wrap; }
 .source-selection-controls .secondary { padding: 8px 11px; font-size: 12px; }
 .source-selection-surface {

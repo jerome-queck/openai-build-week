@@ -1208,6 +1208,175 @@ describe("Learning Application", () => {
     });
   });
 
+  it("turns long material into a source-anchored Argument Roadmap and one proposed Learning Slice", async () => {
+    const mathematics = [
+      "Stage one proves that every compact subset of a Hausdorff space is closed.",
+      "Stage two derives uniqueness of limits from the closed diagonal.",
+      "Stage three applies uniqueness to continuous extensions."
+    ].join("\n");
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand why compact subsets are closed",
+      scope: "Prove the compact-subset claim without expanding the later applications",
+      initialTeachingDirection: "Start with pointwise separation and compactness",
+      requiresConfirmation: false,
+      confirmationReason: null,
+      argumentRoadmap: {
+        title: "Compactness through uniqueness and extension",
+        stages: [
+          {
+            title: "Compact subsets are closed",
+            majorClaim: "Every compact subset of a Hausdorff space is closed.",
+            dependsOn: [],
+            sourceExcerpt: "Stage one proves that every compact subset of a Hausdorff space is closed.",
+            learningGoal: "Understand why compact subsets are closed",
+            boundary: "Prove the compact-subset claim",
+            immediatePrerequisites: ["Hausdorff separation", "finite subcovers"]
+          },
+          {
+            title: "Limits are unique",
+            majorClaim: "Limits in a Hausdorff space are unique.",
+            dependsOn: [0],
+            sourceExcerpt: "Stage two derives uniqueness of limits from the closed diagonal.",
+            learningGoal: "Derive uniqueness of limits",
+            boundary: "Relate convergence to the closed diagonal",
+            immediatePrerequisites: ["closed diagonal characterization"]
+          },
+          {
+            title: "Extensions are unique",
+            majorClaim: "Continuous extensions from a dense subspace are unique.",
+            dependsOn: [1],
+            sourceExcerpt: "Stage three applies uniqueness to continuous extensions.",
+            learningGoal: "Apply uniqueness to continuous extensions",
+            boundary: "Prove uniqueness of a continuous extension",
+            immediatePrerequisites: ["density"]
+          }
+        ],
+        proposedStage: 0
+      }
+    });
+    const { application } = await launchWithRuntime(runtime);
+
+    const state = await application.submit({ type: "submitSessionIntake", mathematics });
+
+    expect(state.argumentRoadmaps).toEqual([
+      expect.objectContaining({
+        title: "Compactness through uniqueness and extension",
+        selectedStageId: expect.any(String),
+        stages: [
+          expect.objectContaining({ title: "Compact subsets are closed", dependsOnStageIds: [], sourceAnchorId: expect.any(String) }),
+          expect.objectContaining({ title: "Limits are unique", dependsOnStageIds: [expect.any(String)], sourceAnchorId: expect.any(String) }),
+          expect.objectContaining({ title: "Extensions are unique", dependsOnStageIds: [expect.any(String)], sourceAnchorId: expect.any(String) })
+        ]
+      })
+    ]);
+    expect(state.sessions).toHaveLength(3);
+    expect(state.sessions.map((session) => session.learningGoal)).toEqual([
+      "Understand why compact subsets are closed",
+      "Derive uniqueness of limits",
+      "Apply uniqueness to continuous extensions"
+    ]);
+    expect(state.sessions[0]).toMatchObject({
+      status: "active",
+      proposal: { status: "awaitingConfirmation" },
+      learningSlice: {
+        boundary: "Prove the compact-subset claim",
+        immediatePrerequisites: ["Hausdorff separation", "finite subcovers"]
+      }
+    });
+    expect(state.sessions.slice(1).every((session) => session.status === "paused")).toBe(true);
+    expect(new Set(state.sessions.map((session) => session.missionId))).toEqual(new Set([state.sessions[0].missionId]));
+    expect(runtime.teachingRequests).toEqual([]);
+  });
+
+  it("edits or changes the proposed Learning Slice, persists future links, and teaches only the confirmed slice", async () => {
+    const mathematics = "First establish the local lemma.\nThen prove the main theorem.\nFinally derive the corollary.";
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Establish the local lemma",
+      scope: "Prove only the local lemma",
+      initialTeachingDirection: "Inspect the local hypothesis",
+      requiresConfirmation: false,
+      confirmationReason: null,
+      argumentRoadmap: {
+        title: "Lemma to theorem to corollary",
+        stages: [
+          {
+            title: "Local lemma", majorClaim: "The local lemma holds.", dependsOn: [],
+            sourceExcerpt: "First establish the local lemma.", learningGoal: "Establish the local lemma",
+            boundary: "Prove only the local lemma", immediatePrerequisites: ["the local hypothesis"]
+          },
+          {
+            title: "Main theorem", majorClaim: "The main theorem follows.", dependsOn: [0],
+            sourceExcerpt: "Then prove the main theorem.", learningGoal: "Prove the main theorem",
+            boundary: "Prove the theorem from the lemma", immediatePrerequisites: ["the local lemma"]
+          },
+          {
+            title: "Corollary", majorClaim: "The corollary follows.", dependsOn: [1],
+            sourceExcerpt: "Finally derive the corollary.", learningGoal: "Derive the corollary",
+            boundary: "Derive only the corollary", immediatePrerequisites: ["the main theorem"]
+          }
+        ],
+        proposedStage: 0
+      }
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    let state = await application.submit({ type: "submitSessionIntake", mathematics });
+    const roadmap = state.argumentRoadmaps[0];
+
+    state = await application.submit({
+      type: "reviseLearningSlice",
+      boundary: "Prove the local lemma through its two essential cases",
+      immediatePrerequisites: ["the local hypothesis", "the case split"]
+    });
+    expect(state.sessions.find((session) => session.id === state.activeSessionId)?.learningSlice).toMatchObject({
+      boundary: "Prove the local lemma through its two essential cases",
+      immediatePrerequisites: ["the local hypothesis", "the case split"]
+    });
+
+    state = await application.submit({
+      type: "selectRoadmapStage",
+      roadmapId: roadmap.id,
+      stageId: roadmap.stages[1].id
+    });
+    const selected = state.sessions.find((session) => session.id === state.activeSessionId)!;
+    expect(selected).toMatchObject({
+      id: roadmap.stages[1].sessionId,
+      learningGoal: "Prove the main theorem",
+      proposal: { status: "awaitingConfirmation" }
+    });
+    expect(state.sessions.find((session) => session.id === roadmap.stages[0].sessionId)?.status).toBe("paused");
+
+    await application.submit({ type: "confirmSessionProposal" });
+    expect(runtime.teachingRequests).toHaveLength(1);
+    expect(runtime.teachingRequests[0]).toMatchObject({
+      sessionId: selected.id,
+      scope: "Prove the theorem from the lemma",
+      learningSlice: {
+        roadmapTitle: "Lemma to theorem to corollary",
+        stageTitle: "Main theorem",
+        boundary: "Prove the theorem from the lemma",
+        immediatePrerequisites: ["the local lemma"],
+        remainingStageTitles: ["Local lemma", "Corollary"]
+      }
+    });
+    expect(state.sessions.every((session) => session.teachingCard.content === "")).toBe(true);
+
+    runtime.emitTeaching("Focus only on the main theorem and its local lemma.");
+    const duringTeaching = application.getState();
+    expect(duringTeaching.sessions.find((session) => session.id === selected.id)?.teachingCard.content)
+      .toBe("Focus only on the main theorem and its local lemma.");
+    expect(duringTeaching.sessions.filter((session) => session.id !== selected.id)
+      .every((session) => session.teachingCard.status === "idle" && session.learningArtifacts.length === 0)).toBe(true);
+
+    runtime.completeTeaching(selected.id);
+    await application.waitForModelWork();
+    const reloaded = await LearningApplication.launch(dataDirectory);
+    applications.push(reloaded);
+    expect(reloaded.getState().argumentRoadmaps[0].selectedStageId).toBe(roadmap.stages[1].id);
+    expect(reloaded.getState().sessions.map((session) => session.learningSlice?.roadmapId)).toEqual([
+      roadmap.id, roadmap.id, roadmap.id
+    ]);
+  });
+
   it("starts a clear proposal immediately and streams one Teaching Card to completion", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand why the harmonic series diverges",
@@ -1487,6 +1656,96 @@ describe("Learning Application", () => {
     const retried = await application.submit({ type: "submitSessionIntake", mathematics: "Explain the chain rule." });
     expect(retried.intakeError).toBeNull();
     expect(retried.sessions[0].learningGoal).toBe("Understand the chain rule");
+  });
+
+  it("rejects an unanchored Argument Roadmap without leaving partial durable state", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand a long proof",
+      scope: "Start with the first stage",
+      initialTeachingDirection: "Read the first claim",
+      requiresConfirmation: false,
+      confirmationReason: null,
+      argumentRoadmap: {
+        title: "Invalid roadmap",
+        stages: [
+          {
+            title: "Missing excerpt", majorClaim: "A missing claim.", dependsOn: [],
+            sourceExcerpt: "This text is not in the intake.", learningGoal: "Study the missing claim",
+            boundary: "Study one claim", immediatePrerequisites: []
+          },
+          {
+            title: "Later stage", majorClaim: "A later claim.", dependsOn: [0],
+            sourceExcerpt: "The actual intake.", learningGoal: "Study the later claim",
+            boundary: "Study the later claim", immediatePrerequisites: []
+          }
+        ],
+        proposedStage: 0
+      }
+    });
+    const { application } = await launchWithRuntime(runtime);
+
+    const state = await application.submit({ type: "submitSessionIntake", mathematics: "The actual intake." });
+
+    expect(state.intakeError).toBe("Codex returned an invalid Argument Roadmap. Retry to request a fresh proposal.");
+    expect(state.sessions).toEqual([]);
+    expect(state.sources).toEqual([]);
+    expect(state.argumentRoadmaps).toEqual([]);
+  });
+
+  it("rejects ambiguous repeated Source Anchor excerpts instead of choosing the first occurrence", async () => {
+    const mathematics = "Apply the lemma here.\nApply the lemma here.\nConclude the theorem.";
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Apply the lemma",
+      scope: "Use the first application",
+      initialTeachingDirection: "Inspect the application",
+      requiresConfirmation: false,
+      confirmationReason: null,
+      argumentRoadmap: {
+        title: "Two applications and a conclusion",
+        stages: [
+          {
+            title: "First application", majorClaim: "The lemma applies.", dependsOn: [],
+            sourceExcerpt: "Apply the lemma here.", learningGoal: "Understand the first application",
+            boundary: "Study the first application", immediatePrerequisites: []
+          },
+          {
+            title: "Conclusion", majorClaim: "The theorem follows.", dependsOn: [0],
+            sourceExcerpt: "Conclude the theorem.", learningGoal: "Conclude the theorem",
+            boundary: "Study the conclusion", immediatePrerequisites: ["the lemma"]
+          }
+        ],
+        proposedStage: 0
+      }
+    });
+    const { application } = await launchWithRuntime(runtime);
+
+    const state = await application.submit({ type: "submitSessionIntake", mathematics });
+
+    expect(state.intakeError).toContain("invalid Argument Roadmap");
+    expect(state.sessions).toEqual([]);
+    expect(state.sources).toEqual([]);
+  });
+
+  it("requires a roadmap when clearly multi-stage material is returned as one flat proposal", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Explain all three stages",
+      scope: "Cover the whole proof",
+      initialTeachingDirection: "Start explaining",
+      requiresConfirmation: false,
+      confirmationReason: null,
+      materialScope: "longOrMultiStage",
+      argumentRoadmap: null
+    });
+    const { application } = await launchWithRuntime(runtime);
+
+    const state = await application.submit({
+      type: "submitSessionIntake",
+      mathematics: "First prove the lemma.\nThen derive the theorem."
+    });
+
+    expect(state.intakeError).toBe("Long or multi-stage material requires an Argument Roadmap. Retry to request a fresh proposal.");
+    expect(state.sessions).toEqual([]);
+    expect(runtime.teachingRequests).toEqual([]);
   });
 
   it("launches into an honest authentication failure instead of hanging when Codex is unavailable", async () => {

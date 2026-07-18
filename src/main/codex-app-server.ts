@@ -301,6 +301,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           "Interpret this mathematics intake for an adaptive learning session.",
           "Return only the requested JSON. Make the proposal concise and editable.",
           "Pause for confirmation only when ambiguity or likely cost makes a wrong start materially wasteful.",
+          "Classify materialScope as focused or longOrMultiStage by mathematical coherence, not arbitrary length. If it is longOrMultiStage, return a compact Argument Roadmap with major claims, stages, dependencies, and an exact verbatim sourceExcerpt for each stage. Propose one coherent stage as the current Learning Slice, including only its immediate prerequisites. Do not expand or teach every step. For focused material, return argumentRoadmap as null.",
           "Mathematics intake:",
           mathematics
         ].join("\n\n"),
@@ -605,10 +606,20 @@ function teachingSessionContext(request: TeachingRequest): string {
   if (request.questionContext) {
     return "Session teaching context is limited to the learner-approved Ask Bar context below.";
   }
-  return [
+  const base = [
     `Learning Goal: ${request.learningGoal}`,
     `Scope: ${request.scope}`,
     `Initial teaching direction: ${request.initialTeachingDirection}`
+  ];
+  if (!request.learningSlice) return base.join("\n");
+  return [
+    ...base,
+    `Argument Roadmap: ${request.learningSlice.roadmapTitle}`,
+    `Chosen Learning Slice: ${request.learningSlice.stageTitle}`,
+    `Editable slice boundary: ${request.learningSlice.boundary}`,
+    `Immediate prerequisites only: ${request.learningSlice.immediatePrerequisites.join("; ") || "none"}`,
+    `Future Learning Sessions, not part of this Teaching Card: ${request.learningSlice.remainingStageTitles.join("; ")}`,
+    "Teach only the chosen Learning Slice and its immediate prerequisites. Do not expand the remaining roadmap or replace it with one exhaustive explanation or artifact."
   ].join("\n");
 }
 
@@ -751,14 +762,45 @@ const SESSION_PROPOSAL_SCHEMA = {
     "scope",
     "initialTeachingDirection",
     "requiresConfirmation",
-    "confirmationReason"
+    "confirmationReason",
+    "materialScope",
+    "argumentRoadmap"
   ],
   properties: {
     learningGoal: { type: "string" },
     scope: { type: "string" },
     initialTeachingDirection: { type: "string" },
     requiresConfirmation: { type: "boolean" },
-    confirmationReason: { type: ["string", "null"] }
+    confirmationReason: { type: ["string", "null"] },
+    materialScope: { type: "string", enum: ["focused", "longOrMultiStage"] },
+    argumentRoadmap: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      required: ["title", "stages", "proposedStage"],
+      properties: {
+        title: { type: "string" },
+        proposedStage: { type: "integer", minimum: 0 },
+        stages: {
+          type: "array",
+          minItems: 2,
+          maxItems: 12,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title", "majorClaim", "dependsOn", "sourceExcerpt", "learningGoal", "boundary", "immediatePrerequisites"],
+            properties: {
+              title: { type: "string" },
+              majorClaim: { type: "string" },
+              dependsOn: { type: "array", items: { type: "integer", minimum: 0 } },
+              sourceExcerpt: { type: "string" },
+              learningGoal: { type: "string" },
+              boundary: { type: "string" },
+              immediatePrerequisites: { type: "array", items: { type: "string" } }
+            }
+          }
+        }
+      }
+    }
   }
 } as const;
 
@@ -779,8 +821,29 @@ function parseSessionProposal(content: string): SessionProposal {
     || typeof proposal.initialTeachingDirection !== "string"
     || typeof proposal.requiresConfirmation !== "boolean"
     || !(proposal.confirmationReason === null || typeof proposal.confirmationReason === "string")
+    || (proposal.materialScope !== "focused" && proposal.materialScope !== "longOrMultiStage")
+    || (proposal.materialScope === "focused" && proposal.argumentRoadmap !== null)
+    || (proposal.materialScope === "longOrMultiStage" && proposal.argumentRoadmap === null)
+    || !validArgumentRoadmapProposal(proposal.argumentRoadmap)
   ) {
     throw new Error("Codex returned a malformed Session Proposal. Retry to request a fresh proposal.");
   }
   return proposal as unknown as SessionProposal;
+}
+
+function validArgumentRoadmapProposal(value: unknown): boolean {
+  if (value === null) return true;
+  if (!isRecord(value) || typeof value.title !== "string" || !value.title.trim()
+    || !Number.isInteger(value.proposedStage) || !Array.isArray(value.stages) || value.stages.length < 2 || value.stages.length > 12
+    || (value.proposedStage as number) < 0 || (value.proposedStage as number) >= value.stages.length) return false;
+  return value.stages.every((stage, index) => isRecord(stage)
+    && typeof stage.title === "string" && Boolean(stage.title.trim())
+    && typeof stage.majorClaim === "string" && Boolean(stage.majorClaim.trim())
+    && Array.isArray(stage.dependsOn) && stage.dependsOn.every((dependency) => Number.isInteger(dependency)
+      && (dependency as number) >= 0 && (dependency as number) < index)
+    && typeof stage.sourceExcerpt === "string" && Boolean(stage.sourceExcerpt.trim())
+    && typeof stage.learningGoal === "string" && Boolean(stage.learningGoal.trim())
+    && typeof stage.boundary === "string" && Boolean(stage.boundary.trim())
+    && Array.isArray(stage.immediatePrerequisites)
+    && stage.immediatePrerequisites.every((prerequisite) => typeof prerequisite === "string" && Boolean(prerequisite.trim())));
 }

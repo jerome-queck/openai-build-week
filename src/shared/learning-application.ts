@@ -11,7 +11,8 @@ import {
   type RuntimeAccessRequest,
   type TeachingRequest,
   type TeachingSourceContext,
-  type SessionProposal
+  type SessionProposal,
+  type ArgumentRoadmapProposal
 } from "./model-runtime";
 import { sessionAccessPolicyLabel, type SessionAccessPolicy } from "./session-access";
 export type { SessionAccessPolicy } from "./session-access";
@@ -384,6 +385,31 @@ export interface StudyMission {
   name: string;
 }
 
+export interface ArgumentRoadmapStage {
+  id: string;
+  title: string;
+  majorClaim: string;
+  dependsOnStageIds: string[];
+  sourceAnchorId: string;
+  sessionId: string;
+}
+
+export interface ArgumentRoadmap {
+  id: string;
+  missionId: string;
+  sourceId: string;
+  title: string;
+  selectedStageId: string;
+  stages: ArgumentRoadmapStage[];
+}
+
+export interface LearningSlice {
+  roadmapId: string;
+  stageId: string;
+  boundary: string;
+  immediatePrerequisites: string[];
+}
+
 export interface StudyLocation {
   workspaceId: string;
   missionId: string;
@@ -426,6 +452,7 @@ export interface LearningSession {
   anchoredTeachingCards: AnchoredTeachingCard[];
   activeTeachingCardId: string | null;
   learningArtifacts: LearningArtifact[];
+  learningSlice: LearningSlice | null;
 }
 
 export interface LearningApplicationState {
@@ -433,6 +460,7 @@ export interface LearningApplicationState {
   quickStudy: QuickStudyHome;
   workspaces: StudyWorkspace[];
   missions: StudyMission[];
+  argumentRoadmaps: ArgumentRoadmap[];
   sessions: LearningSession[];
   sources: WorkspaceSource[];
   sourceIndexes: SourceIndexSummary[];
@@ -514,6 +542,8 @@ export type LearnerAction =
     }
   | { type: "editLearningGoal"; value: string }
   | { type: "editSessionTarget"; value: string }
+  | { type: "selectRoadmapStage"; roadmapId: string; stageId: string }
+  | { type: "reviseLearningSlice"; boundary: string; immediatePrerequisites: string[] }
   | { type: "leaveSession" }
   | { type: "resumeSession"; sessionId: string }
   | { type: "createWorkspace"; name: string }
@@ -1239,7 +1269,8 @@ export class LearningApplication {
           activeSourceAnchorId: null,
           anchoredTeachingCards: [],
           activeTeachingCardId: null,
-          learningArtifacts: []
+          learningArtifacts: [],
+          learningSlice: null
         };
         refreshAskBarContext(this.state, session);
         this.state.sessions.push(session);
@@ -1262,6 +1293,14 @@ export class LearningApplication {
           proposal = await runtime.proposeSession(mathematics, (event) => {
             pendingLog.push({ ...event, sequence: pendingLog.length + 1 });
           });
+          const materialScope = proposal.materialScope ?? (proposal.argumentRoadmap ? "longOrMultiStage" : "focused");
+          if (proposal.argumentRoadmap && materialScope !== "longOrMultiStage") {
+            throw new Error("Codex returned an inconsistent Argument Roadmap. Retry to request a fresh proposal.");
+          }
+          if (proposal.argumentRoadmap) validateProposedArgumentRoadmap(proposal.argumentRoadmap, mathematics);
+          else if (materialScope === "longOrMultiStage") {
+            throw new Error("Long or multi-stage material requires an Argument Roadmap. Retry to request a fresh proposal.");
+          }
           this.state.intakeError = null;
         } catch (error) {
           const message = usefulRuntimeError(error);
@@ -1279,6 +1318,22 @@ export class LearningApplication {
         this.pauseActiveSession();
         const location = this.resolveIntakeLocation(action.location);
         const managedAsset = this.createManagedTextAsset(location.workspaceId, mathematics);
+        if (proposal.argumentRoadmap) {
+          const selectedSession = this.createArgumentRoadmapSessions(
+            proposal.argumentRoadmap,
+            proposal,
+            mathematics,
+            managedAsset,
+            location
+          );
+          this.agentWorkLogs[selectedSession.id] = pendingLog;
+          delete this.agentWorkLogs[proposalAttemptId];
+          this.state.activeSessionId = selectedSession.id;
+          this.state.resumeSessionId = selectedSession.id;
+          this.state.navigation = { workspaceId: selectedSession.workspaceId, missionId: selectedSession.missionId };
+          this.state.screen = "workbench";
+          break;
+        }
         const session: LearningSession = {
           id: crypto.randomUUID(),
           workspaceId: location.workspaceId,
@@ -1315,7 +1370,8 @@ export class LearningApplication {
           activeSourceAnchorId: null,
           anchoredTeachingCards: [],
           activeTeachingCardId: null,
-          learningArtifacts: []
+          learningArtifacts: [],
+          learningSlice: null
         };
         refreshAskBarContext(this.state, session);
         this.agentWorkLogs[session.id] = pendingLog;
@@ -1543,6 +1599,13 @@ export class LearningApplication {
       case "resumeSession": {
         const session = this.requireSession(action.sessionId);
         this.pauseActiveSession();
+        if (session.learningSlice) {
+          const roadmap = this.state.argumentRoadmaps.find((candidate) => candidate.id === session.learningSlice?.roadmapId);
+          if (!roadmap || !roadmap.stages.some((stage) => stage.id === session.learningSlice?.stageId)) {
+            throw new Error("This Learning Slice is no longer linked to its Argument Roadmap.");
+          }
+          roadmap.selectedStageId = session.learningSlice.stageId;
+        }
         session.status = "active";
         session.activityOrder = this.nextActivityOrder();
         this.state.activeSessionId = session.id;
@@ -1568,10 +1631,51 @@ export class LearningApplication {
       }
       case "editSessionTarget": {
         const session = this.requireActiveSession();
-        session.sessionTarget = action.value;
+        const target = session.learningSlice ? requiredName(action.value, "Learning Slice boundary") : action.value;
+        session.sessionTarget = target;
+        if (session.learningSlice) {
+          session.learningSlice.boundary = target;
+          session.proposal.scope = session.learningSlice.boundary;
+        }
         refreshAskBarContext(this.state, session);
         session.activityOrder = this.nextActivityOrder();
         this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "selectRoadmapStage": {
+        const roadmap = this.state.argumentRoadmaps.find((candidate) => candidate.id === action.roadmapId);
+        const stage = roadmap?.stages.find((candidate) => candidate.id === action.stageId);
+        if (!roadmap || !stage) throw new Error("Choose a stage from this Argument Roadmap.");
+        const current = this.requireActiveSession();
+        if (current.learningSlice?.roadmapId !== roadmap.id) throw new Error("Choose a stage from the active Argument Roadmap.");
+        if (this.modelWorks.has(current.id)) throw new Error("Stop current teaching before choosing another Learning Slice.");
+        this.pauseActiveSession();
+        const selected = this.requireSession(stage.sessionId);
+        selected.status = "active";
+        selected.proposal.status = "awaitingConfirmation";
+        selected.proposal.confirmationReason = "Confirm this Learning Slice before detailed teaching begins.";
+        selected.activityOrder = this.nextActivityOrder();
+        roadmap.selectedStageId = stage.id;
+        this.state.activeSessionId = selected.id;
+        this.state.resumeSessionId = selected.id;
+        this.state.navigation = { workspaceId: selected.workspaceId, missionId: selected.missionId };
+        refreshAskBarContext(this.state, selected);
+        break;
+      }
+      case "reviseLearningSlice": {
+        const session = this.requireActiveSession();
+        if (!session.learningSlice) throw new Error("This Learning Session does not have a Learning Slice.");
+        if (session.proposal.status !== "awaitingConfirmation") {
+          throw new Error("Edit the Learning Slice before detailed teaching begins.");
+        }
+        session.learningSlice.boundary = requiredName(action.boundary, "Learning Slice boundary");
+        session.learningSlice.immediatePrerequisites = action.immediatePrerequisites
+          .map((item) => requiredName(item, "Immediate prerequisite"));
+        session.sessionTarget = session.learningSlice.boundary;
+        session.proposal.scope = session.learningSlice.boundary;
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        refreshAskBarContext(this.state, session);
         break;
       }
       case "fileSession": {
@@ -1590,12 +1694,21 @@ export class LearningApplication {
           originalWorkspace.context.sourceIds = originalWorkspace.context.sourceIds.filter((id) => id !== sourceId);
           if (!destinationWorkspace.context.sourceIds.includes(sourceId)) destinationWorkspace.context.sourceIds.push(sourceId);
         }
-        session.workspaceId = action.workspaceId;
-        session.missionId = action.missionId;
+        const linkedSessions = session.learningSlice
+          ? this.state.sessions.filter((candidate) => candidate.learningSlice?.roadmapId === session.learningSlice?.roadmapId)
+          : [session];
+        for (const linkedSession of linkedSessions) {
+          linkedSession.workspaceId = action.workspaceId;
+          linkedSession.missionId = action.missionId;
+          refreshAskBarContext(this.state, linkedSession);
+        }
+        const roadmap = session.learningSlice
+          ? this.state.argumentRoadmaps.find((candidate) => candidate.id === session.learningSlice?.roadmapId)
+          : null;
+        if (roadmap) roadmap.missionId = action.missionId;
         session.activityOrder = this.nextActivityOrder();
         this.state.resumeSessionId = session.id;
         this.state.navigation = { workspaceId: action.workspaceId, missionId: action.missionId };
-        refreshAskBarContext(this.state, session);
         break;
       }
     }
@@ -1876,12 +1989,25 @@ export class LearningApplication {
     target.start(sourceContext, log.length + 1);
     const controller = new AbortController();
     const runtime = this.modelRuntime!;
+    const roadmap = session.learningSlice
+      ? this.state.argumentRoadmaps.find((candidate) => candidate.id === session.learningSlice?.roadmapId) ?? null
+      : null;
+    const stage = roadmap?.stages.find((candidate) => candidate.id === session.learningSlice?.stageId) ?? null;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
       mathematics,
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
       initialTeachingDirection: session.proposal.initialTeachingDirection,
+      ...(roadmap && stage && session.learningSlice ? {
+        learningSlice: {
+          roadmapTitle: roadmap.title,
+          stageTitle: stage.title,
+          boundary: session.learningSlice.boundary,
+          immediatePrerequisites: session.learningSlice.immediatePrerequisites,
+          remainingStageTitles: roadmap.stages.filter((candidate) => candidate.id !== stage.id).map((candidate) => candidate.title)
+        }
+      } : {}),
       accessScope: this.getSessionAccessScope(session.id),
       sourceContext,
       ...(questionContext ? { questionContext } : {}),
@@ -2088,6 +2214,7 @@ export class LearningApplication {
       || initialTeachingDirection !== session.proposal.initialTeachingDirection;
     session.learningGoal = learningGoal;
     session.sessionTarget = scope;
+    if (session.learningSlice) session.learningSlice.boundary = scope;
     session.proposal.scope = scope;
     session.proposal.initialTeachingDirection = initialTeachingDirection;
     session.returnContext.nextAction = initialTeachingDirection;
@@ -2158,6 +2285,117 @@ export class LearningApplication {
   private requireActiveSession(): LearningSession {
     if (!this.state.activeSessionId) throw new Error("Resume a Learning Session before editing it.");
     return this.requireSession(this.state.activeSessionId);
+  }
+
+  private createArgumentRoadmapSessions(
+    proposed: ArgumentRoadmapProposal,
+    proposal: SessionProposal,
+    mathematics: string,
+    source: ManagedAsset,
+    location: StudyLocation & { accessPolicy: SessionAccessPolicy }
+  ): LearningSession {
+    validateProposedArgumentRoadmap(proposed, mathematics);
+    const roadmapId = crypto.randomUUID();
+    const stageIds = proposed.stages.map(() => crypto.randomUUID());
+    const sessionIds = proposed.stages.map(() => crypto.randomUUID());
+    const anchors = proposed.stages.map((stage) => {
+      const excerpt = requiredName(stage.sourceExcerpt, "Argument Roadmap source excerpt");
+      const startOffset = mathematics.indexOf(excerpt);
+      if (startOffset < 0 || !stage.title.trim() || !stage.majorClaim.trim() || !stage.learningGoal.trim()
+        || !stage.boundary.trim() || !Array.isArray(stage.dependsOn)
+        || !Array.isArray(stage.immediatePrerequisites)) {
+        throw new Error("Codex returned an invalid Argument Roadmap. Retry to request a fresh proposal.");
+      }
+      const endOffset = startOffset + excerpt.length;
+      return {
+        id: crypto.randomUUID(),
+        sourceId: source.id,
+        selection: {
+          kind: "text" as const,
+          startOffset,
+          endOffset,
+          exactText: excerpt,
+          prefix: mathematics.slice(Math.max(0, startOffset - 32), startOffset),
+          suffix: mathematics.slice(endOffset, endOffset + 32)
+        }
+      };
+    });
+    const stages: ArgumentRoadmapStage[] = proposed.stages.map((stage, index) => {
+      const dependencies = stage.dependsOn.map((dependency) => {
+        if (!Number.isInteger(dependency) || dependency < 0 || dependency >= proposed.stages.length || dependency === index) {
+          throw new Error("Codex returned an invalid Argument Roadmap. Retry to request a fresh proposal.");
+        }
+        return stageIds[dependency];
+      });
+      return {
+        id: stageIds[index],
+        title: requiredName(stage.title, "Argument Roadmap stage title"),
+        majorClaim: requiredName(stage.majorClaim, "Argument Roadmap major claim"),
+        dependsOnStageIds: dependencies,
+        sourceAnchorId: anchors[index].id,
+        sessionId: sessionIds[index]
+      };
+    });
+    const roadmap: ArgumentRoadmap = {
+      id: roadmapId,
+      missionId: location.missionId,
+      sourceId: source.id,
+      title: requiredName(proposed.title, "Argument Roadmap title"),
+      selectedStageId: stageIds[proposed.proposedStage],
+      stages
+    };
+    const sessions = proposed.stages.map((stage, index): LearningSession => {
+      const selected = index === proposed.proposedStage;
+      const learningSlice: LearningSlice = {
+        roadmapId,
+        stageId: stageIds[index],
+        boundary: requiredName(stage.boundary, "Learning Slice boundary"),
+        immediatePrerequisites: stage.immediatePrerequisites.map((item) => requiredName(item, "Immediate prerequisite"))
+      };
+      return {
+        id: sessionIds[index],
+        workspaceId: location.workspaceId,
+        missionId: location.missionId,
+        mathematics,
+        sourceIds: [source.id],
+        learningGoal: requiredName(stage.learningGoal, "Learning Goal"),
+        sessionTarget: learningSlice.boundary,
+        status: selected ? "active" : "paused",
+        activityOrder: selected ? this.nextActivityOrder() : 0,
+        returnContext: {
+          label: `${roadmap.title} · ${stage.title}`,
+          nextAction: selected ? proposal.initialTeachingDirection : "Choose this roadmap stage as the next Learning Slice"
+        },
+        proposal: {
+          scope: learningSlice.boundary,
+          initialTeachingDirection: selected ? proposal.initialTeachingDirection : `Begin with ${stage.title}`,
+          status: "awaitingConfirmation",
+          confirmationReason: "Confirm this Learning Slice before detailed teaching begins."
+        },
+        teachingCard: emptyTeachingCard(),
+        teachingCardHistory: [],
+        submittedPendingQuestions: [],
+        currentTeachingInput: { kind: "sessionIntake", text: mathematics },
+        pendingQuestion: null,
+        askBarContext: emptyAskBarContext(),
+        questionCards: [],
+        activeQuestionCardId: null,
+        accessPolicy: location.accessPolicy,
+        accessRequests: [],
+        pendingFullAccessConfirmation: false,
+        sourceAnchors: [anchors[index]],
+        sourceAnchorRequests: [],
+        activeSourceAnchorId: anchors[index].id,
+        anchoredTeachingCards: [],
+        activeTeachingCardId: null,
+        learningArtifacts: [],
+        learningSlice
+      };
+    });
+    for (const session of sessions) refreshAskBarContext(this.state, session);
+    this.state.argumentRoadmaps.push(roadmap);
+    this.state.sessions.push(...sessions);
+    return sessions[proposed.proposedStage];
   }
 
   private requireSession(sessionId: string): LearningSession {
@@ -2314,6 +2552,22 @@ function mostRecentSessionId(sessions: LearningSession[]): string | null {
   )?.id ?? null;
 }
 
+function validateProposedArgumentRoadmap(proposed: ArgumentRoadmapProposal, mathematics: string): void {
+  const invalid = !proposed.title.trim() || proposed.stages.length < 2 || proposed.stages.length > 12
+    || !Number.isInteger(proposed.proposedStage)
+    || proposed.proposedStage < 0 || proposed.proposedStage >= proposed.stages.length
+    || proposed.stages.some((stage, index) => !stage.title.trim() || !stage.majorClaim.trim()
+      || !stage.sourceExcerpt.trim() || mathematics.indexOf(stage.sourceExcerpt) < 0
+      || mathematics.indexOf(stage.sourceExcerpt) !== mathematics.lastIndexOf(stage.sourceExcerpt)
+      || !stage.learningGoal.trim() || !stage.boundary.trim()
+      || !Array.isArray(stage.dependsOn) || stage.dependsOn.some((dependency) => !Number.isInteger(dependency)
+        || dependency < 0 || dependency >= index)
+      || !Array.isArray(stage.immediatePrerequisites)
+      || stage.immediatePrerequisites.some((prerequisite) => !prerequisite.trim()));
+  if (invalid) throw new Error("Codex returned an invalid Argument Roadmap. Retry to request a fresh proposal.");
+}
+
+
 function migratePersistedState(value: unknown): LearningApplicationState {
   if (!value || typeof value !== "object") throw new Error("Stored Learning Application state is invalid.");
   const stored = value as Record<string, unknown>;
@@ -2337,6 +2591,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       message: "Codex Runtime is unavailable. Restart Codex and try again."
     };
     current.accessConfirmationPreference = migrateAccessConfirmationPreference(stored.accessConfirmationPreference);
+    current.argumentRoadmaps = migrateArgumentRoadmaps(stored.argumentRoadmaps);
     current.sessions = current.sessions.map((session) => ({
       ...session,
       sourceIds: session.sourceIds ?? [],
@@ -2357,7 +2612,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null,
       anchoredTeachingCards: migrateAnchoredTeachingCards(session.anchoredTeachingCards),
       activeTeachingCardId: typeof session.activeTeachingCardId === "string" ? session.activeTeachingCardId : null,
-      learningArtifacts: migrateLearningArtifacts(session.learningArtifacts)
+      learningArtifacts: migrateLearningArtifacts(session.learningArtifacts),
+      learningSlice: migrateLearningSlice(session.learningSlice)
     }));
     attachManagedSourcesToLegacySessions(current);
     for (const session of current.sessions) {
@@ -2365,6 +2621,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       validateQuestionCardReferences(current, session);
       refreshAskBarContext(current, session);
     }
+    validateArgumentRoadmapReferences(current);
     return current;
   }
 
@@ -2396,7 +2653,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       activeSourceAnchorId: null,
       anchoredTeachingCards: [],
       activeTeachingCardId: null,
-      learningArtifacts: []
+      learningArtifacts: [],
+      learningSlice: null
     };
     migrated.sessions.push(session);
     attachManagedSourcesToLegacySessions(migrated);
@@ -2413,6 +2671,64 @@ function migrateAgentWorkLogs(value: unknown): Record<string, Array<ModelRuntime
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, Array<ModelRuntimeEvent & { sequence: number }>>
     : {};
+}
+
+function migrateArgumentRoadmaps(value: unknown): ArgumentRoadmap[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored Argument Roadmaps are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.missionId !== "string"
+      || typeof candidate.sourceId !== "string" || typeof candidate.title !== "string"
+      || typeof candidate.selectedStageId !== "string" || !Array.isArray(candidate.stages)) {
+      throw new Error("Stored Argument Roadmaps are invalid.");
+    }
+    const stages = candidate.stages.map((stage) => {
+      if (!isRecord(stage) || typeof stage.id !== "string" || typeof stage.title !== "string"
+        || typeof stage.majorClaim !== "string" || !Array.isArray(stage.dependsOnStageIds)
+        || !stage.dependsOnStageIds.every((id) => typeof id === "string")
+        || typeof stage.sourceAnchorId !== "string" || typeof stage.sessionId !== "string") {
+        throw new Error("Stored Argument Roadmaps are invalid.");
+      }
+      return stage as unknown as ArgumentRoadmapStage;
+    });
+    return { ...candidate, stages } as unknown as ArgumentRoadmap;
+  });
+}
+
+function migrateLearningSlice(value: unknown): LearningSlice | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || typeof value.roadmapId !== "string" || typeof value.stageId !== "string"
+    || typeof value.boundary !== "string" || !value.boundary.trim() || !Array.isArray(value.immediatePrerequisites)
+    || !value.immediatePrerequisites.every((item) => typeof item === "string" && Boolean(item.trim()))) {
+    throw new Error("Stored Learning Slice is invalid.");
+  }
+  return value as unknown as LearningSlice;
+}
+
+function validateArgumentRoadmapReferences(state: LearningApplicationState): void {
+  const missionIds = new Set(state.missions.map((mission) => mission.id));
+  const sourceIds = new Set(state.sources.map((source) => source.id));
+  const sessions = new Map(state.sessions.map((session) => [session.id, session]));
+  for (const roadmap of state.argumentRoadmaps) {
+    const stageIds = new Set(roadmap.stages.map((stage) => stage.id));
+    if (!missionIds.has(roadmap.missionId) || !sourceIds.has(roadmap.sourceId)
+      || !stageIds.has(roadmap.selectedStageId) || stageIds.size !== roadmap.stages.length) {
+      throw new Error("Stored Argument Roadmap references are invalid.");
+    }
+    for (const stage of roadmap.stages) {
+      const session = sessions.get(stage.sessionId);
+      if (!session || session.missionId !== roadmap.missionId
+        || session.learningSlice?.roadmapId !== roadmap.id || session.learningSlice.stageId !== stage.id
+        || !session.sourceAnchors.some((anchor) => anchor.id === stage.sourceAnchorId && anchor.sourceId === roadmap.sourceId)
+        || stage.dependsOnStageIds.some((id) => !stageIds.has(id))) {
+        throw new Error("Stored Argument Roadmap references are invalid.");
+      }
+    }
+  }
+  if (state.sessions.some((session) => session.learningSlice
+    && !state.argumentRoadmaps.some((roadmap) => roadmap.id === session.learningSlice?.roadmapId))) {
+    throw new Error("Stored Learning Slice references are invalid.");
+  }
 }
 
 function migrateAccessConfirmationPreference(value: unknown): LearningApplicationState["accessConfirmationPreference"] {
@@ -3238,6 +3554,7 @@ function initialState(): LearningApplicationState {
         name: "Unfiled"
       }
     ],
+    argumentRoadmaps: [],
     sessions: [],
     sources: [],
     sourceIndexes: [],

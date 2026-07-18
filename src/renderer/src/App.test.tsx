@@ -58,7 +58,74 @@ describe("anchored teaching workbench", () => {
     await user.click(marker);
     expect((await screen.findByRole("alert")).textContent).toContain("The Source Anchor is stale.");
   });
+
+  it("shows the compact Argument Roadmap and lets the learner edit or choose a Learning Slice before teaching", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    state.modelAccess = { status: "available" };
+    state.runtimeAvailable = true;
+    state.sessions[0].proposal.status = "awaitingConfirmation";
+    state.sessions[0].learningSlice = {
+      roadmapId: "roadmap-1", stageId: "stage-1", boundary: "Prove only the compactness claim",
+      immediatePrerequisites: ["Hausdorff separation"]
+    };
+    state.argumentRoadmaps = [{
+      id: "roadmap-1", missionId: state.sessions[0].missionId, sourceId: "source-1",
+      title: "Compactness to uniqueness", selectedStageId: "stage-1",
+      stages: [
+        {
+          id: "stage-1", title: "Compact subsets are closed", majorClaim: "Every compact subset is closed.",
+          dependsOnStageIds: [], sourceAnchorId: "anchor-1", sessionId: "session-1"
+        },
+        {
+          id: "stage-2", title: "Limits are unique", majorClaim: "Limits are unique in Hausdorff spaces.",
+          dependsOnStageIds: ["stage-1"], sourceAnchorId: "anchor-2", sessionId: "session-2"
+        }
+      ]
+    }];
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const roadmap = await screen.findByRole("region", { name: "Argument Roadmap" });
+    expect(roadmap.textContent).toContain("Compactness to uniqueness");
+    expect(roadmap.textContent).toContain("Every compact subset is closed.");
+    expect(roadmap.textContent).toContain("Depends on Compact subsets are closed");
+    expect(roadmap.textContent).toContain("Source Anchor “compact subset” · characters 6–20");
+    await user.click(screen.getByRole("button", { name: "Show Source Anchor for Compact subsets are closed" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
+    await user.clear(screen.getByLabelText("Learning Slice boundary"));
+    await user.type(screen.getByLabelText("Learning Slice boundary"), "Prove the claim using finite subcovers");
+    await user.clear(screen.getByLabelText("Immediate prerequisites"));
+    await user.type(screen.getByLabelText("Immediate prerequisites"), "Hausdorff separation\nFinite subcovers");
+    await user.click(screen.getByRole("button", { name: "Save Learning Slice" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "reviseLearningSlice",
+      boundary: "Prove the claim using finite subcovers",
+      immediatePrerequisites: ["Hausdorff separation", "Finite subcovers"]
+    });
+
+    await user.click(screen.getByRole("button", { name: "Choose Learning Slice Limits are unique" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "selectRoadmapStage", roadmapId: "roadmap-1", stageId: "stage-2"
+    });
+
+    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("The roadmap Source Anchor is stale."));
+    await user.click(screen.getByRole("button", { name: "Show Source Anchor for Compact subsets are closed" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("The roadmap Source Anchor is stale.");
+  });
 });
+
+function quickStudyApi(state: LearningApplicationState): typeof window.quickStudy {
+  return {
+    getState: vi.fn().mockResolvedValue(state), submit: vi.fn().mockResolvedValue(state),
+    getAgentWorkLogEvidence: vi.fn().mockResolvedValue([]), searchSessions: vi.fn().mockResolvedValue([]),
+    linkPrimaryFolder: vi.fn(), linkExternalAttachment: vi.fn(), openLinkedSource: vi.fn(),
+    indexSource: vi.fn(), clearSourceIndex: vi.fn(), rebuildSourceIndex: vi.fn(),
+    searchSourceIndex: vi.fn().mockResolvedValue([]), openSourceSearchResult: vi.fn(),
+    onStateChanged: vi.fn().mockReturnValue(() => undefined), openExternal: vi.fn()
+  };
+}
 
 function workbenchState(): LearningApplicationState {
   const anchor = {
@@ -84,6 +151,7 @@ function workbenchState(): LearningApplicationState {
       context: { sourceIds: ["source-1"], learnerContextIds: [], primaryFolderSourceId: null }
     }],
     missions: [{ id: "quick-study-unfiled-mission", kind: "unfiled", workspaceId: "quick-study-workspace", name: "Unfiled" }],
+    argumentRoadmaps: [],
     sessions: [{
       id: "session-1",
       workspaceId: "quick-study-workspace",
@@ -139,7 +207,8 @@ function workbenchState(): LearningApplicationState {
         revisions: [],
         sourceAnchorIds: ["anchor-1"],
         pinned: true
-      }]
+      }],
+      learningSlice: null
     }],
     sources: [{
       id: "source-1", kind: "managedAsset", workspaceId: "quick-study-workspace", name: "Typed mathematics",

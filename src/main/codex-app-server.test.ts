@@ -96,7 +96,9 @@ describe("Codex app-server contract", () => {
               scope: "Check decreasing magnitude and zero limit",
               initialTeachingDirection: "Inspect the absolute values first",
               requiresConfirmation: false,
-              confirmationReason: null
+              confirmationReason: null,
+              materialScope: "focused",
+              argumentRoadmap: null
             })
           });
         } else {
@@ -126,8 +128,20 @@ describe("Codex app-server contract", () => {
       scope: "Check decreasing magnitude and zero limit",
       initialTeachingDirection: "Inspect the absolute values first",
       requiresConfirmation: false,
-      confirmationReason: null
+      confirmationReason: null,
+      materialScope: "focused",
+      argumentRoadmap: null
     });
+    const proposalTurn = transport.messages.find((message) => message.method === "turn/start");
+    expect(proposalTurn).toMatchObject({
+      params: {
+        outputSchema: {
+          required: expect.arrayContaining(["argumentRoadmap"]),
+          properties: { argumentRoadmap: expect.any(Object) }
+        }
+      }
+    });
+    expect(JSON.stringify(proposalTurn)).toContain("Argument Roadmap");
     expect(transport.messages.find((message) => message.method === "thread/start")).toMatchObject({
       params: {
         cwd: "/workspace",
@@ -156,6 +170,13 @@ describe("Codex app-server contract", () => {
       learningGoal: "Understand the alternating series test",
       scope: "Check decreasing magnitude and zero limit",
       initialTeachingDirection: "Inspect the absolute values first",
+      learningSlice: {
+        roadmapTitle: "Convergence test route",
+        stageTitle: "Alternating series test",
+        boundary: "Check decreasing magnitude and zero limit",
+        immediatePrerequisites: ["absolute values"],
+        remainingStageTitles: ["Error estimate", "Application"]
+      },
       ...focusedTeachingAccess(),
       onDelta: (delta) => deltas.push(delta),
       signal: new AbortController().signal
@@ -164,6 +185,10 @@ describe("Codex app-server contract", () => {
       "First check that the term magnitudes decrease. ",
       "Then check that they tend to zero."
     ]);
+    const slicedTurn = transport.messages.find((message) => message.method === "turn/start"
+      && JSON.stringify(message.params).includes("Chosen Learning Slice"));
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Teach only the chosen Learning Slice");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Future Learning Sessions, not part of this Teaching Card: Error estimate; Application");
 
     await runtime.streamTeaching({
       sessionId: "learning-session-full",
@@ -351,6 +376,52 @@ describe("Codex app-server contract", () => {
       "Codex authentication is unavailable. Sign in and retry."
     );
     await expect(runtime.proposeSession("Ambiguous input")).rejects.toThrow(
+      "Codex returned a malformed Session Proposal. Retry"
+    );
+  });
+
+  it("rejects invalid roadmap dependencies at the Model Runtime boundary", async () => {
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home",
+          platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") transport.respond(message.id, { thread: { id: "thread-roadmap" } });
+      if (message.method === "turn/start") {
+        transport.respond(message.id, { turn: { id: "turn-roadmap" } });
+        queueMicrotask(() => {
+          transport.notify("item/agentMessage/delta", {
+            threadId: "thread-roadmap", turnId: "turn-roadmap", itemId: "proposal",
+            delta: JSON.stringify({
+              learningGoal: "Study a proof", scope: "Study stage one", initialTeachingDirection: "Begin",
+              requiresConfirmation: false, confirmationReason: null, materialScope: "longOrMultiStage",
+              argumentRoadmap: {
+                title: "Invalid dependencies", proposedStage: 0,
+                stages: [
+                  {
+                    title: "First", majorClaim: "First claim", dependsOn: [1], sourceExcerpt: "First.",
+                    learningGoal: "Study first", boundary: "First only", immediatePrerequisites: []
+                  },
+                  {
+                    title: "Second", majorClaim: "Second claim", dependsOn: [0], sourceExcerpt: "Second.",
+                    learningGoal: "Study second", boundary: "Second only", immediatePrerequisites: []
+                  }
+                ]
+              }
+            })
+          });
+          transport.notify("turn/completed", {
+            threadId: "thread-roadmap", turn: { id: "turn-roadmap", status: "completed", error: null }
+          });
+        });
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+
+    await expect(runtime.proposeSession("First.\nSecond.")).rejects.toThrow(
       "Codex returned a malformed Session Proposal. Retry"
     );
   });

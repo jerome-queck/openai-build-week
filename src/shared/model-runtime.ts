@@ -27,6 +27,24 @@ export interface SessionProposal {
   initialTeachingDirection: string;
   requiresConfirmation: boolean;
   confirmationReason: string | null;
+  materialScope?: "focused" | "longOrMultiStage";
+  argumentRoadmap?: ArgumentRoadmapProposal | null;
+}
+
+export interface ArgumentRoadmapProposal {
+  title: string;
+  stages: ArgumentRoadmapStageProposal[];
+  proposedStage: number;
+}
+
+export interface ArgumentRoadmapStageProposal {
+  title: string;
+  majorClaim: string;
+  dependsOn: number[];
+  sourceExcerpt: string;
+  learningGoal: string;
+  boundary: string;
+  immediatePrerequisites: string[];
 }
 
 export interface RuntimeAccessRequest {
@@ -54,6 +72,13 @@ export interface TeachingRequest {
   learningGoal: string;
   scope: string;
   initialTeachingDirection: string;
+  learningSlice?: {
+    roadmapTitle: string;
+    stageTitle: string;
+    boundary: string;
+    immediatePrerequisites: string[];
+    remainingStageTitles: string[];
+  };
   accessScope: SessionAccessScope;
   sourceContext: TeachingSourceContext[];
   questionContext?: QuestionContextItem[];
