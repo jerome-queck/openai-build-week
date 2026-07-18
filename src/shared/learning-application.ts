@@ -93,8 +93,6 @@ export interface LinkedSource {
     lastKnownPath: string;
     accessGrant: LocalSourceAccessGrant;
     fingerprint: SourceFingerprint;
-    observedFingerprint: SourceFingerprint | null;
-    revisionStatus: "current" | "changed";
     accessStatus: "available" | "unavailable";
     error: string | null;
   };
@@ -124,7 +122,7 @@ export interface LocalSourceAccess {
 }
 
 export type LinkedSourceView =
-  | ({ status: "available"; revisionChanged: boolean } & AvailableLinkedSourceView)
+  | ({ status: "available" } & AvailableLinkedSourceView)
   | { status: "unavailable"; sourceId: string; error: string };
 
 export interface StudyMission {
@@ -349,6 +347,7 @@ export class LearningApplication {
     const workspace = this.requireWorkspace(workspaceId);
     if (selection.resourceType !== "folder") throw new Error("Choose a folder for the Primary Folder.");
     if (workspace.context.primaryFolderSourceId) throw new Error("This Study Workspace already has a Primary Folder.");
+    this.requireSourcePlacement(workspace, "primaryFolder", selection.lastKnownPath);
     const source = linkedSource(workspaceId, "primaryFolder", selection);
     this.state.sources.push(source);
     workspace.context.primaryFolderSourceId = source.id;
@@ -362,10 +361,7 @@ export class LearningApplication {
   ): Promise<LearningApplicationState> {
     const workspace = this.requireWorkspace(workspaceId);
     if (selection.resourceType !== "file") throw new Error("Choose a file for an External Attachment.");
-    const primaryFolder = this.primaryFolderFor(workspace);
-    if (primaryFolder && pathIsInside(selection.lastKnownPath, primaryFolder.link.lastKnownPath)) {
-      throw new Error("This file is already covered by the Primary Folder.");
-    }
+    this.requireSourcePlacement(workspace, "externalAttachment", selection.lastKnownPath);
     const source = linkedSource(workspaceId, "externalAttachment", selection);
     this.state.sources.push(source);
     workspace.context.sourceIds.push(source.id);
@@ -380,13 +376,10 @@ export class LearningApplication {
     if (!this.sourceAccess) throw new Error("Local source access is unavailable.");
     try {
       const view = await this.sourceAccess.read(source);
-      const revisionChanged = !sameFingerprint(source.link.fingerprint, view.fingerprint);
       source.link.accessStatus = "available";
       source.link.error = null;
-      source.link.observedFingerprint = revisionChanged ? view.fingerprint : null;
-      source.link.revisionStatus = revisionChanged ? "changed" : "current";
       await this.publishAndPersist();
-      return { status: "available", revisionChanged, ...view };
+      return { status: "available", ...view };
     } catch (error) {
       const message = usefulSourceError(error);
       source.link.accessStatus = "unavailable";
@@ -394,30 +387,6 @@ export class LearningApplication {
       await this.publishAndPersist();
       return { status: "unavailable", sourceId, error: message };
     }
-  }
-
-  async relocateLinkedSource(
-    sourceId: string,
-    selection: SelectedLocalSource
-  ): Promise<LearningApplicationState> {
-    const source = this.state.sources.find(
-      (candidate): candidate is LinkedSource => candidate.id === sourceId && candidate.kind === "linkedSource"
-    );
-    if (!source) throw new Error("Choose an existing Linked Source.");
-    if (source.resourceType !== selection.resourceType) {
-      throw new Error(source.resourceType === "folder" ? "Choose a replacement folder." : "Choose a replacement file.");
-    }
-    source.name = selection.name;
-    source.link = {
-      lastKnownPath: selection.lastKnownPath,
-      accessGrant: selection.accessGrant,
-      fingerprint: selection.fingerprint,
-      observedFingerprint: null,
-      revisionStatus: "current",
-      accessStatus: "available",
-      error: null
-    };
-    return this.publishAndPersist();
   }
 
   async waitForModelWork(): Promise<void> {
@@ -961,10 +930,24 @@ export class LearningApplication {
     return workspace;
   }
 
-  private primaryFolderFor(workspace: StudyWorkspace): LinkedSource | null {
-    if (!workspace.context.primaryFolderSourceId) return null;
-    const source = this.state.sources.find((candidate) => candidate.id === workspace.context.primaryFolderSourceId);
-    return source?.kind === "linkedSource" && source.role === "primaryFolder" ? source : null;
+  private requireSourcePlacement(
+    workspace: StudyWorkspace,
+    role: LinkedSource["role"],
+    path: string
+  ): void {
+    const linkedSources = this.state.sources.filter(
+      (candidate): candidate is LinkedSource => candidate.workspaceId === workspace.id && candidate.kind === "linkedSource"
+    );
+    if (role === "externalAttachment") {
+      const primaryFolder = linkedSources.find((source) => source.role === "primaryFolder");
+      if (primaryFolder && pathIsInside(path, primaryFolder.link.lastKnownPath)) {
+        throw new Error("This file is already covered by the Primary Folder.");
+      }
+      return;
+    }
+    if (linkedSources.some((source) => source.role === "externalAttachment" && pathIsInside(source.link.lastKnownPath, path))) {
+      throw new Error("An existing External Attachment is already inside this Primary Folder.");
+    }
   }
 
   private createManagedTextAsset(workspaceId: string, content: string): ManagedAsset {
@@ -1036,10 +1019,6 @@ function usefulSourceError(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
     : "The source is missing or access is no longer available.";
-}
-
-function sameFingerprint(left: SourceFingerprint, right: SourceFingerprint): boolean {
-  return left.size === right.size && left.modifiedAtMs === right.modifiedAtMs;
 }
 
 function pathIsInside(path: string, folderPath: string): boolean {
@@ -1174,8 +1153,6 @@ function linkedSource(
       lastKnownPath: selection.lastKnownPath,
       accessGrant: selection.accessGrant,
       fingerprint: selection.fingerprint,
-      observedFingerprint: null,
-      revisionStatus: "current",
       accessStatus: "available",
       error: null
     }
@@ -1204,12 +1181,7 @@ function migrateWorkspaceSources(value: unknown): WorkspaceSource[] {
       || !(candidate.link.error === null || typeof candidate.link.error === "string")) {
       throw new Error("Stored Linked Source is invalid.");
     }
-    const source = candidate as unknown as LinkedSource;
-    source.link.observedFingerprint = validFingerprint(candidate.link.observedFingerprint)
-      ? candidate.link.observedFingerprint as unknown as SourceFingerprint
-      : null;
-    source.link.revisionStatus = candidate.link.revisionStatus === "changed" ? "changed" : "current";
-    return source;
+    return candidate as unknown as LinkedSource;
   });
 }
 

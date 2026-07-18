@@ -4,7 +4,7 @@ Quick Study is a local-first macOS mathematical learning workbench. It starts du
 
 The built-in Quick Study workspace remains the immediate home for loose work. A learner can later file a Quick Study session into a named Study Workspace and Study Mission without replacing the session or losing its Learning Goal, Session Target, or return context.
 
-Named Study Workspaces can link one Primary Folder and individual External Attachments without copying or modifying them. Fileless typed mathematics is retained as a Managed Asset. Linked Sources reopen through a read-only Source Layer; unavailable grants keep their source identity and offer Retry and Locate again recovery.
+Study Workspaces can link one Primary Folder and individual External Attachments without copying or modifying them. Fileless typed mathematics is retained as a Managed Asset. Linked Sources reopen through a read-only Source Layer; an unavailable source keeps its identity and can be retried without changing its association.
 
 ## Requirements
 

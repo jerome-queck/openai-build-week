@@ -19,8 +19,8 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-smoke-"));
   const sourceDirectory = await mkdtemp(join(tmpdir(), "quick-study-source-"));
   const primaryFolderPath = join(sourceDirectory, "algebra-course");
-  const attachmentPath = join(sourceDirectory, "lecture-3.txt");
-  const attachmentContent = "A finite group action partitions the set into orbits.";
+  const attachmentPath = join(sourceDirectory, "lecture-3.pdf");
+  const attachmentContent = "%PDF-1.4\n% Linked source fixture\n";
   await mkdir(primaryFolderPath);
   await writeFile(join(primaryFolderPath, "problem-set.txt"), "Classify the orbits and stabilizers.", "utf8");
   await writeFile(attachmentPath, attachmentContent, "utf8");
@@ -81,10 +81,11 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     const addAttachment = page.getByRole("button", { name: "Add External Attachment" });
     await addAttachment.focus();
     await page.keyboard.press("Enter");
-    const openAttachment = page.getByRole("button", { name: "Open Linked Source lecture-3.txt" });
+    const openAttachment = page.getByRole("button", { name: "Open Linked Source lecture-3.pdf" });
     await openAttachment.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("region", { name: "Linked Source view" })).toContainText(attachmentContent);
+    await expect(page.locator('object[aria-label="Linked PDF Source Layer"]')).toHaveAttribute("data", /^data:application\/pdf;base64,/);
+    await expect(page.locator('meta[http-equiv="Content-Security-Policy"]')).toHaveAttribute("content", /object-src 'self' data:/);
 
     await page.getByLabel("Typed mathematics").fill("Show that every convergent sequence is bounded.");
     await page.getByRole("button", { name: "Propose Learning Session" }).click();
@@ -133,10 +134,10 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await reopenedPrimaryFolder.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("region", { name: "Linked Source view" })).toContainText("problem-set.txt");
-    const reopenedAttachment = page.getByRole("button", { name: "Open Linked Source lecture-3.txt" });
+    const reopenedAttachment = page.getByRole("button", { name: "Open Linked Source lecture-3.pdf" });
     await reopenedAttachment.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("region", { name: "Linked Source view" })).toContainText(attachmentContent);
+    await expect(page.locator('object[aria-label="Linked PDF Source Layer"]')).toHaveAttribute("data", /^data:application\/pdf;base64,/);
     expect(await readFile(attachmentPath, "utf8")).toBe(attachmentContent);
     expect(await readFile(join(primaryFolderPath, "problem-set.txt"), "utf8")).toBe("Classify the orbits and stabilizers.");
     await expect(page.getByText("Bound the sequence using its finite prefix and tail")).toBeVisible();

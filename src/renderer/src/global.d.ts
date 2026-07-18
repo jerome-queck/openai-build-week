@@ -14,7 +14,6 @@ declare global {
       linkPrimaryFolder(workspaceId: string): Promise<LearningApplicationState>;
       linkExternalAttachment(workspaceId: string): Promise<LearningApplicationState>;
       openLinkedSource(sourceId: string): Promise<LinkedSourceView>;
-      locateLinkedSourceAgain(sourceId: string): Promise<LearningApplicationState>;
       onStateChanged(listener: (state: LearningApplicationState) => void): () => void;
       openExternal(url: string): Promise<void>;
     };

@@ -130,21 +130,6 @@ function registerLearningApplicationHandlers(): void {
     if (typeof sourceId !== "string") throw new Error("Invalid Linked Source.");
     return learningApplication.openLinkedSource(sourceId);
   });
-  ipcMain.handle("source:locateAgain", async (event, sourceId: unknown) => {
-    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
-    if (typeof sourceId !== "string") throw new Error("Invalid Linked Source.");
-    const source = learningApplication.getState().sources.find(
-      (candidate) => candidate.id === sourceId && candidate.kind === "linkedSource"
-    );
-    if (!source || source.kind !== "linkedSource") throw new Error("Choose an existing Linked Source.");
-    const fixturePath = source.resourceType === "folder"
-      ? process.env.QUICK_STUDY_TEST_PRIMARY_FOLDER
-      : process.env.QUICK_STUDY_TEST_EXTERNAL_ATTACHMENT;
-    const selection = fixturePath
-      ? await sourceAccess.selectDirectPath(fixturePath, source.resourceType)
-      : await sourceAccess.select(source.resourceType);
-    return selection ? learningApplication.relocateLinkedSource(sourceId, selection) : learningApplication.getState();
-  });
   ipcMain.handle("authentication:openExternal", async (event, url: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof url !== "string" || new URL(url).protocol !== "https:") throw new Error("Invalid authentication URL.");

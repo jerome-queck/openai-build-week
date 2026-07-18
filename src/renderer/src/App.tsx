@@ -72,12 +72,28 @@ function SourcesPanel({ workspace, state, onState }: {
   onState: StateHandler;
 }) {
   const [view, setView] = useState<LinkedSourceView | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const sources = state.sources.filter((source) => source.workspaceId === workspace.id);
   const linkedSources = sources.filter((source): source is LinkedSource => source.kind === "linkedSource");
   const primaryFolder = linkedSources.find((source) => source.role === "primaryFolder");
   const attachments = linkedSources.filter((source) => source.role === "externalAttachment");
   const managedAssets = sources.filter((source) => source.kind === "managedAsset");
-  const open = async (sourceId: string) => setView(await window.quickStudy.openLinkedSource(sourceId));
+  const runSourceAction = async (action: () => Promise<LearningApplicationState>) => {
+    setSourceError(null);
+    try {
+      onState(await action());
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Quick Study could not update this source.");
+    }
+  };
+  const open = async (sourceId: string) => {
+    setSourceError(null);
+    try {
+      setView(await window.quickStudy.openLinkedSource(sourceId));
+    } catch (error) {
+      setSourceError(error instanceof Error ? error.message : "Quick Study could not open this source.");
+    }
+  };
 
   return (
     <section className="sources-card" aria-labelledby="sources-title">
@@ -92,13 +108,13 @@ function SourcesPanel({ workspace, state, onState }: {
         <button
           className="secondary"
           disabled={Boolean(primaryFolder)}
-          onClick={() => void window.quickStudy.linkPrimaryFolder(workspace.id).then(onState)}
+          onClick={() => void runSourceAction(() => window.quickStudy.linkPrimaryFolder(workspace.id))}
         >
           {primaryFolder ? "Primary Folder linked" : "Link Primary Folder"}
         </button>
         <button
           className="secondary"
-          onClick={() => void window.quickStudy.linkExternalAttachment(workspace.id).then(onState)}
+          onClick={() => void runSourceAction(() => window.quickStudy.linkExternalAttachment(workspace.id))}
         >Add External Attachment</button>
       </div>
       <SourceGroup
@@ -106,14 +122,12 @@ function SourcesPanel({ workspace, state, onState }: {
         empty="No Primary Folder linked."
         sources={primaryFolder ? [primaryFolder] : []}
         onOpen={open}
-        onLocateAgain={(sourceId) => window.quickStudy.locateLinkedSourceAgain(sourceId).then(onState)}
       />
       <SourceGroup
         title="External Attachments"
         empty="No individual files linked outside the Primary Folder."
         sources={attachments}
         onOpen={open}
-        onLocateAgain={(sourceId) => window.quickStudy.locateLinkedSourceAgain(sourceId).then(onState)}
       />
       <div className="source-group">
         <h3>Managed Assets</h3>
@@ -131,9 +145,6 @@ function SourcesPanel({ workspace, state, onState }: {
       {view?.status === "available" && (
         <section className="source-view" aria-label="Linked Source view">
           <h3>Read-only Source Layer</h3>
-          {view.revisionChanged && (
-            <p className="failure-message" role="status">Changed since the recorded Source Revision. Existing anchors have not been moved.</p>
-          )}
           {view.mediaType === "image/png" || view.mediaType === "image/jpeg" ? (
             <img src={view.content} alt="Linked Source preview" />
           ) : view.mediaType === "application/pdf" ? (
@@ -142,16 +153,16 @@ function SourcesPanel({ workspace, state, onState }: {
         </section>
       )}
       {view?.status === "unavailable" && <p className="failure-message" role="alert">{view.error}</p>}
+      {sourceError && <p className="failure-message" role="alert">{sourceError}</p>}
     </section>
   );
 }
 
-function SourceGroup({ title, empty, sources, onOpen, onLocateAgain }: {
+function SourceGroup({ title, empty, sources, onOpen }: {
   title: string;
   empty: string;
   sources: Array<Extract<LearningApplicationState["sources"][number], { kind: "linkedSource" }>>;
   onOpen(sourceId: string): Promise<void>;
-  onLocateAgain(sourceId: string): Promise<void>;
 }) {
   return (
     <div className="source-group">
@@ -167,21 +178,11 @@ function SourceGroup({ title, empty, sources, onOpen, onLocateAgain }: {
               </div>
               <small>{source.link.lastKnownPath}</small>
               {source.link.error && <p className="failure-message">{source.link.error}</p>}
-              {source.link.revisionStatus === "changed" && (
-                <p className="failure-message">Changed since the recorded Source Revision.</p>
-              )}
               <button
                 className="text-button"
                 aria-label={`${source.link.accessStatus === "unavailable" ? "Retry" : "Open"} Linked Source ${source.name}`}
                 onClick={() => void onOpen(source.id)}
               >{source.link.accessStatus === "unavailable" ? "Retry access" : "Open read-only"}</button>
-              {source.link.accessStatus === "unavailable" && (
-                <button
-                  className="text-button"
-                  aria-label={`Locate Linked Source ${source.name} again`}
-                  onClick={() => void onLocateAgain(source.id)}
-                >Locate again</button>
-              )}
             </li>
           ))}
         </ul>

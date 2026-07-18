@@ -15,8 +15,6 @@ contextBridge.exposeInMainWorld("quickStudy", {
   linkExternalAttachment: (workspaceId: string): Promise<LearningApplicationState> =>
     ipcRenderer.invoke("source:linkExternalAttachment", workspaceId),
   openLinkedSource: (sourceId: string): Promise<LinkedSourceView> => ipcRenderer.invoke("source:open", sourceId),
-  locateLinkedSourceAgain: (sourceId: string): Promise<LearningApplicationState> =>
-    ipcRenderer.invoke("source:locateAgain", sourceId),
   onStateChanged: (listener: (state: LearningApplicationState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: LearningApplicationState) => listener(state);
     ipcRenderer.on("learning:stateChanged", handler);

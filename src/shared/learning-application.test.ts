@@ -136,6 +136,22 @@ describe("Learning Application", () => {
       accessGrant: { kind: "securityScopedBookmark", bookmarkData: "file-bookmark" },
       fingerprint: { size: 12, modifiedAtMs: 1235 }
     })).rejects.toThrow("already covered by the Primary Folder");
+
+    const { application: reverseOrder } = await launch();
+    await reverseOrder.linkExternalAttachment("quick-study-workspace", {
+      name: "inside.txt",
+      resourceType: "file",
+      lastKnownPath: "/Users/learner/quick-notes/inside.txt",
+      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "file-bookmark" },
+      fingerprint: { size: 12, modifiedAtMs: 1235 }
+    });
+    await expect(reverseOrder.linkPrimaryFolder("quick-study-workspace", {
+      name: "quick-notes",
+      resourceType: "folder",
+      lastKnownPath: "/Users/learner/quick-notes",
+      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "folder-bookmark" },
+      fingerprint: { size: 64, modifiedAtMs: 1234 }
+    })).rejects.toThrow("External Attachment is already inside this Primary Folder");
   });
 
   it("reopens a Linked Source read-only and preserves its association when access fails", async () => {
@@ -160,17 +176,6 @@ describe("Learning Application", () => {
     });
     expect(sourceAccess.openedSourceIds).toEqual([source.id]);
 
-    sourceAccess.fingerprint = { size: 65, modifiedAtMs: 4321 };
-    const changed = await application.openLinkedSource(source.id);
-    expect(changed).toMatchObject({ status: "available", revisionChanged: true });
-    expect(application.getState().sources.find((candidate) => candidate.id === source.id)).toMatchObject({
-      link: {
-        fingerprint: { size: 64, modifiedAtMs: 1234 },
-        observedFingerprint: { size: 65, modifiedAtMs: 4321 },
-        revisionStatus: "changed"
-      }
-    });
-
     sourceAccess.error = new Error("The source is missing or access is no longer available.");
     const unavailable = await application.openLinkedSource(source.id);
     expect(unavailable).toEqual({
@@ -183,23 +188,6 @@ describe("Learning Application", () => {
       link: { accessStatus: "unavailable", error: "The source is missing or access is no longer available." }
     });
 
-    const relocated = await application.relocateLinkedSource(source.id, {
-      name: "compactness-restored.txt",
-      resourceType: "file",
-      lastKnownPath: "/Users/learner/restored/compactness.txt",
-      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "replacement-bookmark" },
-      fingerprint: { size: 65, modifiedAtMs: 5678 }
-    });
-    expect(relocated.sources.find((candidate) => candidate.id === source.id)).toMatchObject({
-      id: source.id,
-      name: "compactness-restored.txt",
-      link: {
-        lastKnownPath: "/Users/learner/restored/compactness.txt",
-        accessGrant: { kind: "securityScopedBookmark", bookmarkData: "replacement-bookmark" },
-        accessStatus: "available",
-        error: null
-      }
-    });
   });
 
   it("proposes an editable Learning Session and pauses materially ambiguous input for confirmation", async () => {
@@ -958,7 +946,7 @@ describe("Learning Application", () => {
 class DeterministicSourceAccess implements LocalSourceAccess {
   readonly openedSourceIds: string[] = [];
   error: Error | null = null;
-  fingerprint = { size: 64, modifiedAtMs: 1234 };
+  readonly fingerprint = { size: 64, modifiedAtMs: 1234 };
 
   async read(source: LinkedSource) {
     this.openedSourceIds.push(source.id);

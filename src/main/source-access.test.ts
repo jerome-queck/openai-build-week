@@ -132,8 +132,6 @@ function linkedFile(): LinkedSource {
       lastKnownPath: "/Users/learner/notes/lecture.txt",
       accessGrant: { kind: "securityScopedBookmark", bookmarkData: "opaque-bookmark" },
       fingerprint: { size: 128, modifiedAtMs: 1234 },
-      observedFingerprint: null,
-      revisionStatus: "current",
       accessStatus: "available",
       error: null
     }
