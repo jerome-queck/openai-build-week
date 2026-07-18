@@ -27,6 +27,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "retryModelWork":
     case "startChatGptLogin":
     case "refreshAuthentication":
+    case "discardPendingQuestion":
+    case "submitPendingQuestion":
       return true;
     case "resumeSession":
     case "cancelSessionModelWork":
@@ -34,6 +36,10 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "startQuickStudy":
     case "submitSessionIntake":
       return "mathematics" in action && typeof action.mathematics === "string";
+    case "savePendingQuestion":
+    case "editPendingQuestion":
+    case "submitQuestion":
+      return "text" in action && typeof action.text === "string";
     case "loginWithApiKey":
       return "apiKey" in action && typeof action.apiKey === "string";
     case "reviseSessionProposal":
@@ -75,6 +81,11 @@ function registerLearningApplicationHandlers(): void {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (!isLearnerAction(action)) throw new Error("Invalid learner action.");
     return learningApplication.submit(action);
+  });
+  ipcMain.handle("learning:searchSessions", (event, query: unknown) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (typeof query !== "string") throw new Error("Invalid search query.");
+    return learningApplication.searchSessions(query);
   });
   ipcMain.handle("authentication:openExternal", async (event, url: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");

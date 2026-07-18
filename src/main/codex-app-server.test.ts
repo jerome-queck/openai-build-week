@@ -298,6 +298,27 @@ describe("Codex app-server contract", () => {
     );
   });
 
+  it.each([
+    ["Network connection is unavailable.", "Network connection is unavailable."],
+    ["ChatGPT subscription capacity is unavailable.", "ChatGPT subscription capacity is unavailable."],
+    ["API quota exhausted", "Codex usage is currently unavailable. Check your plan or API usage, then retry."]
+  ])("preserves supported access failures from account reads: %s", async (protocolMessage, expected) => {
+    const transport = new ScriptedTransport((message) => {
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1",
+          codexHome: "/tmp/codex-home",
+          platformFamily: "unix",
+          platformOs: "macos"
+        });
+      }
+      if (message.method === "account/read") transport.reject(message.id, -32000, protocolMessage);
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+
+    await expect(runtime.getAuthentication()).rejects.toThrow(expected);
+  });
+
   it("rejects an incompatible initialize response before sending initialized", async () => {
     const transport = new ScriptedTransport((message) => {
       if (message.method === "initialize") transport.respond(message.id, { userAgent: "unknown" });

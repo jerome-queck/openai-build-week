@@ -1,10 +1,20 @@
 #!/usr/bin/env node
 
 import { createInterface } from "node:readline";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 let threadNumber = 0;
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
+
+const accessState = () => {
+  try {
+    return JSON.parse(readFileSync(join(process.env.QUICK_STUDY_DATA_DIR, "fake-codex-access.json"), "utf8"));
+  } catch {
+    return { status: "available" };
+  }
+};
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -23,6 +33,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
       break;
     case "account/read":
+      if (accessState().status === "unavailable") {
+        send({ id: message.id, error: { code: -32000, message: accessState().message } });
+        break;
+      }
       send({
         id: message.id,
         result: {

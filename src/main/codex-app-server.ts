@@ -533,6 +533,12 @@ function createUnrefTimer(callback: () => void, timeoutMs: number): ReturnType<t
 }
 
 function curatedProtocolError(message: string): Error {
+  if (/network|offline|connection/i.test(message)) {
+    return new Error("Network connection is unavailable.");
+  }
+  if (/subscription.*capacity|capacity.*subscription/i.test(message)) {
+    return new Error("ChatGPT subscription capacity is unavailable.");
+  }
   if (/auth|unauthor|credential/i.test(message)) {
     return new Error("Codex authentication is unavailable. Sign in and retry.");
   }
