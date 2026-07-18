@@ -919,7 +919,9 @@ export class LearningApplication {
       initialTeachingDirection: session.proposal.initialTeachingDirection,
       accessScope: this.getSessionAccessScope(session.id),
       sourceContext,
-      onAccessRequest: (request) => this.handleRuntimeAccessRequest(session, request),
+      onAccessRequest: (request) => controller.signal.aborted
+        ? Promise.resolve({ status: "denied", policy: session.accessPolicy })
+        : this.handleRuntimeAccessRequest(session, request),
       signal: controller.signal,
       onDelta: (delta) => {
         if (controller.signal.aborted || session.teachingCard.status !== "streaming") return;
@@ -934,6 +936,7 @@ export class LearningApplication {
         this.queuePersistence();
       }
     }).then(() => {
+      if (controller.signal.aborted) return;
       if (session.teachingCard.status === "streaming") {
         session.teachingCard.status = "completed";
         session.returnContext.nextAction = "Review the Teaching Card and continue from the point that needs work";

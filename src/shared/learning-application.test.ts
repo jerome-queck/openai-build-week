@@ -1100,6 +1100,7 @@ describe("Learning Application", () => {
       requiresConfirmation: false,
       confirmationReason: null
     }, true);
+    runtime.completeTeachingOnCancel = false;
     const { application } = await launchWithRuntime(runtime);
     let state = await application.submit({ type: "submitSessionIntake", mathematics: "Explain this theorem." });
 
@@ -1132,6 +1133,18 @@ describe("Learning Application", () => {
     expect(runtime.teachingRequests.at(-1)?.accessScope.policy).toBe("full");
     runtime.teachingRequests[0].onDelta("stale interrupted output");
     expect(application.getState().sessions[0].teachingCard.content).not.toContain("stale interrupted output");
+    runtime.completeTeachingRequest(runtime.teachingRequests[0]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(application.getState().sessions[0].teachingCard.status).toBe("streaming");
+    await expect(runtime.teachingRequests[0].onAccessRequest({
+      requestedPolicy: "full",
+      reason: "A late stale request.",
+      exactScope: "/Users/learner/stale.pdf",
+      intendedAction: "Read stale work."
+    })).resolves.toEqual({ status: "denied", policy: "full" });
+    expect(application.getState().sessions[0].accessRequests.filter((request) => request.status === "pending")).toEqual([]);
+    runtime.emitTeaching("Current Full Access teaching");
+    expect(application.getState().sessions[0].teachingCard.content).toContain("Current Full Access teaching");
 
     runtime.completeTeaching(state.sessions[0].id);
   });
@@ -1375,8 +1388,8 @@ class DeterministicSourceAccess implements LocalSourceAccess {
 class DeterministicModelRuntime implements ModelRuntime {
   readonly teachingRequests: TeachingRequest[] = [];
   readonly canceledSessionIds: string[] = [];
-  private readonly teachingCompletions = new Map<string, () => void>();
-  private readonly teachingFailures = new Map<string, (error: Error) => void>();
+  private readonly teachingCompletions = new Map<TeachingRequest, () => void>();
+  private readonly teachingFailures = new Map<TeachingRequest, (error: Error) => void>();
   authentication: Awaited<ReturnType<ModelRuntime["getAuthentication"]>> = {
     status: "signedIn",
     method: "chatgpt",
@@ -1387,6 +1400,7 @@ class DeterministicModelRuntime implements ModelRuntime {
   proposalError: Error | null = null;
   authenticationError: Error | null = null;
   cancelError: Error | null = null;
+  completeTeachingOnCancel = true;
   teachingDeltaOnStart: string | null = null;
 
   constructor(private readonly proposal: SessionProposal, private readonly holdTeaching = false) {}
@@ -1420,8 +1434,8 @@ class DeterministicModelRuntime implements ModelRuntime {
     if (this.teachingDeltaOnStart !== null) request.onDelta(this.teachingDeltaOnStart);
     if (this.holdTeaching) {
       await new Promise<void>((resolve, reject) => {
-        this.teachingCompletions.set(request.sessionId, resolve);
-        this.teachingFailures.set(request.sessionId, reject);
+        this.teachingCompletions.set(request, resolve);
+        this.teachingFailures.set(request, reject);
       });
     }
   }
@@ -1444,26 +1458,29 @@ class DeterministicModelRuntime implements ModelRuntime {
   }
 
   completeTeaching(sessionId = this.teachingRequests.at(-1)?.sessionId) {
-    if (sessionId) {
-      const request = this.teachingRequests.find((candidate) => candidate.sessionId === sessionId);
-      request?.onRuntimeEvent?.({
-        type: "turnCompleted",
-        threadId: `thread-${sessionId}`,
-        turnId: `turn-${sessionId}`,
-        detail: "Turn completed."
-      });
-      this.teachingCompletions.get(sessionId)?.();
-    }
+    const request = [...this.teachingRequests].reverse().find((candidate) => candidate.sessionId === sessionId);
+    if (request) this.completeTeachingRequest(request);
+  }
+
+  completeTeachingRequest(request: TeachingRequest) {
+    request.onRuntimeEvent?.({
+      type: "turnCompleted",
+      threadId: `thread-${request.sessionId}`,
+      turnId: `turn-${request.sessionId}`,
+      detail: "Turn completed."
+    });
+    this.teachingCompletions.get(request)?.();
   }
 
   failTeaching(error: Error, sessionId = this.teachingRequests.at(-1)?.sessionId) {
-    if (sessionId) this.teachingFailures.get(sessionId)?.(error);
+    const request = [...this.teachingRequests].reverse().find((candidate) => candidate.sessionId === sessionId);
+    if (request) this.teachingFailures.get(request)?.(error);
   }
 
   async cancelTeaching(sessionId: string) {
     this.canceledSessionIds.push(sessionId);
     if (this.cancelError) throw this.cancelError;
-    this.completeTeaching(sessionId);
+    if (this.completeTeachingOnCancel) this.completeTeaching(sessionId);
   }
 
   async shutdown() {}

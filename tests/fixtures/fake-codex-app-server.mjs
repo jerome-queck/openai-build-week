@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 let threadNumber = 0;
+let turnNumber = 0;
 let serverRequestNumber = 1_000;
 const threadPolicies = new Map();
 const pendingAccessRequests = new Map();
@@ -81,7 +82,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       send({ id: message.id, result: { thread: { id: `fake-thread-${threadNumber}` } } });
       break;
     case "turn/start": {
-      const turnId = `fake-turn-${threadNumber}`;
+      turnNumber += 1;
+      const turnId = `fake-turn-${turnNumber}`;
       send({ id: message.id, result: { turn: { id: turnId } } });
       queueMicrotask(() => {
         if (message.params.outputSchema) {
