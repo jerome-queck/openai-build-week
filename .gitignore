@@ -3,3 +3,8 @@
 .env
 .env.*
 !.env.example
+node_modules/
+dist/
+out/
+test-results/
+playwright-report/
