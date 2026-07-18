@@ -44,6 +44,46 @@ export interface PendingQuestion {
   text: string;
 }
 
+export type SourceAnchorPaletteAction = "explain" | "question" | "annotate" | "addToLearningTrail";
+
+export interface SourceTextLocation {
+  startOffset: number;
+  endOffset: number;
+  exactText: string;
+  prefix: string;
+  suffix: string;
+}
+
+export interface NormalizedSourceRegionBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type SourceAnchorSelection =
+  | ({ kind: "text" } & SourceTextLocation)
+  | ({
+      kind: "equation";
+      equationIndex: number;
+    } & SourceTextLocation)
+  | {
+      kind: "diagramRegion";
+      bounds: NormalizedSourceRegionBounds;
+    };
+
+export interface SourceAnchor {
+  id: string;
+  sourceId: string;
+  selection: SourceAnchorSelection;
+}
+
+export interface SourceAnchorRequest {
+  id: string;
+  sourceAnchorId: string;
+  action: SourceAnchorPaletteAction;
+}
+
 export interface SubmittedPendingQuestion {
   id: string;
   text: string;
@@ -192,6 +232,9 @@ export interface LearningSession {
   accessPolicy: SessionAccessPolicy;
   accessRequests: SessionAccessRequest[];
   pendingFullAccessConfirmation: boolean;
+  sourceAnchors: SourceAnchor[];
+  sourceAnchorRequests: SourceAnchorRequest[];
+  activeSourceAnchorId: string | null;
 }
 
 export interface LearningApplicationState {
@@ -237,6 +280,13 @@ export type LearnerAction =
   | { type: "editPendingQuestion"; text: string }
   | { type: "discardPendingQuestion" }
   | { type: "submitPendingQuestion" }
+  | { type: "addSourceToSession"; sourceId: string }
+  | {
+      type: "createSourceAnchor";
+      sourceId: string;
+      selection: SourceAnchorSelection;
+      paletteAction: SourceAnchorPaletteAction;
+    }
   | { type: "selectSessionAccessPolicy"; policy: SessionAccessPolicy }
   | { type: "setFullAccessConfirmation"; enabled: boolean }
   | { type: "decideFullAccessConfirmation"; decision: "confirm" | "cancel" }
@@ -527,6 +577,39 @@ export class LearningApplication {
         this.state.navigation = { workspaceId: action.workspaceId, missionId: mission.id };
         break;
       }
+      case "createSourceAnchor": {
+        const session = this.requireActiveSession();
+        if (!isSourceAnchorPaletteAction(action.paletteAction)) throw new Error("Choose an available Selection Palette action.");
+        const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
+        if (!source || !session.sourceIds.includes(source.id)) {
+          throw new Error("Choose a source attached to the active Learning Session.");
+        }
+        const selection = await this.validatedSourceAnchorSelection(action.selection, source);
+        const anchor: SourceAnchor = {
+          id: crypto.randomUUID(),
+          sourceId: source.id,
+          selection
+        };
+        session.sourceAnchors.push(anchor);
+        session.sourceAnchorRequests.push({
+          id: crypto.randomUUID(),
+          sourceAnchorId: anchor.id,
+          action: action.paletteAction
+        });
+        session.activeSourceAnchorId = anchor.id;
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "addSourceToSession": {
+        const session = this.requireActiveSession();
+        const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
+        if (!source || source.workspaceId !== session.workspaceId || source.kind !== "linkedSource" || source.resourceType !== "file") {
+          throw new Error("Choose a Linked Source file in the active Study Workspace.");
+        }
+        if (!session.sourceIds.includes(source.id)) session.sourceIds.push(source.id);
+        break;
+      }
       case "navigateToWorkspace": {
         const workspace = this.state.workspaces.find((candidate) => candidate.id === action.workspaceId);
         if (!workspace) throw new Error("Choose an existing Study Workspace.");
@@ -577,7 +660,10 @@ export class LearningApplication {
           pendingQuestion: null,
           accessPolicy: location.accessPolicy,
           accessRequests: [],
-          pendingFullAccessConfirmation: false
+          pendingFullAccessConfirmation: false,
+          sourceAnchors: [],
+          sourceAnchorRequests: [],
+          activeSourceAnchorId: null
         };
         this.state.sessions.push(session);
         this.state.activeSessionId = session.id;
@@ -643,7 +729,10 @@ export class LearningApplication {
           pendingQuestion: null,
           accessPolicy: location.accessPolicy,
           accessRequests: [],
-          pendingFullAccessConfirmation: false
+          pendingFullAccessConfirmation: false,
+          sourceAnchors: [],
+          sourceAnchorRequests: [],
+          activeSourceAnchorId: null
         };
         this.agentWorkLogs[session.id] = pendingLog;
         delete this.agentWorkLogs[proposalAttemptId];
@@ -957,6 +1046,27 @@ export class LearningApplication {
       this.emitState();
     });
     this.modelWorks.set(session.id, { controller, promise });
+  }
+
+  private async validatedSourceAnchorSelection(
+    selection: SourceAnchorSelection,
+    source: WorkspaceSource
+  ): Promise<SourceAnchorSelection> {
+    const validated = validatedSourceAnchorSelection(selection, source);
+    if (source.kind === "managedAsset") return validated;
+    if (!this.sourceAccess) throw new Error("Local source access is unavailable.");
+    const view = await this.sourceAccess.read(source);
+    if (!sameFingerprint(source.link.fingerprint, view.fingerprint)) {
+      throw new Error("This source changed before the Source Anchor could be saved.");
+    }
+    if (selection.kind === "diagramRegion") return validated;
+    if (view.mediaType !== "text/plain") {
+      throw new Error("Text and equation anchors require an accessible text Source Layer.");
+    }
+    if (!matchesSourceTextLocation(view.content, selection)) {
+      throw new Error("The selected source text no longer matches this Source Layer.");
+    }
+    return validated;
   }
 
   private async buildTeachingSourceContext(session: LearningSession): Promise<TeachingSourceContext[]> {
@@ -1329,8 +1439,13 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       pendingQuestion: session.pendingQuestion ?? null,
       accessPolicy: migrateSessionAccessPolicy(session.accessPolicy),
       accessRequests: migrateAccessRequests(session.accessRequests),
-      pendingFullAccessConfirmation: false
+      pendingFullAccessConfirmation: false,
+      sourceAnchors: migrateSourceAnchors(session.sourceAnchors),
+      sourceAnchorRequests: migrateSourceAnchorRequests(session.sourceAnchorRequests),
+      activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null
     }));
+    attachManagedSourcesToLegacySessions(current);
+    for (const session of current.sessions) validateSessionSourceAnchorReferences(current, session);
     return current;
   }
 
@@ -1353,9 +1468,14 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       pendingQuestion: null,
       accessPolicy: "focused",
       accessRequests: [],
-      pendingFullAccessConfirmation: false
+      pendingFullAccessConfirmation: false,
+      sourceAnchors: [],
+      sourceAnchorRequests: [],
+      activeSourceAnchorId: null
     };
     migrated.sessions.push(session);
+    attachManagedSourcesToLegacySessions(migrated);
+    validateSessionSourceAnchorReferences(migrated, session);
     migrated.resumeSessionId = session.id;
     migrated.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
     migrated.activityOrder = 1;
@@ -1491,6 +1611,141 @@ function migrateWorkspaceSources(value: unknown): WorkspaceSource[] {
       : candidate.link.lastKnownPath as string;
     return source;
   });
+}
+
+function migrateSourceAnchors(value: unknown): SourceAnchor[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored Source Anchors are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.sourceId !== "string"
+    ) {
+      throw new Error("Stored Source Anchor is invalid.");
+    }
+    return {
+      id: candidate.id,
+      sourceId: candidate.sourceId,
+      selection: validatedSourceAnchorSelection(candidate.selection)
+    };
+  });
+}
+
+function migrateSourceAnchorRequests(value: unknown): SourceAnchorRequest[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored Source Anchor requests are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.sourceAnchorId !== "string"
+      || !isSourceAnchorPaletteAction(candidate.action)) {
+      throw new Error("Stored Source Anchor request is invalid.");
+    }
+    return candidate as unknown as SourceAnchorRequest;
+  });
+}
+
+function attachManagedSourcesToLegacySessions(state: LearningApplicationState): void {
+  for (const session of state.sessions) {
+    if (session.sourceIds.length > 0) continue;
+    const source: ManagedAsset = {
+      id: `migrated-source-${session.id}`,
+      kind: "managedAsset",
+      workspaceId: session.workspaceId,
+      name: "Typed mathematics",
+      mediaType: "text/plain",
+      content: session.mathematics
+    };
+    state.sources.push(source);
+    session.sourceIds.push(source.id);
+    const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
+    if (workspace && !workspace.context.sourceIds.includes(source.id)) workspace.context.sourceIds.push(source.id);
+  }
+}
+
+function validateSessionSourceAnchorReferences(state: LearningApplicationState, session: LearningSession): void {
+  const anchorsById = new Map(session.sourceAnchors.map((anchor) => [anchor.id, anchor]));
+  const sourceIds = new Set(session.sourceIds);
+  const stateSources = new Map(state.sources.map((source) => [source.id, source]));
+  const requestsAreValid = session.sourceAnchorRequests.every((request) => anchorsById.has(request.sourceAnchorId));
+  const anchorsAreValid = session.sourceAnchors.every((anchor) => {
+    const source = stateSources.get(anchor.sourceId);
+    return sourceIds.has(anchor.sourceId) && source?.workspaceId === session.workspaceId;
+  });
+  const activeAnchorIsValid = session.activeSourceAnchorId === null || anchorsById.has(session.activeSourceAnchorId);
+  const identifiersAreUnique = anchorsById.size === session.sourceAnchors.length
+    && new Set(session.sourceAnchorRequests.map((request) => request.id)).size === session.sourceAnchorRequests.length;
+  if (!requestsAreValid || !anchorsAreValid || !activeAnchorIsValid || !identifiersAreUnique) {
+    throw new Error("Stored Source Anchor references are invalid.");
+  }
+}
+
+function validatedSourceAnchorSelection(value: unknown, source?: WorkspaceSource): SourceAnchorSelection {
+  if (!isRecord(value)) throw new Error("Choose a valid source region.");
+  if (value.kind === "diagramRegion") {
+    if (!isRecord(value.bounds)) throw new Error("Choose a bounded diagram region.");
+    const bounds = value.bounds;
+    if (![bounds.x, bounds.y, bounds.width, bounds.height].every(
+      (coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate)
+    ) || (bounds.x as number) < 0 || (bounds.y as number) < 0
+      || (bounds.width as number) <= 0 || (bounds.height as number) <= 0
+      || (bounds.x as number) + (bounds.width as number) > 1
+      || (bounds.y as number) + (bounds.height as number) > 1) {
+      throw new Error("Diagram-region bounds must be normalized within the Source Layer.");
+    }
+    return {
+      kind: "diagramRegion",
+      bounds: {
+        x: bounds.x as number,
+        y: bounds.y as number,
+        width: bounds.width as number,
+        height: bounds.height as number
+      }
+    };
+  }
+  if (value.kind !== "text" && value.kind !== "equation") throw new Error("Choose a valid source region.");
+  const startOffset = value.startOffset;
+  const endOffset = value.endOffset;
+  if (!Number.isInteger(startOffset) || !Number.isInteger(endOffset)
+    || (startOffset as number) < 0 || (endOffset as number) <= (startOffset as number)
+    || typeof value.exactText !== "string" || value.exactText.length !== (endOffset as number) - (startOffset as number)
+    || typeof value.prefix !== "string" || typeof value.suffix !== "string"
+    || value.prefix.length > 32 || value.suffix.length > 32) {
+    throw new Error("Text and equation anchors require a precise non-empty source range.");
+  }
+  const location: SourceTextLocation = {
+    startOffset: startOffset as number,
+    endOffset: endOffset as number,
+    exactText: value.exactText,
+    prefix: value.prefix,
+    suffix: value.suffix
+  };
+  if (source?.kind === "managedAsset" && !matchesSourceTextLocation(source.content, location)) {
+    throw new Error("The selected source text no longer matches this Source Layer.");
+  }
+  if (value.kind === "text") return { kind: "text", ...location };
+  if (!Number.isInteger(value.equationIndex) || (value.equationIndex as number) < 0) {
+    throw new Error("An equation anchor requires its equation location.");
+  }
+  return { kind: "equation", equationIndex: value.equationIndex as number, ...location };
+}
+
+function matchesSourceTextLocation(
+  content: string,
+  selection: SourceTextLocation
+): boolean {
+  return content.slice(selection.startOffset, selection.endOffset) === selection.exactText
+    && content.slice(Math.max(0, selection.startOffset - selection.prefix.length), selection.startOffset) === selection.prefix
+    && content.slice(selection.endOffset, selection.endOffset + selection.suffix.length) === selection.suffix;
+}
+
+export function isSourceAnchorPaletteAction(value: unknown): value is SourceAnchorPaletteAction {
+  return value === "explain" || value === "question" || value === "annotate" || value === "addToLearningTrail";
+}
+
+export function isSourceAnchorSelection(value: unknown): value is SourceAnchorSelection {
+  try {
+    validatedSourceAnchorSelection(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

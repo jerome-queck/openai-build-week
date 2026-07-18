@@ -140,7 +140,78 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .confirmation-reason { margin: -8px 0 18px; padding: 12px; border-radius: 9px; color: #7b4c36; background: #f7e9df; font-size: 12px; line-height: 1.45; }
 .math-canvas { display: flex; flex-direction: column; padding: 30px; }
 .canvas-heading { padding-bottom: 24px; border-bottom: 1px solid #deddd4; }
-.math-canvas article { flex: 1; padding: 46px 5%; color: #1c332f; font-family: Georgia, serif; font-size: clamp(24px, 3vw, 38px); line-height: 1.45; }
+.selectable-source-layer { position: relative; flex: 1; padding: 32px 5% 40px; }
+.workbench-source { flex: 1; }
+.workbench-source > label { margin-top: 18px; }
+.workbench-source > select { max-width: 420px; }
+.open-workbench-source { margin-top: 18px; }
+.source-selection-controls { display: flex; gap: 8px; flex-wrap: wrap; }
+.source-selection-controls .secondary { padding: 8px 11px; font-size: 12px; }
+.source-selection-surface {
+  position: relative;
+  min-height: 220px;
+  margin: 0;
+  padding: 34px 0;
+  color: #1c332f;
+  font-family: Georgia, serif;
+  font-size: clamp(24px, 3vw, 38px);
+  line-height: 1.45;
+  user-select: text;
+}
+.source-selection-surface.drawing-region { cursor: crosshair; user-select: none; }
+.source-selection-surface.visual-source-surface {
+  display: inline-block;
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  line-height: 0;
+}
+.source-equation {
+  display: inline;
+  margin: 0 2px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: #edf1e8;
+  font: inherit;
+}
+.source-equation:hover, .source-equation:focus-visible { background: #dce9df; }
+.source-layer-image { display: block; width: auto; max-width: 100%; height: auto; max-height: 620px; pointer-events: none; }
+.keyboard-region-controls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 14px;
+  border: 1px solid #cbd6cc;
+  border-radius: 12px;
+}
+.keyboard-region-controls legend { padding: 0 6px; color: #385950; font-size: 12px; font-weight: 750; }
+.keyboard-region-controls .primary { align-self: end; }
+.diagram-anchor-marker {
+  position: absolute;
+  z-index: 1;
+  border: 2px solid #b65d38;
+  border-radius: 7px;
+  pointer-events: none;
+  background: rgba(182,93,56,.08);
+}
+.source-anchor-count { margin: 0; color: #4a6d62; font-size: 12px; font-weight: 700; }
+.saved-source-anchors ul { margin: 7px 0 0; padding-left: 18px; color: #557069; font-size: 12px; }
+.saved-source-anchors li + li { margin-top: 4px; }
+.selection-palette {
+  position: relative;
+  z-index: 2;
+  margin-top: 8px;
+  padding: 16px;
+  border: 1px solid #aac4b3;
+  border-radius: 14px;
+  background: #f8fbf6;
+  box-shadow: 0 12px 32px rgba(48,57,50,.12);
+}
+.selection-palette-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.selection-palette .text-button { margin-top: 7px; padding: 6px 4px; }
 .next-step { display: flex; flex-direction: column; gap: 5px; padding: 16px; border-radius: 12px; color: #31534a; background: #eaf0e9; }
 .teaching-card { padding: 24px; border: 1px solid #c9d8cd; border-radius: 16px; background: #eef4ec; }
 .teaching-card.failed, .teaching-card.stopped { border-color: #dfbaa9; background: #f9eee8; }

@@ -129,6 +129,120 @@ describe("Learning Application", () => {
     expect(started.workspaces[0].context.sourceIds).toContain(managedAsset?.id);
   });
 
+  it("persists precise text, equation, and normalized diagram Source Anchors across relaunch", async () => {
+    const { application, dataDirectory } = await launch();
+    const started = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Let $f(x)=x^2$. The diagram below shows its graph."
+    });
+    const session = started.sessions[0];
+    const sourceId = session.sourceIds[0];
+
+    await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text",
+        startOffset: 4,
+        endOffset: 14,
+        exactText: "$f(x)=x^2$",
+        prefix: "Let ",
+        suffix: ". The diagram below"
+      },
+      paletteAction: "annotate"
+    });
+    await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "equation",
+        equationIndex: 0,
+        startOffset: 4,
+        endOffset: 14,
+        exactText: "$f(x)=x^2$",
+        prefix: "Let ",
+        suffix: ". The diagram below"
+      },
+      paletteAction: "question"
+    });
+    const anchored = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "diagramRegion",
+        bounds: { x: 0.125, y: 0.25, width: 0.5, height: 0.375 }
+      },
+      paletteAction: "addToLearningTrail"
+    });
+
+    expect(anchored.sessions[0].sourceAnchors).toMatchObject([
+      { sourceId, selection: { kind: "text", startOffset: 4, endOffset: 14 } },
+      { sourceId, selection: { kind: "equation", equationIndex: 0, exactText: "$f(x)=x^2$" } },
+      {
+        sourceId,
+        selection: { kind: "diagramRegion", bounds: { x: 0.125, y: 0.25, width: 0.5, height: 0.375 } }
+      }
+    ]);
+    expect(anchored.sessions[0].sourceAnchorRequests.map((request) => request.action)).toEqual([
+      "annotate", "question", "addToLearningTrail"
+    ]);
+    expect(anchored.sessions[0].activeSourceAnchorId).toBe(anchored.sessions[0].sourceAnchors[2].id);
+
+    await application.submit({ type: "leaveSession" });
+    const resumed = await application.submit({ type: "resumeSession", sessionId: session.id });
+    expect(resumed.sessions[0].sourceAnchors).toEqual(anchored.sessions[0].sourceAnchors);
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].sourceAnchors).toEqual(anchored.sessions[0].sourceAnchors);
+    expect(relaunched.getState().sessions[0].activeSourceAnchorId).toBe(anchored.sessions[0].activeSourceAnchorId);
+  });
+
+  it("anchors exact Linked Source text only after the learner attaches it to the active session", async () => {
+    const sourceAccess = new DeterministicSourceAccess();
+    const { application } = await launchWithSourceAccess(sourceAccess);
+    const workspace = await application.submit({ type: "createWorkspace", name: "Topology" });
+    const workspaceId = workspace.navigation.workspaceId;
+    const mission = await application.submit({ type: "createMission", workspaceId, name: "Compactness" });
+    const linked = await application.linkExternalAttachment(workspaceId, {
+      name: "compactness.txt",
+      resourceType: "file",
+      lastKnownPath: "/Users/learner/compactness.txt",
+      canonicalPath: "/Users/learner/compactness.txt",
+      accessGrant: null,
+      fingerprint: sourceAccess.fingerprint
+    });
+    const sourceId = linked.sources.find((source) => source.kind === "linkedSource")!.id;
+    await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Study the supplied source.",
+      location: { workspaceId, missionId: mission.navigation.missionId! }
+    });
+    const anchorAction = {
+      type: "createSourceAnchor" as const,
+      sourceId,
+      selection: {
+        kind: "text" as const,
+        startOffset: 0,
+        endOffset: 16,
+        exactText: "Every open cover",
+        prefix: "",
+        suffix: " has a finite subcover."
+      },
+      paletteAction: "explain" as const
+    };
+
+    await expect(application.submit(anchorAction)).rejects.toThrow("source attached to the active Learning Session");
+    await application.submit({ type: "addSourceToSession", sourceId });
+    const anchored = await application.submit(anchorAction);
+
+    expect(anchored.sessions[0].sourceAnchors[0]).toMatchObject({
+      sourceId,
+      selection: { kind: "text", exactText: "Every open cover" }
+    });
+    expect(sourceAccess.openedSourceIds).toEqual([sourceId]);
+  });
+
   it("allows Quick Study to own one Primary Folder and rejects attachments selected inside it", async () => {
     const { application } = await launch();
     const linked = await application.linkPrimaryFolder("quick-study-workspace", {
@@ -1300,6 +1414,13 @@ describe("Learning Application", () => {
         status: "paused"
       }]
     });
+    const migratedSession = migrated.getState().sessions[0];
+    expect(migratedSession.sourceIds).toHaveLength(1);
+    expect(migrated.getState().sources).toContainEqual(expect.objectContaining({
+      id: migratedSession.sourceIds[0],
+      kind: "managedAsset",
+      content: "Prove that the square root of 3 is irrational."
+    }));
   });
 
   it("rejects an invalid persisted source before its path can reach local source access", async () => {
@@ -1319,6 +1440,43 @@ describe("Learning Application", () => {
     await writeFile(statePath, JSON.stringify(persisted), "utf8");
 
     await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Linked Source is invalid");
+  });
+
+  it("rejects persisted Source Anchor references that contradict session ownership", async () => {
+    const { application, dataDirectory } = await launch();
+    const started = await application.submit({ type: "startQuickStudy", mathematics: "Use $a=b$." });
+    const sourceId = started.sessions[0].sourceIds[0];
+    await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "equation",
+        equationIndex: 0,
+        startOffset: 4,
+        endOffset: 9,
+        exactText: "$a=b$",
+        prefix: "Use ",
+        suffix: "."
+      },
+      paletteAction: "explain"
+    });
+    const statePath = join(dataDirectory, "learning-application.json");
+    const valid = JSON.parse(await readFile(statePath, "utf8"));
+
+    const invalidActiveAnchor = structuredClone(valid);
+    invalidActiveAnchor.sessions[0].activeSourceAnchorId = "missing-anchor";
+    await writeFile(statePath, JSON.stringify(invalidActiveAnchor), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+
+    const invalidRequest = structuredClone(valid);
+    invalidRequest.sessions[0].sourceAnchorRequests[0].sourceAnchorId = "missing-anchor";
+    await writeFile(statePath, JSON.stringify(invalidRequest), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+
+    const detachedSource = structuredClone(valid);
+    detachedSource.sessions[0].sourceAnchors[0].sourceId = "other-source";
+    await writeFile(statePath, JSON.stringify(detachedSource), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
   });
 
   it("rejects malformed persisted Session Access Policy state", async () => {

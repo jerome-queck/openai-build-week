@@ -10,6 +10,7 @@ import type {
   StudyWorkspace
 } from "../../shared/learning-application";
 import { sessionAccessPolicyLabel } from "../../shared/session-access";
+import { SourceLayer } from "./SourceLayer";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -663,10 +664,10 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
           </aside>
           <section className="math-canvas">
             <div className="canvas-heading">
-              <div><p className="eyebrow">Source Layer</p><h2>Your typed mathematics</h2></div>
+              <div><p className="eyebrow">Source Layer</p><h2>Session source</h2></div>
               <span className="saved">Saved locally</span>
             </div>
-            <article>{session.mathematics}</article>
+            <WorkbenchSourceLayer state={state} session={session} onState={onState} />
             <SessionAccessPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
@@ -676,6 +677,70 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
         </div>
       </div>
     </main>
+  );
+}
+
+function WorkbenchSourceLayer({ state, session, onState }: {
+  state: LearningApplicationState;
+  session: LearningSession;
+  onState: StateHandler;
+}) {
+  const selectableSources = state.sources.filter((source) => source.workspaceId === session.workspaceId
+    && (session.sourceIds.includes(source.id) || (source.kind === "linkedSource" && source.resourceType === "file")));
+  const [sourceId, setSourceId] = useState(session.sourceIds[0]);
+  const [linkedView, setLinkedView] = useState<Extract<LinkedSourceView, { status: "available" }> | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const source = selectableSources.find((candidate) => candidate.id === sourceId) ?? selectableSources[0];
+  const chooseSource = async (nextSourceId: string) => {
+    setSourceError(null);
+    const nextSource = selectableSources.find((candidate) => candidate.id === nextSourceId);
+    if (!nextSource) return;
+    if (nextSource.kind === "managedAsset") {
+      setSourceId(nextSource.id);
+      setLinkedView(null);
+      return;
+    }
+    const view = await window.quickStudy.openLinkedSource(nextSource.id);
+    if (view.status === "unavailable") {
+      setSourceError(view.error);
+      return;
+    }
+    onState(await window.quickStudy.submit({ type: "addSourceToSession", sourceId: nextSource.id }));
+    setSourceId(nextSource.id);
+    setLinkedView(view);
+  };
+  const content = source?.kind === "managedAsset" ? source.content : linkedView?.sourceId === source?.id ? linkedView.content : null;
+  const mediaType = source?.kind === "managedAsset" ? source.mediaType : linkedView?.sourceId === source?.id ? linkedView.mediaType : null;
+  const selectableMedia = mediaType === "text/plain" || mediaType === "image/png" || mediaType === "image/jpeg";
+
+  return (
+    <section className="workbench-source" aria-labelledby="workbench-source-title">
+      <label id="workbench-source-title" htmlFor="workbench-source-choice">Workbench Source Layer</label>
+      <select id="workbench-source-choice" value={source?.id ?? ""} onChange={(event) => void chooseSource(event.target.value)}>
+        {selectableSources.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}
+      </select>
+      {content !== null && selectableMedia ? (
+        <SourceLayer
+          sourceId={source.id}
+          content={content}
+          mediaType={mediaType}
+          anchors={session.sourceAnchors.filter((anchor) => anchor.sourceId === source.id)}
+          onChooseAction={(selection, paletteAction) => {
+            void window.quickStudy.submit({
+              type: "createSourceAnchor",
+              sourceId: source.id,
+              selection,
+              paletteAction
+            }).then(onState);
+          }}
+        />
+      ) : source?.kind === "linkedSource" && content === null ? (
+        <button className="secondary open-workbench-source" onClick={() => void chooseSource(source.id)}>Open Linked Source read-only</button>
+      ) : (
+        <p className="subtle">This source format is read-only here, but precise selection is not available yet.</p>
+      )}
+      {sourceError && <p className="failure-message" role="alert">{sourceError}</p>}
+    </section>
   );
 }
 
