@@ -33,7 +33,7 @@ h2 { margin: 0; font-size: 27px; }
 .dashboard-grid, .workbench-layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 24px; margin-top: 24px; }
 .dashboard-content { width: min(940px, 100%); margin: 0 auto; }
 .dashboard-heading { padding: 24px 4px 28px; }
-.hierarchy, .authentication-card, .model-access, .resume-card, .intake-card, .search-card, .organize-card, .sources-card, .history-card, .session-panel, .math-canvas {
+.hierarchy, .authentication-card, .model-access, .resume-card, .intake-card, .search-card, .organize-card, .sources-card, .history-card, .session-panel, .math-canvas, .contextual-inspector {
   border: 1px solid rgba(105,118,105,.22);
   border-radius: 20px;
   background: rgba(255,255,255,.74);
@@ -219,6 +219,7 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .source-anchor-count { margin: 0; color: #4a6d62; font-size: 12px; font-weight: 700; }
 .saved-source-anchors ul { margin: 7px 0 0; padding-left: 18px; color: #557069; font-size: 12px; }
 .saved-source-anchors li + li { margin-top: 4px; }
+.anchor-marker { border: 0; padding: 3px 0; color: #1d5548; background: transparent; font-size: inherit; text-align: left; }
 .selection-palette {
   position: relative;
   z-index: 2;
@@ -248,7 +249,34 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .teaching-section .teaching-content { margin-top: 0; }
 .failure-message { margin: 14px 0 0; color: #8d3d2b; font-weight: 650; line-height: 1.45; }
 .teaching-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+.contextual-inspector { grid-column: 2; padding: 24px; }
+.contextual-inspector h2 { font-size: 24px; }
+.anchored-teaching-card, .teaching-history, .teaching-variant, .inspector-form { margin-top: 18px; padding-top: 18px; border-top: 1px solid #deddd4; }
+.anchored-teaching-card p, .teaching-variant p { line-height: 1.6; white-space: pre-wrap; }
+.anchored-teaching-card.failed { color: #8d3d2b; }
+.teaching-history ol { padding-left: 24px; }
+.teaching-history li + li { margin-top: 12px; }
+.teaching-history p { margin-bottom: 4px; color: #385950; }
+.context-used-receipt { margin-top: 14px; color: #385950; }
+.context-used-receipt summary { cursor: pointer; font-weight: 750; }
+.context-used-receipt li + li { margin-top: 5px; }
+.teaching-variant { padding: 18px; border: 1px solid #c9d8cd; border-radius: 12px; background: #f5f7f1; }
+.teaching-variant h3 { margin: 0; }
+.inspector-form textarea { width: 100%; min-height: 82px; padding: 10px; resize: vertical; border: 1px solid #c8d0c8; border-radius: 9px; color: #17332e; background: #fbfaf6; }
+.inspector-form input, .inspector-form textarea { margin-bottom: 10px; }
 .math-canvas > .model-access { margin-top: 4px; }
+.learning-artifact { margin: 6px 0 18px; padding: 24px; border: 2px solid #b8cfbd; border-radius: 16px; background: #f7fbf4; }
+.learning-artifact h2 { font-size: 25px; }
+.artifact-content { width: 100%; min-height: 150px; padding: 14px; resize: vertical; border: 1px solid #b8cfbd; border-radius: 10px; color: #1c332f; background: #fff; white-space: pre-wrap; font-family: Georgia, serif; font-size: 18px; line-height: 1.65; }
+.artifact-evidence { display: grid; gap: 6px; margin: 16px 0 0; padding-top: 14px; border-top: 1px solid #d4dfd3; }
+.artifact-evidence div { display: grid; grid-template-columns: 140px 1fr; gap: 12px; }
+.artifact-evidence dt { font-weight: 750; }
+.artifact-evidence dd { margin: 0; }
+.record-link { color: #557069 !important; font-size: 12px; }
+.artifact-history, .agent-work-log-link { margin-top: 14px; }
+.artifact-history summary { cursor: pointer; font-weight: 750; }
+.agent-work-log-link > .text-button { padding-left: 0; }
+.agent-work-log-link ol { color: #557069; font-size: 12px; }
 .ask-bar { margin-top: 16px; padding: 24px; border: 1px solid #c9d8cd; border-radius: 16px; background: rgba(255,255,255,.62); }
 .ask-bar h2 { font-size: 25px; }
 .ask-bar label { margin-top: 18px; }
@@ -273,6 +301,7 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 @media (max-width: 1000px) {
   .dashboard-grid, .workbench-layout { grid-template-columns: 220px minmax(0, 1fr); }
   .workbench-grid { grid-template-columns: 1fr; }
+  .contextual-inspector { grid-column: 1; }
 }
 
 @media (max-width: 760px) {

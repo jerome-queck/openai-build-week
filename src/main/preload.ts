@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   LearnerAction,
+  AgentWorkLogEvidence,
   LearningApplicationState,
   LinkedSourceView,
   OpenedSourceSearchResult,
@@ -11,6 +12,8 @@ import type {
 contextBridge.exposeInMainWorld("quickStudy", {
   getState: (): Promise<LearningApplicationState> => ipcRenderer.invoke("learning:getState"),
   submit: (action: LearnerAction): Promise<LearningApplicationState> => ipcRenderer.invoke("learning:submit", action),
+  getAgentWorkLogEvidence: (sessionId: string, fromSequence: number, toSequence: number): Promise<AgentWorkLogEvidence[]> =>
+    ipcRenderer.invoke("learning:getAgentWorkLogEvidence", sessionId, fromSequence, toSequence),
   searchSessions: (query: string): Promise<SessionSearchResult[]> => ipcRenderer.invoke("learning:searchSessions", query),
   linkPrimaryFolder: (workspaceId: string): Promise<LearningApplicationState> =>
     ipcRenderer.invoke("source:linkPrimaryFolder", workspaceId),

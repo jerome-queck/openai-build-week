@@ -9,6 +9,7 @@ import {
   type ModelRuntimeEvent,
   type RuntimeAccessDecision,
   type RuntimeAccessRequest,
+  type TeachingRequest,
   type TeachingSourceContext,
   type SessionProposal
 } from "./model-runtime";
@@ -96,6 +97,71 @@ export interface TeachingCardState {
   content: string;
   error: string | null;
   retryable: boolean;
+}
+
+export interface TeachingCardRevision extends TeachingCardState {
+  id: string;
+  instruction: string;
+  contextUsed: Array<{
+    sourceId: string;
+    sourceName: string;
+    location: string;
+  }>;
+  agentWorkLogReference: {
+    sessionId: string;
+    fromSequence: number;
+    toSequence: number;
+  } | null;
+}
+
+export interface TeachingVariant {
+  id: string;
+  name: string;
+  revision: TeachingCardRevision;
+}
+
+export interface AnchoredTeachingCard {
+  id: string;
+  sourceAnchorId: string;
+  title: string;
+  currentRevision: TeachingCardRevision;
+  revisions: TeachingCardRevision[];
+  variants: TeachingVariant[];
+  artifactId: string | null;
+}
+
+export interface LearningArtifact {
+  id: string;
+  title: string;
+  currentRevision: LearningArtifactRevision;
+  revisions: LearningArtifactRevision[];
+  sourceAnchorIds: string[];
+  pinned: true;
+}
+
+export interface LearningArtifactRevision {
+  id: string;
+  content: string;
+  claimOrigin: "modelGenerated" | "learner" | "mixed";
+  verificationLevel: "notIndependentlyChecked";
+  verificationCurrency: "current";
+}
+
+export interface AgentWorkLogEvidence {
+  sequence: number;
+  type: ModelRuntimeEvent["type"];
+  summary: string;
+}
+
+interface ModelTeachingTarget {
+  start(sourceContext: TeachingSourceContext[], nextLogSequence: number): void;
+  isStreaming(): boolean;
+  append(delta: string): void;
+  complete(): void;
+  fail(error: unknown): void;
+  stop(): void;
+  markUnconfirmed(): void;
+  recordRuntimeSequence(sequence: number): void;
 }
 
 export interface SessionSearchResult {
@@ -319,6 +385,9 @@ export interface LearningSession {
   sourceAnchors: SourceAnchor[];
   sourceAnchorRequests: SourceAnchorRequest[];
   activeSourceAnchorId: string | null;
+  anchoredTeachingCards: AnchoredTeachingCard[];
+  activeTeachingCardId: string | null;
+  learningArtifacts: LearningArtifact[];
 }
 
 export interface LearningApplicationState {
@@ -372,6 +441,13 @@ export type LearnerAction =
       selection: SourceAnchorSelection;
       paletteAction: SourceAnchorPaletteAction;
     }
+  | { type: "reviseTeachingCard"; cardId: string; instruction: string }
+  | { type: "restoreTeachingCardRevision"; cardId: string; revisionId: string }
+  | { type: "createTeachingVariant"; cardId: string; name: string; instruction: string }
+  | { type: "retryAnchoredTeachingCard"; cardId: string; variantId?: string }
+  | { type: "pinTeachingCardArtifact"; cardId: string }
+  | { type: "editLearningArtifact"; artifactId: string; content: string }
+  | { type: "restoreLearningArtifactRevision"; artifactId: string; revisionId: string }
   | { type: "selectSessionAccessPolicy"; policy: SessionAccessPolicy }
   | { type: "setFullAccessConfirmation"; enabled: boolean }
   | { type: "decideFullAccessConfirmation"; decision: "confirm" | "cancel" }
@@ -411,7 +487,13 @@ export class LearningApplication {
   private modelRuntime: ModelRuntime | null;
   private persistence = Promise.resolve();
   private sourceIndexWork = Promise.resolve();
-  private readonly modelWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
+  private readonly modelWorks = new Map<string, {
+    controller: AbortController;
+    promise: Promise<void>;
+    stop(): void;
+    markUnconfirmed(): void;
+    restart(): Promise<void>;
+  }>();
   private readonly accessDecisionWaiters = new Map<string, (decision: RuntimeAccessDecision) => void>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
   private agentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
@@ -448,6 +530,10 @@ export class LearningApplication {
         if (session.teachingCard.status === "streaming") {
           replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
         }
+        for (const card of session.anchoredTeachingCards) {
+          interruptTeachingCardRevision(card.currentRevision);
+          for (const variant of card.variants) interruptTeachingCardRevision(variant.revision);
+        }
       }
       persisted.activeSessionId = null;
       persisted.resumeSessionId = mostRecentSessionId(persisted.sessions);
@@ -476,6 +562,20 @@ export class LearningApplication {
 
   getState(): LearningApplicationState {
     return structuredClone(this.state);
+  }
+
+  getAgentWorkLogEvidence(sessionId: string, fromSequence: number, toSequence: number): AgentWorkLogEvidence[] {
+    this.requireSession(sessionId);
+    if (!Number.isInteger(fromSequence) || !Number.isInteger(toSequence) || fromSequence < 1 || toSequence < fromSequence) {
+      throw new Error("Choose a valid Agent Work Log evidence range.");
+    }
+    return (this.agentWorkLogs[sessionId] ?? []).filter(
+      (event) => event.sequence >= fromSequence && event.sequence <= toSequence
+    ).map((event) => ({
+      sequence: event.sequence,
+      type: event.type,
+      summary: agentWorkEvidenceSummary(event.type)
+    }));
   }
 
   getSessionAccessScope(sessionId: string): SessionAccessScope {
@@ -804,9 +904,8 @@ export class LearningApplication {
       }
     }
     const activeWorks = [...this.modelWorks.entries()];
-    for (const [sessionId, work] of activeWorks) {
-      const session = this.requireSession(sessionId);
-      replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
+    for (const [, work] of activeWorks) {
+      work.stop();
       work.controller.abort();
     }
     if (activeWorks.length > 0) {
@@ -853,6 +952,9 @@ export class LearningApplication {
       case "createSourceAnchor": {
         const session = this.requireActiveSession();
         if (!isSourceAnchorPaletteAction(action.paletteAction)) throw new Error("Choose an available Selection Palette action.");
+        if (action.paletteAction === "explain" && this.state.modelAccess.status === "available" && this.modelWorks.has(session.id)) {
+          throw new Error("Wait for the current model teaching to finish before requesting an anchored explanation.");
+        }
         const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
         if (!source || !session.sourceIds.includes(source.id)) {
           throw new Error("Choose a source attached to the active Learning Session.");
@@ -870,8 +972,155 @@ export class LearningApplication {
           action: action.paletteAction
         });
         session.activeSourceAnchorId = anchor.id;
+        if (action.paletteAction === "explain" || action.paletteAction === "question") {
+          const isExplanation = action.paletteAction === "explain";
+          const card: AnchoredTeachingCard = {
+            id: crypto.randomUUID(),
+            sourceAnchorId: anchor.id,
+            title: sourceAnchorTeachingTitle(selection, isExplanation ? "Explain" : "Question about"),
+            currentRevision: teachingCardRevision(isExplanation
+              ? "Explain or unpack this source anchor."
+              : "Ask a question about this source anchor."),
+            revisions: [],
+            variants: [],
+            artifactId: null
+          };
+          session.anchoredTeachingCards.push(card);
+          session.activeTeachingCardId = card.id;
+          if (isExplanation && this.state.modelAccess.status === "available") {
+            await this.beginAnchoredTeaching(session, anchor, card.currentRevision);
+          } else if (isExplanation) {
+            card.currentRevision.status = "failed";
+            card.currentRevision.error = "Model teaching is unavailable. The anchored explanation request is saved for later.";
+            card.currentRevision.retryable = true;
+          }
+        }
         session.activityOrder = this.nextActivityOrder();
         this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "reviseTeachingCard": {
+        const session = this.requireActiveSession();
+        this.requireModelAccess();
+        if (this.modelWorks.has(session.id)) throw new Error("Wait for the current model teaching to finish before revising this Teaching Card.");
+        const card = requireAnchoredTeachingCard(session, action.cardId);
+        if (card.currentRevision.status === "streaming") throw new Error("Wait for the current Teaching Card revision to finish.");
+        const anchor = requireSourceAnchor(session, card.sourceAnchorId);
+        const previous = structuredClone(card.currentRevision);
+        if (previous.status !== "idle") card.revisions.push(previous);
+        card.currentRevision = teachingCardRevision(requiredText(action.instruction, "Teaching Card revision instruction"));
+        session.activeTeachingCardId = card.id;
+        session.activeSourceAnchorId = anchor.id;
+        await this.beginAnchoredTeaching(session, anchor, card.currentRevision, previous.status === "idle" ? null : previous.content);
+        break;
+      }
+      case "restoreTeachingCardRevision": {
+        const session = this.requireActiveSession();
+        const card = requireAnchoredTeachingCard(session, action.cardId);
+        if (card.currentRevision.status === "streaming") throw new Error("Wait for the current Teaching Card revision to finish.");
+        const revisionIndex = card.revisions.findIndex((revision) => revision.id === action.revisionId);
+        if (revisionIndex < 0) throw new Error("Choose an earlier Teaching Card revision to restore.");
+        const [restored] = card.revisions.splice(revisionIndex, 1, structuredClone(card.currentRevision));
+        card.currentRevision = restored;
+        session.activeTeachingCardId = card.id;
+        session.activeSourceAnchorId = card.sourceAnchorId;
+        break;
+      }
+      case "createTeachingVariant": {
+        const session = this.requireActiveSession();
+        this.requireModelAccess();
+        if (this.modelWorks.has(session.id)) throw new Error("Wait for the current model teaching to finish before creating a Teaching Variant.");
+        const card = requireAnchoredTeachingCard(session, action.cardId);
+        if (card.currentRevision.status === "streaming") throw new Error("Wait for the current Teaching Card revision to finish.");
+        const name = requiredName(action.name, "Teaching Variant");
+        if (card.variants.some((variant) => variant.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+          throw new Error("Choose a distinct Teaching Variant name.");
+        }
+        const anchor = requireSourceAnchor(session, card.sourceAnchorId);
+        const variant: TeachingVariant = {
+          id: crypto.randomUUID(),
+          name,
+          revision: teachingCardRevision(requiredText(action.instruction, "Teaching Variant instruction"))
+        };
+        card.variants.push(variant);
+        session.activeTeachingCardId = card.id;
+        session.activeSourceAnchorId = anchor.id;
+        await this.beginAnchoredTeaching(session, anchor, variant.revision, card.currentRevision.content, variant.name);
+        break;
+      }
+      case "retryAnchoredTeachingCard": {
+        const session = this.requireActiveSession();
+        this.requireModelAccess();
+        if (this.modelWorks.has(session.id)) throw new Error("Wait for the current model teaching to finish before retrying this Teaching Card.");
+        const card = requireAnchoredTeachingCard(session, action.cardId);
+        const anchor = requireSourceAnchor(session, card.sourceAnchorId);
+        const variant = action.variantId
+          ? card.variants.find((candidate) => candidate.id === action.variantId)
+          : null;
+        if (action.variantId && !variant) throw new Error("Choose a Teaching Variant in this Teaching Card.");
+        const revision = variant?.revision ?? card.currentRevision;
+        if (!revision.retryable) throw new Error("This anchored Teaching Card is not ready to retry.");
+        const previousContent = variant
+          ? card.currentRevision.content
+          : card.revisions.at(-1)?.content ?? null;
+        session.activeTeachingCardId = card.id;
+        session.activeSourceAnchorId = anchor.id;
+        await this.beginAnchoredTeaching(session, anchor, revision, previousContent, variant?.name ?? null);
+        break;
+      }
+      case "pinTeachingCardArtifact": {
+        const session = this.requireActiveSession();
+        const card = requireAnchoredTeachingCard(session, action.cardId);
+        if (card.currentRevision.status !== "completed" || !card.currentRevision.content.trim()) {
+          throw new Error("Complete the Teaching Card before pinning it as a Learning Artifact.");
+        }
+        const existing = card.artifactId
+          ? session.learningArtifacts.find((artifact) => artifact.id === card.artifactId)
+          : null;
+        if (!existing) {
+          const artifact: LearningArtifact = {
+            id: crypto.randomUUID(),
+            title: card.title,
+            currentRevision: {
+              id: crypto.randomUUID(),
+              content: card.currentRevision.content,
+              claimOrigin: "modelGenerated",
+              verificationLevel: "notIndependentlyChecked",
+              verificationCurrency: "current"
+            },
+            revisions: [],
+            sourceAnchorIds: [card.sourceAnchorId],
+            pinned: true
+          };
+          session.learningArtifacts.push(artifact);
+          card.artifactId = artifact.id;
+        }
+        session.activeTeachingCardId = card.id;
+        session.activeSourceAnchorId = card.sourceAnchorId;
+        break;
+      }
+      case "editLearningArtifact": {
+        const session = this.requireActiveSession();
+        const artifact = requireLearningArtifact(session, action.artifactId);
+        const content = requiredText(action.content, "Learning Artifact");
+        if (content === artifact.currentRevision.content) break;
+        artifact.revisions.push(structuredClone(artifact.currentRevision));
+        artifact.currentRevision = {
+          id: crypto.randomUUID(),
+          content,
+          claimOrigin: artifact.currentRevision.claimOrigin === "learner" ? "learner" : "mixed",
+          verificationLevel: "notIndependentlyChecked",
+          verificationCurrency: "current"
+        };
+        break;
+      }
+      case "restoreLearningArtifactRevision": {
+        const session = this.requireActiveSession();
+        const artifact = requireLearningArtifact(session, action.artifactId);
+        const revisionIndex = artifact.revisions.findIndex((revision) => revision.id === action.revisionId);
+        if (revisionIndex < 0) throw new Error("Choose an earlier Learning Artifact revision to restore.");
+        const [restored] = artifact.revisions.splice(revisionIndex, 1, structuredClone(artifact.currentRevision));
+        artifact.currentRevision = restored;
         break;
       }
       case "addSourceToSession": {
@@ -936,7 +1185,10 @@ export class LearningApplication {
           pendingFullAccessConfirmation: false,
           sourceAnchors: [],
           sourceAnchorRequests: [],
-          activeSourceAnchorId: null
+          activeSourceAnchorId: null,
+          anchoredTeachingCards: [],
+          activeTeachingCardId: null,
+          learningArtifacts: []
         };
         this.state.sessions.push(session);
         this.state.activeSessionId = session.id;
@@ -1005,7 +1257,10 @@ export class LearningApplication {
           pendingFullAccessConfirmation: false,
           sourceAnchors: [],
           sourceAnchorRequests: [],
-          activeSourceAnchorId: null
+          activeSourceAnchorId: null,
+          anchoredTeachingCards: [],
+          activeTeachingCardId: null,
+          learningArtifacts: []
         };
         this.agentWorkLogs[session.id] = pendingLog;
         delete this.agentWorkLogs[proposalAttemptId];
@@ -1334,7 +1589,6 @@ export class LearningApplication {
   ): Promise<void> {
     this.requireModelAccess();
     if (this.modelWorks.has(session.id)) throw new Error("Model teaching is already active for this Learning Session.");
-    const sourceContext = await this.buildTeachingSourceContext(session);
     if (submission) {
       if (session.currentTeachingInput.kind === "sessionIntake" && session.teachingCard.status !== "idle") {
         session.teachingCardHistory.push(structuredClone(session.teachingCard));
@@ -1346,9 +1600,95 @@ export class LearningApplication {
     } else {
       session.currentTeachingInput = { kind: "sessionIntake", text: mathematics };
     }
+    await this.runModelTeaching(session, mathematics, undefined, {
+      start: () => {
+        session.proposal.status = "accepted";
+        replaceTeachingCard(session, { status: "streaming", content: "", error: null, retryable: false });
+      },
+      isStreaming: () => session.teachingCard.status === "streaming",
+      append: (delta) => { session.teachingCard.content += delta; },
+      complete: () => {
+        session.teachingCard.status = "completed";
+        session.returnContext.nextAction = "Review the Teaching Card and continue from the point that needs work";
+      },
+      fail: (error) => replaceTeachingCard(session, {
+        ...session.teachingCard,
+        status: "failed",
+        error: usefulRuntimeError(error),
+        retryable: true
+      }),
+      stop: () => replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content)),
+      markUnconfirmed: () => {
+        session.teachingCard.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
+      },
+      recordRuntimeSequence: () => undefined
+    }, () => this.beginTeaching(session, mathematics, submission));
+  }
+
+  private async beginAnchoredTeaching(
+    session: LearningSession,
+    anchor: SourceAnchor,
+    revision: TeachingCardRevision,
+    previousContent: string | null = null,
+    variantName: string | null = null
+  ): Promise<void> {
+    this.requireModelAccess();
+    if (this.modelWorks.has(session.id)) throw new Error("Model teaching is already active for this Learning Session.");
+    const focus: NonNullable<TeachingRequest["focus"]> = {
+      kind: "sourceAnchor",
+      sourceAnchorId: anchor.id,
+      sourceId: anchor.sourceId,
+      selection: anchor.selection,
+      instruction: revision.instruction,
+      previousContent,
+      variantName
+    };
+    await this.runModelTeaching(session, sourceAnchorMathematics(anchor), focus, {
+      start: (sourceContext, nextLogSequence) => {
+        revision.contextUsed = sourceContext.flatMap((context) => [
+          ...(context.sourceId === anchor.sourceId ? [{
+            sourceId: context.sourceId,
+            sourceName: context.name,
+            location: `Focused ${sourceAnchorLocation(anchor)}`
+          }] : []),
+          {
+            sourceId: context.sourceId,
+            sourceName: context.name,
+            location: `Supplied bounded source excerpt at characters 0–${context.content.length}`
+          }
+        ]);
+        revision.agentWorkLogReference = {
+          sessionId: session.id,
+          fromSequence: nextLogSequence,
+          toSequence: nextLogSequence
+        };
+        Object.assign(revision, { status: "streaming", content: "", error: null, retryable: false });
+      },
+      isStreaming: () => revision.status === "streaming",
+      append: (delta) => { revision.content += delta; },
+      complete: () => { revision.status = "completed"; },
+      fail: (error) => Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true }),
+      stop: () => interruptTeachingCardRevision(revision),
+      markUnconfirmed: () => {
+        revision.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
+      },
+      recordRuntimeSequence: (sequence) => {
+        if (revision.agentWorkLogReference) revision.agentWorkLogReference.toSequence = sequence;
+      }
+    }, () => this.beginAnchoredTeaching(session, anchor, revision, previousContent, variantName));
+  }
+
+  private async runModelTeaching(
+    session: LearningSession,
+    mathematics: string,
+    focus: TeachingRequest["focus"],
+    target: ModelTeachingTarget,
+    restart: () => Promise<void>
+  ): Promise<void> {
+    const sourceContext = await this.buildTeachingSourceContext(session);
+    const log = this.agentWorkLogs[session.id] ??= [];
+    target.start(sourceContext, log.length + 1);
     const controller = new AbortController();
-    session.proposal.status = "accepted";
-    replaceTeachingCard(session, { status: "streaming", content: "", error: null, retryable: false });
     const runtime = this.modelRuntime!;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
@@ -1358,44 +1698,41 @@ export class LearningApplication {
       initialTeachingDirection: session.proposal.initialTeachingDirection,
       accessScope: this.getSessionAccessScope(session.id),
       sourceContext,
+      ...(focus ? { focus } : {}),
       onAccessRequest: (request) => controller.signal.aborted
         ? Promise.resolve({ status: "denied", policy: session.accessPolicy })
         : this.handleRuntimeAccessRequest(session, request),
       signal: controller.signal,
       onDelta: (delta) => {
-        if (controller.signal.aborted || session.teachingCard.status !== "streaming") return;
-        session.teachingCard.content += delta;
+        if (controller.signal.aborted || !target.isStreaming()) return;
+        target.append(delta);
         this.emitState();
         this.queuePersistence();
       },
       onRuntimeEvent: (event) => {
         if (controller.signal.aborted) return;
-        const log = this.agentWorkLogs[session.id] ??= [];
         log.push({ ...event, sequence: log.length + 1 });
+        target.recordRuntimeSequence(log.length);
         this.queuePersistence();
       }
     }).then(() => {
-      if (controller.signal.aborted) return;
-      if (session.teachingCard.status === "streaming") {
-        session.teachingCard.status = "completed";
-        session.returnContext.nextAction = "Review the Teaching Card and continue from the point that needs work";
-      }
+      if (!controller.signal.aborted && target.isStreaming()) target.complete();
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
-      const message = usefulRuntimeError(error);
-      replaceTeachingCard(session, {
-        ...session.teachingCard,
-        status: "failed",
-        error: message,
-        retryable: true
-      });
+      target.fail(error);
       this.recordModelAccessLoss(error);
     }).finally(() => {
       if (this.modelWorks.get(session.id)?.promise === promise) this.modelWorks.delete(session.id);
       this.queuePersistence();
       this.emitState();
     });
-    this.modelWorks.set(session.id, { controller, promise });
+    this.modelWorks.set(session.id, {
+      controller,
+      promise,
+      stop: target.stop,
+      markUnconfirmed: target.markUnconfirmed,
+      restart
+    });
   }
 
   private async validatedSourceAnchorSelection(
@@ -1502,30 +1839,27 @@ export class LearningApplication {
     preservePendingAccessRequest = false
   ): Promise<void> {
     if (policy === session.accessPolicy) return;
-    const input = session.currentTeachingInput;
-    const submission = input.kind === "pendingQuestion"
-      ? session.submittedPendingQuestions.find((candidate) => candidate.id === input.submissionId) ?? null
-      : null;
-    const restartTeaching = this.modelWorks.has(session.id);
+    const work = this.modelWorks.get(session.id);
+    const restartTeaching = Boolean(work);
     if (restartTeaching && !await this.stopModelWork(session, !preservePendingAccessRequest)) {
       throw new Error(`Codex did not confirm interruption. ${sessionAccessPolicyLabel(session.accessPolicy)} remains active.`);
     }
     session.accessPolicy = policy;
-    if (restartTeaching) await this.beginTeaching(session, input.text, submission);
+    if (work) await work.restart();
   }
 
   private async stopModelWork(session: LearningSession, denyPendingRequests = true): Promise<boolean> {
     const work = this.modelWorks.get(session.id);
     if (!this.modelRuntime || !work) throw new Error("There is no active model work to stop.");
     if (denyPendingRequests) this.denyPendingAccessRequests(session);
-    replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
+    work.stop();
     work.controller.abort();
     try {
       await this.modelRuntime.cancelTeaching(session.id);
       if (this.modelWorks.get(session.id) === work) this.modelWorks.delete(session.id);
       return true;
     } catch {
-      session.teachingCard.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
+      work.markUnconfirmed();
       return false;
     }
   }
@@ -1733,6 +2067,17 @@ function usefulRuntimeError(error: unknown): string {
     : "Codex could not complete this Teaching Card. Check authentication and try again.";
 }
 
+function agentWorkEvidenceSummary(type: ModelRuntimeEvent["type"]): string {
+  return {
+    threadStarted: "Teaching runtime thread started.",
+    turnStarted: "Teaching runtime turn started.",
+    inputSubmitted: "Bounded teaching input submitted.",
+    outputDelta: "Learner-facing output advanced.",
+    turnCompleted: "Teaching runtime turn completed.",
+    turnFailed: "Teaching runtime turn failed."
+  }[type];
+}
+
 function usefulSourceError(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
@@ -1793,7 +2138,10 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       pendingFullAccessConfirmation: false,
       sourceAnchors: migrateSourceAnchors(session.sourceAnchors),
       sourceAnchorRequests: migrateSourceAnchorRequests(session.sourceAnchorRequests),
-      activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null
+      activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null,
+      anchoredTeachingCards: migrateAnchoredTeachingCards(session.anchoredTeachingCards),
+      activeTeachingCardId: typeof session.activeTeachingCardId === "string" ? session.activeTeachingCardId : null,
+      learningArtifacts: migrateLearningArtifacts(session.learningArtifacts)
     }));
     attachManagedSourcesToLegacySessions(current);
     for (const session of current.sessions) validateSessionSourceAnchorReferences(current, session);
@@ -1822,7 +2170,10 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       pendingFullAccessConfirmation: false,
       sourceAnchors: [],
       sourceAnchorRequests: [],
-      activeSourceAnchorId: null
+      activeSourceAnchorId: null,
+      anchoredTeachingCards: [],
+      activeTeachingCardId: null,
+      learningArtifacts: []
     };
     migrated.sessions.push(session);
     attachManagedSourcesToLegacySessions(migrated);
@@ -1886,6 +2237,59 @@ function emptyTeachingCard(): LearningSession["teachingCard"] {
   return { status: "idle", content: "", error: null, retryable: false };
 }
 
+function teachingCardRevision(instruction: string): TeachingCardRevision {
+  return {
+    id: crypto.randomUUID(),
+    instruction,
+    status: "idle",
+    content: "",
+    error: null,
+    retryable: false,
+    contextUsed: [],
+    agentWorkLogReference: null
+  };
+}
+
+function sourceAnchorTeachingTitle(selection: SourceAnchorSelection, action: "Explain" | "Question about"): string {
+  if (selection.kind === "diagramRegion") return `${action} selected diagram region`;
+  const excerpt = selection.exactText.trim().replace(/\s+/g, " ");
+  return `${action} ${excerpt.length > 60 ? `${excerpt.slice(0, 57)}…` : excerpt}`;
+}
+
+function sourceAnchorMathematics(anchor: SourceAnchor): string {
+  if (anchor.selection.kind === "diagramRegion") {
+    const { x, y, width, height } = anchor.selection.bounds;
+    return `Selected diagram region at normalized bounds x=${x}, y=${y}, width=${width}, height=${height}.`;
+  }
+  return anchor.selection.exactText;
+}
+
+function sourceAnchorLocation(anchor: SourceAnchor): string {
+  if (anchor.selection.kind === "diagramRegion") {
+    const { x, y, width, height } = anchor.selection.bounds;
+    return `Diagram region at ${Math.round(x * 100)}% left, ${Math.round(y * 100)}% top, ${Math.round(width * 100)}% wide, ${Math.round(height * 100)}% high`;
+  }
+  return `${anchor.selection.kind === "equation" ? "Equation" : "Text"} at characters ${anchor.selection.startOffset}–${anchor.selection.endOffset}`;
+}
+
+function requireAnchoredTeachingCard(session: LearningSession, cardId: string): AnchoredTeachingCard {
+  const card = session.anchoredTeachingCards.find((candidate) => candidate.id === cardId);
+  if (!card) throw new Error("Choose an anchored Teaching Card in the active Learning Session.");
+  return card;
+}
+
+function requireSourceAnchor(session: LearningSession, sourceAnchorId: string): SourceAnchor {
+  const anchor = session.sourceAnchors.find((candidate) => candidate.id === sourceAnchorId);
+  if (!anchor) throw new Error("Choose a Source Anchor in the active Learning Session.");
+  return anchor;
+}
+
+function requireLearningArtifact(session: LearningSession, artifactId: string): LearningArtifact {
+  const artifact = session.learningArtifacts.find((candidate) => candidate.id === artifactId);
+  if (!artifact) throw new Error("Choose a Learning Artifact in the active Learning Session.");
+  return artifact;
+}
+
 function interruptedTeachingCard(content: string): LearningSession["teachingCard"] {
   return {
     status: "stopped",
@@ -1893,6 +2297,11 @@ function interruptedTeachingCard(content: string): LearningSession["teachingCard
     error: "Teaching stopped. You can retry without losing this Learning Session.",
     retryable: true
   };
+}
+
+function interruptTeachingCardRevision(revision: TeachingCardRevision): void {
+  if (revision.status !== "streaming") return;
+  Object.assign(revision, interruptedTeachingCard(revision.content));
 }
 
 function replaceTeachingCard(session: LearningSession, teachingCard: TeachingCardState): void {
@@ -2160,6 +2569,61 @@ function migrateSourceAnchors(value: unknown): SourceAnchor[] {
   });
 }
 
+function migrateAnchoredTeachingCards(value: unknown): AnchoredTeachingCard[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored anchored Teaching Cards are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.sourceAnchorId !== "string"
+      || typeof candidate.title !== "string" || !candidate.title.trim()
+      || !validTeachingCardRevision(candidate.currentRevision)
+      || !Array.isArray(candidate.revisions) || !candidate.revisions.every(validTeachingCardRevision)
+      || !Array.isArray(candidate.variants) || !candidate.variants.every(validTeachingVariant)
+      || !(candidate.artifactId === null || typeof candidate.artifactId === "string")) {
+      throw new Error("Stored anchored Teaching Cards are invalid.");
+    }
+    return candidate as unknown as AnchoredTeachingCard;
+  });
+}
+
+function migrateLearningArtifacts(value: unknown): LearningArtifact[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored Learning Artifacts are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.title !== "string"
+      || !validLearningArtifactRevision(candidate.currentRevision)
+      || !Array.isArray(candidate.revisions) || !candidate.revisions.every(validLearningArtifactRevision)
+      || candidate.pinned !== true
+      || !Array.isArray(candidate.sourceAnchorIds)
+      || !candidate.sourceAnchorIds.every((sourceAnchorId) => typeof sourceAnchorId === "string")) {
+      throw new Error("Stored Learning Artifacts are invalid.");
+    }
+    return candidate as unknown as LearningArtifact;
+  });
+}
+
+function validTeachingCardRevision(value: unknown): value is TeachingCardRevision {
+  return isRecord(value) && typeof value.id === "string" && typeof value.instruction === "string"
+    && ["idle", "streaming", "completed", "stopped", "failed"].includes(String(value.status))
+    && typeof value.content === "string" && (value.error === null || typeof value.error === "string")
+    && typeof value.retryable === "boolean" && Array.isArray(value.contextUsed)
+    && value.contextUsed.every((context) => isRecord(context) && typeof context.sourceId === "string"
+      && typeof context.sourceName === "string" && typeof context.location === "string")
+    && (value.agentWorkLogReference === null || (isRecord(value.agentWorkLogReference)
+      && typeof value.agentWorkLogReference.sessionId === "string"
+      && Number.isInteger(value.agentWorkLogReference.fromSequence) && Number.isInteger(value.agentWorkLogReference.toSequence)));
+}
+
+function validLearningArtifactRevision(value: unknown): boolean {
+  return isRecord(value) && typeof value.id === "string" && typeof value.content === "string"
+    && (value.claimOrigin === "modelGenerated" || value.claimOrigin === "learner" || value.claimOrigin === "mixed")
+    && value.verificationLevel === "notIndependentlyChecked" && value.verificationCurrency === "current";
+}
+
+function validTeachingVariant(value: unknown): value is TeachingVariant {
+  return isRecord(value) && typeof value.id === "string" && typeof value.name === "string" && Boolean(value.name.trim())
+    && validTeachingCardRevision(value.revision);
+}
+
 function migrateSourceAnchorRequests(value: unknown): SourceAnchorRequest[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error("Stored Source Anchor requests are invalid.");
@@ -2192,6 +2656,8 @@ function attachManagedSourcesToLegacySessions(state: LearningApplicationState): 
 
 function validateSessionSourceAnchorReferences(state: LearningApplicationState, session: LearningSession): void {
   const anchorsById = new Map(session.sourceAnchors.map((anchor) => [anchor.id, anchor]));
+  const cardsById = new Map(session.anchoredTeachingCards.map((card) => [card.id, card]));
+  const artifactsById = new Map(session.learningArtifacts.map((artifact) => [artifact.id, artifact]));
   const sourceIds = new Set(session.sourceIds);
   const stateSources = new Map(state.sources.map((source) => [source.id, source]));
   const requestsAreValid = session.sourceAnchorRequests.every((request) => anchorsById.has(request.sourceAnchorId));
@@ -2200,9 +2666,20 @@ function validateSessionSourceAnchorReferences(state: LearningApplicationState, 
     return sourceIds.has(anchor.sourceId) && source?.workspaceId === session.workspaceId;
   });
   const activeAnchorIsValid = session.activeSourceAnchorId === null || anchorsById.has(session.activeSourceAnchorId);
+  const cardsAreValid = session.anchoredTeachingCards.every((card) => anchorsById.has(card.sourceAnchorId)
+    && (card.artifactId === null || artifactsById.has(card.artifactId))
+    && new Set(card.variants.map((variant) => variant.id)).size === card.variants.length
+    && new Set([card.currentRevision.id, ...card.revisions.map((revision) => revision.id)]).size === card.revisions.length + 1);
+  const artifactsAreValid = session.learningArtifacts.every((artifact) => artifact.sourceAnchorIds.length > 0
+    && artifact.sourceAnchorIds.every((sourceAnchorId) => anchorsById.has(sourceAnchorId))
+    && new Set([artifact.currentRevision.id, ...artifact.revisions.map((revision) => revision.id)]).size === artifact.revisions.length + 1);
+  const activeCardIsValid = session.activeTeachingCardId === null || cardsById.has(session.activeTeachingCardId);
   const identifiersAreUnique = anchorsById.size === session.sourceAnchors.length
+    && cardsById.size === session.anchoredTeachingCards.length
+    && artifactsById.size === session.learningArtifacts.length
     && new Set(session.sourceAnchorRequests.map((request) => request.id)).size === session.sourceAnchorRequests.length;
-  if (!requestsAreValid || !anchorsAreValid || !activeAnchorIsValid || !identifiersAreUnique) {
+  if (!requestsAreValid || !anchorsAreValid || !activeAnchorIsValid || !cardsAreValid || !artifactsAreValid
+    || !activeCardIsValid || !identifiersAreUnique) {
     throw new Error("Stored Source Anchor references are invalid.");
   }
 }

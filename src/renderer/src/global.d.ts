@@ -1,5 +1,6 @@
 import type {
   LearnerAction,
+  AgentWorkLogEvidence,
   LearningApplicationState,
   LinkedSourceView,
   OpenedSourceSearchResult,
@@ -12,6 +13,7 @@ declare global {
     quickStudy: {
       getState(): Promise<LearningApplicationState>;
       submit(action: LearnerAction): Promise<LearningApplicationState>;
+      getAgentWorkLogEvidence(sessionId: string, fromSequence: number, toSequence: number): Promise<AgentWorkLogEvidence[]>;
       searchSessions(query: string): Promise<SessionSearchResult[]>;
       linkPrimaryFolder(workspaceId: string): Promise<LearningApplicationState>;
       linkExternalAttachment(workspaceId: string): Promise<LearningApplicationState>;

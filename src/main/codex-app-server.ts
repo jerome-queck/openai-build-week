@@ -331,6 +331,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           `Initial teaching direction: ${request.initialTeachingDirection}`,
           `Session Access Policy: ${sessionAccessPolicyLabel(request.accessScope.policy)}. Use only the context supplied within this authorized scope. Source modification and deletion are prohibited.`,
           authorizedSourceContext(request),
+          teachingFocus(request),
           "Mathematics:",
           request.mathematics,
           "Explain the mathematical strategy clearly, surface assumptions, and do not claim verification that did not occur."
@@ -372,26 +373,29 @@ export class CodexAppServerRuntime implements ModelRuntime {
     teachingRequest?: TeachingRequest
   ): Promise<string> {
     const accessPolicy = teachingRequest?.accessScope.policy ?? "focused";
-    const fullAccess = accessPolicy === "full";
+    const anchoredFocus = Boolean(teachingRequest?.focus);
+    const fullAccessTools = accessPolicy === "full" && !anchoredFocus;
     const threadResponse = await this.client.request("thread/start", {
       cwd: this.cwd,
       approvalPolicy: "never",
       sandbox: "read-only",
       ephemeral: true,
-      dynamicTools: teachingRequest ? [SESSION_ACCESS_REQUEST_TOOL] : [],
+      dynamicTools: teachingRequest && !anchoredFocus ? [SESSION_ACCESS_REQUEST_TOOL] : [],
       config: {
         features: {
           apps: false,
           hooks: false,
           multi_agent: false,
           remote_plugin: false,
-          shell_tool: fullAccess,
-          unified_exec: fullAccess
+          shell_tool: fullAccessTools,
+          unified_exec: fullAccessTools
         },
         mcp_servers: {},
         web_search: "disabled"
       },
-      baseInstructions: fullAccess
+      baseInstructions: anchoredFocus
+        ? "You are the bounded teaching runtime for an anchored Teaching Card. Use only the supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Produce only learner-facing mathematical teaching output."
+        : fullAccessTools
         ? "You are the bounded teaching runtime for Quick Study. Full Access permits read-only local inspection for this Learning Session. Never modify or delete source files. Produce only learner-facing mathematical teaching output."
         : "You are the bounded teaching runtime for Quick Study. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output."
     }) as { thread: { id: string } };
@@ -399,7 +403,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
       type: "threadStarted",
       threadId: threadResponse.thread.id,
       turnId: null,
-      detail: `Codex teaching thread started with ${sessionAccessPolicyLabel(accessPolicy)}${fullAccess ? " read-only tools enabled" : " tools disabled"}.`
+      detail: `Codex teaching thread started with ${sessionAccessPolicyLabel(accessPolicy)}${fullAccessTools ? " read-only tools enabled" : " supplied context only"}.`
     });
     const turnResponse = await this.client.request("turn/start", {
       threadId: threadResponse.thread.id,
@@ -591,6 +595,25 @@ function authorizedSourceContext(request: TeachingRequest): string {
       content: source.content
     }))
   ].join("\n");
+}
+
+function teachingFocus(request: TeachingRequest): string {
+  if (!request.focus) return "Teaching focus: the current Learning Session intake.";
+  return [
+    "Teaching focus: produce a Teaching Card visibly associated with this exact Source Anchor.",
+    `Source Anchor: ${JSON.stringify({
+      sourceAnchorId: request.focus.sourceAnchorId,
+      sourceId: request.focus.sourceId,
+      selection: request.focus.selection
+    })}`,
+    `Learner instruction: ${request.focus.instruction}`,
+    request.focus.previousContent === null
+      ? "This is the first explanation route for the anchor."
+      : `Revise or branch from this current route without producing a chronological message feed:\n${request.focus.previousContent}`,
+    request.focus.variantName === null
+      ? "Return one coherent current route."
+      : `Return a genuinely different route retained as the named Teaching Variant: ${request.focus.variantName}.`
+  ].join("\n\n");
 }
 
 function parseAccessRequestToolCall(params: unknown): {

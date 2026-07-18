@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import type {
+  AgentWorkLogEvidence,
   LearningApplicationState,
+  LearningArtifact,
   LearningSession,
   LearnerAction,
   LinkedSource,
@@ -13,6 +15,7 @@ import type {
 } from "../../shared/learning-application";
 import { sessionAccessPolicyLabel } from "../../shared/session-access";
 import { SourceLayer } from "./SourceLayer";
+import { ContextualInspector } from "./ContextualInspector";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -759,6 +762,12 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
   const [goal, setGoal] = useState(session.learningGoal);
   const [target, setTarget] = useState(session.sessionTarget);
   const [direction, setDirection] = useState(session.proposal.initialTeachingDirection);
+  const [inspectorCardId, setInspectorCardId] = useState<string | null>(null);
+  const [focusAnchorId, setFocusAnchorId] = useState<string | null>(null);
+  const inspectorCard = session.anchoredTeachingCards.find((card) => card.id === inspectorCardId) ?? null;
+  const inspectorArtifact = inspectorCard?.artifactId
+    ? session.learningArtifacts.find((artifact) => artifact.id === inspectorCard.artifactId) ?? null
+    : null;
 
   const saveProposal = (applyToTeaching = false) => window.quickStudy.submit({
       type: applyToTeaching ? "applySessionProposalRevision" : "reviseSessionProposal",
@@ -818,23 +827,57 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
               <div><p className="eyebrow">Source Layer</p><h2>Session source</h2></div>
               <span className="saved">Saved locally</span>
             </div>
-            <WorkbenchSourceLayer state={state} session={session} onState={onState} />
+            <WorkbenchSourceLayer state={state} session={session} onState={onState}
+              focusAnchorId={focusAnchorId}
+              onTeachingCardCreated={setInspectorCardId}
+              onActivateAnchor={(sourceAnchorId) => {
+                const card = session.anchoredTeachingCards.find((candidate) => candidate.sourceAnchorId === sourceAnchorId);
+                setFocusAnchorId(null);
+                setInspectorCardId(card?.id ?? null);
+              }} />
+            {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState} key={artifact.id} />)}
             <SessionAccessPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
             <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
             <AskBar session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
           </section>
+          {inspectorCard && <ContextualInspector
+            card={inspectorCard}
+            artifact={inspectorArtifact}
+            onClose={() => {
+              setInspectorCardId(null);
+              setFocusAnchorId(inspectorCard.sourceAnchorId);
+            }}
+            onRevise={async (instruction) => onState(await window.quickStudy.submit({
+              type: "reviseTeachingCard", cardId: inspectorCard.id, instruction
+            }))}
+            onRestore={async (revisionId) => onState(await window.quickStudy.submit({
+              type: "restoreTeachingCardRevision", cardId: inspectorCard.id, revisionId
+            }))}
+            onCreateVariant={async (name, instruction) => onState(await window.quickStudy.submit({
+              type: "createTeachingVariant", cardId: inspectorCard.id, name, instruction
+            }))}
+            onRetry={async (variantId) => onState(await window.quickStudy.submit({
+              type: "retryAnchoredTeachingCard", cardId: inspectorCard.id, ...(variantId ? { variantId } : {})
+            }))}
+            onPin={async () => onState(await window.quickStudy.submit({
+              type: "pinTeachingCardArtifact", cardId: inspectorCard.id
+            }))}
+          />}
         </div>
       </div>
     </main>
   );
 }
 
-function WorkbenchSourceLayer({ state, session, onState }: {
+function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTeachingCardCreated, focusAnchorId }: {
   state: LearningApplicationState;
   session: LearningSession;
   onState: StateHandler;
+  onActivateAnchor(sourceAnchorId: string): void;
+  onTeachingCardCreated(teachingCardId: string): void;
+  focusAnchorId: string | null;
 }) {
   const selectableSources = state.sources.filter((source) => source.workspaceId === session.workspaceId
     && (session.sourceIds.includes(source.id) || (source.kind === "linkedSource" && source.resourceType === "file")));
@@ -876,13 +919,20 @@ function WorkbenchSourceLayer({ state, session, onState }: {
           content={content}
           mediaType={mediaType}
           anchors={session.sourceAnchors.filter((anchor) => anchor.sourceId === source.id)}
+          onActivateAnchor={onActivateAnchor}
+          focusAnchorId={focusAnchorId}
           onChooseAction={(selection, paletteAction) => {
             void window.quickStudy.submit({
               type: "createSourceAnchor",
               sourceId: source.id,
               selection,
               paletteAction
-            }).then(onState);
+            }).then((nextState) => {
+              onState(nextState);
+              if (paletteAction !== "explain" && paletteAction !== "question") return;
+              const activeSession = nextState.sessions.find((candidate) => candidate.id === nextState.activeSessionId);
+              if (activeSession?.activeTeachingCardId) onTeachingCardCreated(activeSession.activeTeachingCardId);
+            });
           }}
         />
       ) : source?.kind === "linkedSource" && content === null ? (
@@ -892,6 +942,48 @@ function WorkbenchSourceLayer({ state, session, onState }: {
       )}
       {sourceError && <p className="failure-message" role="alert">{sourceError}</p>}
     </section>
+  );
+}
+
+function PinnedLearningArtifact({ artifact, onState }: { artifact: LearningArtifact; onState: StateHandler }) {
+  const [content, setContent] = useState(artifact.currentRevision.content);
+  useEffect(() => setContent(artifact.currentRevision.content), [artifact.currentRevision.id, artifact.currentRevision.content]);
+  const save = async () => onState(await window.quickStudy.submit({
+    type: "editLearningArtifact",
+    artifactId: artifact.id,
+    content
+  }));
+  return (
+    <article className="learning-artifact" aria-label={`Pinned Learning Artifact ${artifact.title}`}>
+      <div className="card-heading">
+        <div><p className="eyebrow">Learning Artifact</p><h2>{artifact.title}</h2></div>
+        <span className="saved">Pinned on the main canvas</span>
+      </div>
+      <label htmlFor={`artifact-content-${artifact.id}`}>Learning Artifact content</label>
+      <textarea id={`artifact-content-${artifact.id}`} className="artifact-content" value={content}
+        onChange={(event) => setContent(event.target.value)} />
+      <button className="secondary" disabled={!content.trim() || content === artifact.currentRevision.content}
+        onClick={() => void save()}>Save Learning Artifact revision</button>
+      <dl className="artifact-evidence">
+        <div><dt>Claim Origin</dt><dd>{artifact.currentRevision.claimOrigin === "learner"
+          ? "Learner"
+          : artifact.currentRevision.claimOrigin === "mixed" ? "Mixed learner and model" : "Model-generated"}</dd></div>
+        <div><dt>Verification Level</dt><dd>Not independently checked</dd></div>
+        <div><dt>Source relationship</dt><dd>{artifact.sourceAnchorIds.length} retained Source Anchor</dd></div>
+      </dl>
+      {artifact.revisions.length > 0 && <details className="artifact-history">
+        <summary>Learning Artifact revision history</summary>
+        <ol>{artifact.revisions.map((revision, index) => <li key={revision.id}>
+          <p>Revision {index + 1}: {revision.content}</p>
+          <button className="text-button" aria-label={`Restore Learning Artifact revision ${index + 1}`}
+            onClick={() => void window.quickStudy.submit({
+              type: "restoreLearningArtifactRevision",
+              artifactId: artifact.id,
+              revisionId: revision.id
+            }).then(onState)}>Restore this artifact revision</button>
+        </li>)}</ol>
+      </details>}
+    </article>
   );
 }
 
@@ -1040,11 +1132,12 @@ function TeachingCard({ session, modelAvailable, onState }: { session: LearningS
 }
 
 function SessionRecord({ session }: { session: LearningSession }) {
-  if (session.submittedPendingQuestions.length === 0 && session.teachingCardHistory.length === 0) return null;
+  if (session.submittedPendingQuestions.length === 0 && session.teachingCardHistory.length === 0
+    && session.anchoredTeachingCards.length === 0 && session.learningArtifacts.length === 0) return null;
   return (
     <section className="session-record" aria-labelledby="session-record-title">
       <p className="eyebrow">Session Record</p>
-      <h2 id="session-record-title">Submitted questions and earlier teaching</h2>
+      <h2 id="session-record-title">Retained learner-visible teaching work</h2>
       {session.teachingCardHistory.map((card, index) => (
         <article key={`teaching-${index}`}>
           <h3>Earlier Teaching Card</h3>
@@ -1061,7 +1154,56 @@ function SessionRecord({ session }: { session: LearningSession }) {
           </details>
         </article>
       ))}
+      {session.anchoredTeachingCards.map((card) => (
+        <article key={card.id}>
+          <h3>Anchored Teaching Card · {card.title}</h3>
+          <p>{card.currentRevision.content || card.currentRevision.error || "Teaching has not produced content."}</p>
+          <p className="record-link">Linked Source Anchor: {card.sourceAnchorId}</p>
+          {card.currentRevision.agentWorkLogReference && <AgentWorkLogLink reference={card.currentRevision.agentWorkLogReference} />}
+          {(card.revisions.length > 0 || card.variants.length > 0) && <details>
+            <summary>{card.revisions.length} prior revisions · {card.variants.length} named variants</summary>
+            {card.revisions.map((revision, index) => <p key={revision.id}>Revision {index + 1}: {revision.content || revision.error}</p>)}
+            {card.variants.map((variant) => <p key={variant.id}>{variant.name}: {variant.revision.content || variant.revision.error}</p>)}
+          </details>}
+        </article>
+      ))}
+      {session.learningArtifacts.map((artifact) => (
+        <article key={artifact.id}>
+          <h3>Pinned Learning Artifact · {artifact.title}</h3>
+          <p>{artifact.currentRevision.content}</p>
+          <p className="record-link">Linked Source Anchors: {artifact.sourceAnchorIds.join(", ")}</p>
+        </article>
+      ))}
     </section>
+  );
+}
+
+function AgentWorkLogLink({ reference }: {
+  reference: NonNullable<LearningSession["anchoredTeachingCards"][number]["currentRevision"]["agentWorkLogReference"]>;
+}) {
+  const [events, setEvents] = useState<AgentWorkLogEvidence[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const inspect = async () => {
+    try {
+      setEvents(await window.quickStudy.getAgentWorkLogEvidence(
+        reference.sessionId,
+        reference.fromSequence,
+        reference.toSequence
+      ));
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Agent Work Log evidence is unavailable.");
+    }
+  };
+  return (
+    <div className="agent-work-log-link">
+      <button className="text-button" aria-expanded={events !== null}
+        onClick={() => void inspect()}>Inspect Agent Work Log events {reference.fromSequence}–{reference.toSequence}</button>
+      {events && <ol aria-label="Agent Work Log evidence">
+        {events.map((event) => <li key={event.sequence}><strong>{event.type}</strong>: {event.summary}</li>)}
+      </ol>}
+      {error && <p className="failure-message" role="alert">{error}</p>}
+    </div>
   );
 }
 

@@ -191,6 +191,39 @@ describe("Codex app-server contract", () => {
     });
     const fullTurnStart = transport.messages.filter((message) => message.method === "turn/start").at(-1)!;
     expect(JSON.stringify(fullTurnStart.params)).toContain("A bounded monotone sequence converges.");
+
+    await runtime.streamTeaching({
+      sessionId: "learning-session-full-anchor",
+      mathematics: "bounded monotone sequence",
+      learningGoal: "Understand the selected claim",
+      scope: "Explain one Source Anchor",
+      initialTeachingDirection: "Use only the supplied source",
+      accessScope: {
+        policy: "full",
+        sourceIds: ["source-1"],
+        allowsBroadLocalRead: true,
+        allowsSourceModification: false
+      },
+      sourceContext: [{ sourceId: "source-1", name: "lemma.txt", mediaType: "text/plain", content: "A bounded monotone sequence converges." }],
+      focus: {
+        kind: "sourceAnchor",
+        sourceAnchorId: "anchor-1",
+        sourceId: "source-1",
+        selection: { kind: "text", startOffset: 2, endOffset: 27, exactText: "bounded monotone sequence", prefix: "A ", suffix: " converges." },
+        instruction: "Explain this anchor.",
+        previousContent: null,
+        variantName: null
+      },
+      onAccessRequest: async () => ({ status: "denied", policy: "full" }),
+      onDelta: () => undefined,
+      signal: new AbortController().signal
+    });
+    expect(transport.messages.filter((message) => message.method === "thread/start").at(-1)).toMatchObject({
+      params: {
+        dynamicTools: [],
+        config: { features: { shell_tool: false, unified_exec: false } }
+      }
+    });
   });
 
   it("interrupts active teaching and shuts down the stdio transport", async () => {

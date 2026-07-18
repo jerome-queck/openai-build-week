@@ -1,4 +1,4 @@
-import type { SessionAccessScope } from "./learning-application";
+import type { SessionAccessScope, SourceAnchorSelection } from "./learning-application";
 
 export type AuthenticationMethod = "chatgpt" | "apiKey";
 export type ModelAccessCause = "network" | "authentication" | "subscriptionCapacity" | "quota" | "runtime";
@@ -56,6 +56,15 @@ export interface TeachingRequest {
   initialTeachingDirection: string;
   accessScope: SessionAccessScope;
   sourceContext: TeachingSourceContext[];
+  focus?: {
+    kind: "sourceAnchor";
+    sourceAnchorId: string;
+    sourceId: string;
+    selection: SourceAnchorSelection;
+    instruction: string;
+    previousContent: string | null;
+    variantName: string | null;
+  };
   onAccessRequest(request: RuntimeAccessRequest): Promise<RuntimeAccessDecision>;
   onDelta(delta: string): void;
   onRuntimeEvent?(event: ModelRuntimeEvent): void;

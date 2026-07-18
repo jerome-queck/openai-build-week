@@ -76,6 +76,27 @@ function isLearnerAction(value: unknown): value is LearnerAction {
       return "sourceId" in action && typeof action.sourceId === "string"
         && "selection" in action && isSourceAnchorSelection(action.selection)
         && "paletteAction" in action && isSourceAnchorPaletteAction(action.paletteAction);
+    case "reviseTeachingCard":
+      return "cardId" in action && typeof action.cardId === "string"
+        && "instruction" in action && typeof action.instruction === "string";
+    case "restoreTeachingCardRevision":
+      return "cardId" in action && typeof action.cardId === "string"
+        && "revisionId" in action && typeof action.revisionId === "string";
+    case "createTeachingVariant":
+      return "cardId" in action && typeof action.cardId === "string"
+        && "name" in action && typeof action.name === "string"
+        && "instruction" in action && typeof action.instruction === "string";
+    case "retryAnchoredTeachingCard":
+      return "cardId" in action && typeof action.cardId === "string"
+        && (!("variantId" in action) || action.variantId === undefined || typeof action.variantId === "string");
+    case "pinTeachingCardArtifact":
+      return "cardId" in action && typeof action.cardId === "string";
+    case "editLearningArtifact":
+      return "artifactId" in action && typeof action.artifactId === "string"
+        && "content" in action && typeof action.content === "string";
+    case "restoreLearningArtifactRevision":
+      return "artifactId" in action && typeof action.artifactId === "string"
+        && "revisionId" in action && typeof action.revisionId === "string";
     case "loginWithApiKey":
       return "apiKey" in action && typeof action.apiKey === "string";
     case "reviseSessionProposal":
@@ -129,6 +150,13 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("learning:getState", (event) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     return learningApplication.getState();
+  });
+  ipcMain.handle("learning:getAgentWorkLogEvidence", (event, sessionId: unknown, fromSequence: unknown, toSequence: unknown) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (typeof sessionId !== "string" || typeof fromSequence !== "number" || typeof toSequence !== "number") {
+      throw new Error("Invalid Agent Work Log evidence request.");
+    }
+    return learningApplication.getAgentWorkLogEvidence(sessionId, fromSequence, toSequence);
   });
   ipcMain.handle("learning:submit", async (event, action: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");

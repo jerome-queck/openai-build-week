@@ -15,6 +15,8 @@ interface SourceLayerProps {
   anchors: SourceAnchor[];
   highlight?: { startOffset: number; endOffset: number; exactText: string };
   onChooseAction(selection: SourceAnchorSelection, action: SourceAnchorPaletteAction): void;
+  onActivateAnchor?(sourceAnchorId: string): void;
+  focusAnchorId?: string | null;
 }
 
 interface EquationSegment {
@@ -41,10 +43,11 @@ interface PercentSourceRegionBounds {
   height: number;
 }
 
-export function SourceLayer({ sourceId, content, mediaType = "text/plain", anchors, highlight, onChooseAction }: SourceLayerProps) {
+export function SourceLayer({ sourceId, content, mediaType = "text/plain", anchors, highlight, onChooseAction, onActivateAnchor, focusAnchorId }: SourceLayerProps) {
   const sourceRef = useRef<HTMLElement>(null);
   const originRef = useRef<HTMLElement | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
+  const anchorMarkerRefs = useRef(new Map<string, HTMLButtonElement>());
   const [selection, setSelection] = useState<SourceAnchorSelection | null>(null);
   const [drawingRegion, setDrawingRegion] = useState(false);
   const [keyboardRegion, setKeyboardRegion] = useState<PercentSourceRegionBounds | null>(null);
@@ -52,6 +55,9 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
   const validHighlight = highlight && content.slice(highlight.startOffset, highlight.endOffset) === highlight.exactText
     ? highlight
     : null;
+  useEffect(() => {
+    if (focusAnchorId) anchorMarkerRefs.current.get(focusAnchorId)?.focus();
+  }, [focusAnchorId]);
 
   const openPalette = (nextSelection: SourceAnchorSelection, origin: HTMLElement) => {
     originRef.current = origin;
@@ -201,7 +207,15 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
             {anchors.length} saved {anchors.length === 1 ? "Source Anchor" : "Source Anchors"}
           </p>
           <ul>
-            {anchors.map((anchor) => <li key={anchor.id}>{sourceAnchorLabel(anchor)}</li>)}
+            {anchors.map((anchor) => {
+              const label = sourceAnchorLabel(anchor);
+              return <li key={anchor.id}>{onActivateAnchor ? (
+                <button ref={(element) => {
+                  if (element) anchorMarkerRefs.current.set(anchor.id, element);
+                  else anchorMarkerRefs.current.delete(anchor.id);
+                }} className="anchor-marker" aria-label={`Open Anchor Marker for ${label}`} onClick={() => onActivateAnchor(anchor.id)}>{label}</button>
+              ) : label}</li>;
+            })}
           </ul>
         </section>
       )}

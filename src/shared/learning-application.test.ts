@@ -244,6 +244,339 @@ describe("Learning Application", () => {
     expect(sourceAccess.openedSourceIds).toEqual([sourceId]);
   });
 
+  it("creates a durable Teaching Card for an anchored explanation request", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the selected claim",
+      initialTeachingDirection: "Start from the open-cover definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    const started = await application.submit({
+      type: "submitSessionIntake",
+      mathematics: "Every compact subset of a Hausdorff space is closed."
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+
+    const sourceId = started.sessions[0].sourceIds[0];
+    const anchored = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text",
+        startOffset: 6,
+        endOffset: 20,
+        exactText: "compact subset",
+        prefix: "Every ",
+        suffix: " of a Hausdorff space is closed."
+      },
+      paletteAction: "explain"
+    });
+
+    const anchor = anchored.sessions[0].sourceAnchors[0];
+    expect(anchored.sessions[0].anchoredTeachingCards).toMatchObject([{
+      sourceAnchorId: anchor.id,
+      title: "Explain compact subset",
+      currentRevision: { status: "streaming", content: "" },
+      revisions: []
+    }]);
+    expect(runtime.teachingRequests.at(-1)?.focus).toEqual({
+      kind: "sourceAnchor",
+      sourceAnchorId: anchor.id,
+      sourceId,
+      selection: anchor.selection,
+      instruction: "Explain or unpack this source anchor.",
+      previousContent: null,
+      variantName: null
+    });
+
+    runtime.emitTeaching("Compactness supplies a finite subcover of the separating neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    expect(application.getState().sessions[0].anchoredTeachingCards[0].currentRevision).toMatchObject({
+      status: "completed",
+      content: "Compactness supplies a finite subcover of the separating neighbourhoods."
+    });
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].anchoredTeachingCards[0].sourceAnchorId).toBe(anchor.id);
+  });
+
+  it("opens an anchored question in the Contextual Inspector path without dispatching until the learner words it", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Ask about one phrase",
+      initialTeachingDirection: "Use the selected source",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Every compact set is closed." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const requestCount = runtime.teachingRequests.length;
+    const questioned = await application.submit({
+      type: "createSourceAnchor",
+      sourceId: started.sessions[0].sourceIds[0],
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 13, exactText: "compact", prefix: "Every ", suffix: " set is closed."
+      },
+      paletteAction: "question"
+    });
+    const card = questioned.sessions[0].anchoredTeachingCards[0];
+    expect(card).toMatchObject({
+      title: "Question about compact",
+      currentRevision: { status: "idle", instruction: "Ask a question about this source anchor." }
+    });
+    expect(runtime.teachingRequests).toHaveLength(requestCount);
+
+    await application.submit({
+      type: "reviseTeachingCard",
+      cardId: card.id,
+      instruction: "Where is the Hausdorff assumption used?"
+    });
+    expect(runtime.teachingRequests.at(-1)?.focus).toMatchObject({
+      sourceAnchorId: questioned.sessions[0].sourceAnchors[0].id,
+      instruction: "Where is the Hausdorff assumption used?",
+      previousContent: null
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+  });
+
+  it("revises one anchored Teaching Card coherently and restores an earlier revision", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the selected claim",
+      initialTeachingDirection: "Start from the definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Every compact set is closed." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const sourceId = started.sessions[0].sourceIds[0];
+    const withCard = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 13, exactText: "compact", prefix: "Every ", suffix: " set is closed."
+      },
+      paletteAction: "explain"
+    });
+    runtime.emitTeaching("Compactness gives a finite subcover.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const original = application.getState().sessions[0].anchoredTeachingCards[0].currentRevision;
+    const cardId = withCard.sessions[0].anchoredTeachingCards[0].id;
+
+    const revising = await application.submit({
+      type: "reviseTeachingCard",
+      cardId,
+      instruction: "Make the separation argument explicit."
+    });
+    expect(revising.sessions[0].anchoredTeachingCards[0]).toMatchObject({
+      revisions: [{ id: original.id, content: "Compactness gives a finite subcover." }],
+      currentRevision: { instruction: "Make the separation argument explicit.", status: "streaming", content: "" }
+    });
+    expect(runtime.teachingRequests.at(-1)?.focus).toMatchObject({
+      instruction: "Make the separation argument explicit.",
+      previousContent: "Compactness gives a finite subcover."
+    });
+
+    runtime.emitTeaching("Separate each outside point, then use a finite subcover of the compact set.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const revised = application.getState().sessions[0].anchoredTeachingCards[0].currentRevision;
+
+    const restored = await application.submit({
+      type: "restoreTeachingCardRevision",
+      cardId,
+      revisionId: original.id
+    });
+    expect(restored.sessions[0].anchoredTeachingCards[0]).toMatchObject({
+      currentRevision: { id: original.id, content: "Compactness gives a finite subcover." },
+      revisions: [{ id: revised.id, content: "Separate each outside point, then use a finite subcover of the compact set." }]
+    });
+  });
+
+  it("retains a named Teaching Variant and pins substantial anchored output as a Learning Artifact", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Compare proof routes",
+      initialTeachingDirection: "Begin with open covers",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Every compact set is closed." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const sourceId = started.sessions[0].sourceIds[0];
+    const withCard = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 13, exactText: "compact", prefix: "Every ", suffix: " set is closed."
+      },
+      paletteAction: "explain"
+    });
+    runtime.emitTeaching("Use a finite subcover to prove the complement is open.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const cardId = withCard.sessions[0].anchoredTeachingCards[0].id;
+    const anchorId = withCard.sessions[0].sourceAnchors[0].id;
+
+    const variant = await application.submit({
+      type: "createTeachingVariant",
+      cardId,
+      name: "Closed-map route",
+      instruction: "Give a genuinely different proof via projection from a compact product."
+    });
+    expect(variant.sessions[0].anchoredTeachingCards[0].variants).toMatchObject([{
+      name: "Closed-map route",
+      revision: { status: "streaming", content: "" }
+    }]);
+    expect(runtime.teachingRequests.at(-1)?.focus).toMatchObject({
+      variantName: "Closed-map route",
+      previousContent: "Use a finite subcover to prove the complement is open."
+    });
+    runtime.emitTeaching("Project the compact closed subset and use that the projection is closed.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+
+    const pinned = await application.submit({ type: "pinTeachingCardArtifact", cardId });
+    expect(pinned.sessions[0].anchoredTeachingCards[0]).toMatchObject({ artifactId: pinned.sessions[0].learningArtifacts[0].id });
+    expect(pinned.sessions[0].learningArtifacts).toMatchObject([{
+      title: "Explain compact",
+      currentRevision: {
+        content: "Use a finite subcover to prove the complement is open.",
+        claimOrigin: "modelGenerated",
+        verificationLevel: "notIndependentlyChecked",
+        verificationCurrency: "current"
+      },
+      revisions: [],
+      sourceAnchorIds: [anchorId],
+      pinned: true
+    }]);
+    expect(pinned.sessions[0].anchoredTeachingCards[0].variants[0].revision.content).toBe(
+      "Project the compact closed subset and use that the projection is closed."
+    );
+
+    const originalArtifactRevisionId = pinned.sessions[0].learningArtifacts[0].currentRevision.id;
+    const edited = await application.submit({
+      type: "editLearningArtifact",
+      artifactId: pinned.sessions[0].learningArtifacts[0].id,
+      content: "Learner-edited finite-subcover proof."
+    });
+    expect(edited.sessions[0].learningArtifacts[0]).toMatchObject({
+      currentRevision: { content: "Learner-edited finite-subcover proof.", claimOrigin: "mixed" },
+      revisions: [{ id: originalArtifactRevisionId, content: "Use a finite subcover to prove the complement is open." }]
+    });
+    const restoredArtifact = await application.submit({
+      type: "restoreLearningArtifactRevision",
+      artifactId: pinned.sessions[0].learningArtifacts[0].id,
+      revisionId: originalArtifactRevisionId
+    });
+    expect(restoredArtifact.sessions[0].learningArtifacts[0]).toMatchObject({
+      currentRevision: { id: originalArtifactRevisionId, content: "Use a finite subcover to prove the complement is open." },
+      revisions: [{ content: "Learner-edited finite-subcover proof." }]
+    });
+  });
+
+  it("checkpoints and stops the exact anchored Teaching Card revision on quit and relaunch", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain one anchor",
+      initialTeachingDirection: "Start locally",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Every compact set is closed." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    await application.submit({
+      type: "createSourceAnchor",
+      sourceId: started.sessions[0].sourceIds[0],
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 13, exactText: "compact", prefix: "Every ", suffix: " set is closed."
+      },
+      paletteAction: "explain"
+    });
+    runtime.emitTeaching("Useful partial anchored explanation");
+
+    await application.shutdown();
+    expect(application.getState().sessions[0].anchoredTeachingCards[0].currentRevision).toMatchObject({
+      status: "stopped",
+      content: "Useful partial anchored explanation",
+      retryable: true
+    });
+    expect(application.getState().sessions[0].teachingCard.status).toBe("completed");
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].anchoredTeachingCards[0].currentRevision).toMatchObject({
+      status: "stopped",
+      content: "Useful partial anchored explanation"
+    });
+  });
+
+  it("retries the same failed anchored Teaching Card with its receipt and work-log link intact", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain one anchor",
+      initialTeachingDirection: "Start locally",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Every compact set is closed." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const withCard = await application.submit({
+      type: "createSourceAnchor",
+      sourceId: started.sessions[0].sourceIds[0],
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 13, exactText: "compact", prefix: "Every ", suffix: " set is closed."
+      },
+      paletteAction: "explain"
+    });
+    runtime.failTeaching(new Error("Anchored teaching timed out."));
+    await application.waitForModelWork();
+    const failed = application.getState().sessions[0].anchoredTeachingCards[0];
+    expect(failed.currentRevision).toMatchObject({
+      status: "failed",
+      retryable: true,
+      contextUsed: [
+        { sourceName: "Typed mathematics", location: "Focused Text at characters 6–13" },
+        { sourceName: "Typed mathematics", location: "Supplied bounded source excerpt at characters 0–28" }
+      ],
+      agentWorkLogReference: { sessionId: started.sessions[0].id }
+    });
+    const reference = failed.currentRevision.agentWorkLogReference!;
+    expect(application.getAgentWorkLogEvidence(reference.sessionId, reference.fromSequence, reference.toSequence).map(
+      (event) => event.type
+    )).toEqual(["threadStarted", "turnStarted"]);
+
+    const retrying = await application.submit({ type: "retryAnchoredTeachingCard", cardId: withCard.sessions[0].anchoredTeachingCards[0].id });
+    expect(retrying.sessions[0].anchoredTeachingCards[0].currentRevision).toMatchObject({
+      id: failed.currentRevision.id,
+      status: "streaming",
+      content: ""
+    });
+    expect(runtime.teachingRequests.at(-1)?.focus).toMatchObject({
+      sourceAnchorId: withCard.sessions[0].sourceAnchors[0].id,
+      instruction: "Explain or unpack this source anchor."
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+  });
+
   it("allows Quick Study to own one Primary Folder and rejects attachments selected inside it", async () => {
     const { application } = await launch();
     const linked = await application.linkPrimaryFolder("quick-study-workspace", {
