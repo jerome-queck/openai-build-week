@@ -326,9 +326,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
       await this.runTurn(
         [
           "Create one learner-facing Teaching Card, not a chat transcript.",
-          `Learning Goal: ${request.learningGoal}`,
-          `Scope: ${request.scope}`,
-          `Initial teaching direction: ${request.initialTeachingDirection}`,
+          teachingSessionContext(request),
           `Session Access Policy: ${sessionAccessPolicyLabel(request.accessScope.policy)}. Use only the context supplied within this authorized scope. Source modification and deletion are prohibited.`,
           authorizedSourceContext(request),
           questionContext(request),
@@ -600,6 +598,17 @@ function authorizedSourceContext(request: TeachingRequest): string {
       mediaType: source.mediaType,
       content: source.content
     }))
+  ].join("\n");
+}
+
+function teachingSessionContext(request: TeachingRequest): string {
+  if (request.questionContext) {
+    return "Session teaching context is limited to the learner-approved Ask Bar context below.";
+  }
+  return [
+    `Learning Goal: ${request.learningGoal}`,
+    `Scope: ${request.scope}`,
+    `Initial teaching direction: ${request.initialTeachingDirection}`
   ].join("\n");
 }
 

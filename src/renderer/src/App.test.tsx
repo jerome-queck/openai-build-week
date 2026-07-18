@@ -45,6 +45,7 @@ describe("anchored teaching workbench", () => {
     expect(screen.queryByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeNull();
 
     await user.click(marker);
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
     expect(screen.getByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeTruthy();
     const close = screen.getByRole("button", { name: "Close Contextual Inspector" });
     expect(close).toBe(document.activeElement);

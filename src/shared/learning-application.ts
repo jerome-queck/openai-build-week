@@ -68,6 +68,8 @@ export interface AskBarContext {
 
 export interface QuestionCardRevision extends TeachingCardState {
   id: string;
+  question: string;
+  selectedContext: QuestionContextItem[];
   contextUsed: QuestionContextItem[];
   agentWorkLogReference: TeachingCardRevision["agentWorkLogReference"];
 }
@@ -474,6 +476,7 @@ export type LearnerAction =
   | { type: "submitQuestion"; text: string }
   | { type: "startNewQuestion" }
   | { type: "retryQuestionCard"; cardId: string }
+  | { type: "activateSourceAnchor"; sourceAnchorId: string }
   | { type: "addSourceToSession"; sourceId: string }
   | {
       type: "createSourceAnchor";
@@ -571,11 +574,11 @@ export class LearningApplication {
           replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
         }
         for (const card of session.anchoredTeachingCards) {
-          interruptTeachingCardRevision(card.currentRevision);
-          for (const variant of card.variants) interruptTeachingCardRevision(variant.revision);
+          interruptCardRevision(card.currentRevision);
+          for (const variant of card.variants) interruptCardRevision(variant.revision);
         }
         const activeQuestionCard = session.questionCards.find((card) => card.id === session.activeQuestionCardId);
-        if (activeQuestionCard) interruptQuestionCardRevision(activeQuestionCard.currentRevision);
+        if (activeQuestionCard) interruptCardRevision(activeQuestionCard.currentRevision);
         refreshAskBarContext(persisted, session);
       }
       persisted.activeSessionId = null;
@@ -1477,7 +1480,18 @@ export class LearningApplication {
         if (!card) throw new Error("Choose a Question Card in the active Learning Session.");
         if (!card.currentRevision.retryable) throw new Error("This Question Card is not ready to retry.");
         session.activeQuestionCardId = card.id;
-        await this.beginQuestionTeaching(session, card);
+        const previous = card.revisions.at(-1);
+        await this.beginQuestionTeaching(session, card, previous ? {
+          previousQuestion: previous.question,
+          previousContent: previous.content
+        } : undefined);
+        break;
+      }
+      case "activateSourceAnchor": {
+        const session = this.requireActiveSession();
+        requireSourceAnchor(session, action.sourceAnchorId);
+        session.activeSourceAnchorId = action.sourceAnchorId;
+        refreshAskBarContext(this.state, session, true);
         break;
       }
       case "setFullAccessConfirmation": {
@@ -1764,7 +1778,7 @@ export class LearningApplication {
       append: (delta) => { revision.content += delta; },
       complete: () => { revision.status = "completed"; },
       fail: (error) => Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true }),
-      stop: () => interruptTeachingCardRevision(revision),
+      stop: () => interruptCardRevision(revision),
       markUnconfirmed: () => {
         revision.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
       },
@@ -1789,12 +1803,12 @@ export class LearningApplication {
       previous = { previousQuestion: card.question, previousContent: card.currentRevision.content };
       card.revisions.push(structuredClone(card.currentRevision));
       card.question = question;
-      card.currentRevision = questionCardRevision(context);
+      card.currentRevision = questionCardRevision(question, context);
     } else {
       card = {
         id: crypto.randomUUID(),
         question,
-        currentRevision: questionCardRevision(context),
+        currentRevision: questionCardRevision(question, context),
         revisions: []
       };
       session.questionCards.push(card);
@@ -1809,9 +1823,24 @@ export class LearningApplication {
     previous?: { previousQuestion: string; previousContent: string }
   ): Promise<void> {
     const revision = card.currentRevision;
-    const context = structuredClone(revision.contextUsed);
+    const context = structuredClone(revision.selectedContext);
     await this.runModelTeaching(session, card.question, undefined, {
-      start: (_sourceContext, nextLogSequence) => {
+      start: (sourceContext, nextLogSequence) => {
+        const suppliedContext = context.map((item) => {
+          if (item.kind !== "source" || !item.sourceId) return item;
+          const supplied = sourceContext.find((source) => source.sourceId === item.sourceId);
+          return {
+            ...item,
+            location: supplied
+              ? `Supplied bounded source excerpt at characters 0–${supplied.content.length}`
+              : "Selected context; source content was unavailable and not supplied"
+          };
+        });
+        revision.contextUsed = [
+          ...suppliedContext,
+          accessPolicyReceipt(session.accessPolicy),
+          ...(previous ? questionRevisionReceipt(previous) : [])
+        ];
         revision.agentWorkLogReference = {
           sessionId: session.id,
           fromSequence: nextLogSequence,
@@ -1823,7 +1852,7 @@ export class LearningApplication {
       append: (delta) => { revision.content += delta; },
       complete: () => { revision.status = "completed"; },
       fail: (error) => Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true }),
-      stop: () => interruptQuestionCardRevision(revision),
+      stop: () => interruptCardRevision(revision),
       markUnconfirmed: () => {
         revision.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
       },
@@ -2425,16 +2454,17 @@ function migrateQuestionCards(value: unknown): QuestionCard[] {
       || !candidate.question.trim() || !Array.isArray(candidate.revisions)) {
       throw new Error("Stored Question Cards are invalid.");
     }
+    const question = candidate.question;
     return {
       id: candidate.id,
-      question: candidate.question,
-      currentRevision: migrateQuestionCardRevision(candidate.currentRevision),
-      revisions: candidate.revisions.map(migrateQuestionCardRevision)
+      question,
+      currentRevision: migrateQuestionCardRevision(candidate.currentRevision, question),
+      revisions: candidate.revisions.map((revision) => migrateQuestionCardRevision(revision, question))
     };
   });
 }
 
-function migrateQuestionCardRevision(value: unknown): QuestionCardRevision {
+function migrateQuestionCardRevision(value: unknown, fallbackQuestion: string): QuestionCardRevision {
   if (!isRecord(value) || typeof value.id !== "string"
     || !["idle", "streaming", "completed", "stopped", "failed"].includes(String(value.status))
     || typeof value.content !== "string" || !(value.error === null || typeof value.error === "string")
@@ -2445,12 +2475,17 @@ function migrateQuestionCardRevision(value: unknown): QuestionCardRevision {
     if (!isQuestionContextItem(item)) throw new Error("Stored Question Cards are invalid.");
     return item;
   });
+  const selectedContext = (Array.isArray(value.selectedContext) ? value.selectedContext : value.contextUsed).map((item) => {
+    if (!isQuestionContextItem(item)) throw new Error("Stored Question Cards are invalid.");
+    return item;
+  });
   const reference = value.agentWorkLogReference;
   if (!(reference === null || (isRecord(reference) && typeof reference.sessionId === "string"
     && Number.isInteger(reference.fromSequence) && Number.isInteger(reference.toSequence)))) {
     throw new Error("Stored Question Cards are invalid.");
   }
-  return { ...value, contextUsed, agentWorkLogReference: reference } as QuestionCardRevision;
+  const question = typeof value.question === "string" && value.question.trim() ? value.question : fallbackQuestion;
+  return { ...value, question, selectedContext, contextUsed, agentWorkLogReference: reference } as QuestionCardRevision;
 }
 
 function isQuestionContextItem(value: unknown): value is QuestionContextItem {
@@ -2466,19 +2501,14 @@ function validateQuestionCardReferences(state: LearningApplicationState, session
   const identifiersAreUnique = new Set(session.questionCards.map((card) => card.id)).size === session.questionCards.length;
   const activeIsValid = session.activeQuestionCardId === null
     || session.questionCards.some((card) => card.id === session.activeQuestionCardId);
-  const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
-  const authorizedSourceIds = new Set(session.accessPolicy === "focused"
-    ? session.sourceIds
-    : session.accessPolicy === "workspace"
-      ? [...session.sourceIds, ...(workspace?.context.sourceIds ?? [])]
-      : state.sources.map((source) => source.id));
-  const contextsAreAuthorized = session.questionCards.every((card) => [card.currentRevision, ...card.revisions]
-    .every((revision) => revision.contextUsed.every((item) => {
-      if (item.sourceId !== null && !authorizedSourceIds.has(item.sourceId)) return false;
+  const existingSourceIds = new Set(state.sources.map((source) => source.id));
+  const contextReferencesAreValid = session.questionCards.every((card) => [card.currentRevision, ...card.revisions]
+    .every((revision) => [...revision.selectedContext, ...revision.contextUsed].every((item) => {
+      if (item.sourceId !== null && !existingSourceIds.has(item.sourceId)) return false;
       if (item.sourceAnchorId === null) return true;
       return session.sourceAnchors.some((anchor) => anchor.id === item.sourceAnchorId && anchor.sourceId === item.sourceId);
     })));
-  if (!identifiersAreUnique || !activeIsValid || !contextsAreAuthorized) {
+  if (!identifiersAreUnique || !activeIsValid || !contextReferencesAreValid) {
     throw new Error("Stored Question Card references are invalid.");
   }
 }
@@ -2534,9 +2564,11 @@ function teachingCardRevision(instruction: string): TeachingCardRevision {
   };
 }
 
-function questionCardRevision(contextUsed: QuestionContextItem[]): QuestionCardRevision {
+function questionCardRevision(question: string, contextUsed: QuestionContextItem[]): QuestionCardRevision {
   return {
     id: crypto.randomUUID(),
+    question,
+    selectedContext: structuredClone(contextUsed),
     status: "idle",
     content: "",
     error: null,
@@ -2623,6 +2655,42 @@ function selectedAskBarContext(session: LearningSession): QuestionContextItem[] 
   return session.askBarContext.items.filter((item) => included.has(item.id));
 }
 
+function accessPolicyReceipt(policy: SessionAccessPolicy): QuestionContextItem {
+  const label = sessionAccessPolicyLabel(policy);
+  return {
+    id: `access-policy:${policy}`,
+    kind: "sessionContext",
+    typeLabel: "Session Access Policy",
+    identity: label,
+    location: "Operational boundary applied to this Question Card",
+    preview: label,
+    sourceId: null,
+    sourceAnchorId: null
+  };
+}
+
+function questionRevisionReceipt(previous: { previousQuestion: string; previousContent: string }): QuestionContextItem[] {
+  return [{
+    id: "previous-question",
+    kind: "sessionContext",
+    typeLabel: "Previous Question Card question",
+    identity: previous.previousQuestion,
+    location: "Earlier structured Question Card revision",
+    preview: previous.previousQuestion,
+    sourceId: null,
+    sourceAnchorId: null
+  }, {
+    id: "previous-answer",
+    kind: "sessionContext",
+    typeLabel: "Previous Question Card answer",
+    identity: "Earlier answer",
+    location: "Earlier structured Question Card revision",
+    preview: previous.previousContent,
+    sourceId: null,
+    sourceAnchorId: null
+  }];
+}
+
 function sourceAnchorTeachingTitle(selection: SourceAnchorSelection, action: "Explain" | "Question about"): string {
   if (selection.kind === "diagramRegion") return `${action} selected diagram region`;
   const excerpt = selection.exactText.trim().replace(/\s+/g, " ");
@@ -2672,12 +2740,7 @@ function interruptedTeachingCard(content: string): LearningSession["teachingCard
   };
 }
 
-function interruptTeachingCardRevision(revision: TeachingCardRevision): void {
-  if (revision.status !== "streaming") return;
-  Object.assign(revision, interruptedTeachingCard(revision.content));
-}
-
-function interruptQuestionCardRevision(revision: QuestionCardRevision): void {
+function interruptCardRevision(revision: TeachingCardState): void {
   if (revision.status !== "streaming") return;
   Object.assign(revision, interruptedTeachingCard(revision.content));
 }

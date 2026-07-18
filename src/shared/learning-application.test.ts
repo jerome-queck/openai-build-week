@@ -412,7 +412,12 @@ describe("Learning Application", () => {
         status: "streaming",
         contextUsed: [
           expect.objectContaining({ kind: "sourceAnchor", identity: "compact subset" }),
-          expect.objectContaining({ kind: "source", identity: "Typed mathematics" })
+          expect.objectContaining({
+            kind: "source",
+            identity: "Typed mathematics",
+            location: "Supplied bounded source excerpt at characters 0–52"
+          }),
+          expect.objectContaining({ typeLabel: "Session Access Policy", identity: "Focused Access" })
         ]
       },
       revisions: []
@@ -439,6 +444,7 @@ describe("Learning Application", () => {
       question: "Make the neighbourhood choice explicit.",
       currentRevision: { status: "streaming" },
       revisions: [{
+        question: "Where is Hausdorff used?",
         status: "completed",
         content: "Hausdorffness separates the outside point from each point of the compact set."
       }]
@@ -447,8 +453,21 @@ describe("Learning Application", () => {
       previousQuestion: "Where is Hausdorff used?",
       previousContent: "Hausdorffness separates the outside point from each point of the compact set."
     });
+    runtime.failTeaching(new ModelAccessError("network", "Network connection is unavailable."));
+    await application.waitForModelWork();
+    state = await application.submit({ type: "refreshAuthentication" });
+    await application.submit({ type: "retryQuestionCard", cardId: state.sessions[0].questionCards[0].id });
+    expect(runtime.teachingRequests.at(-1)?.questionRevision).toEqual({
+      previousQuestion: "Where is Hausdorff used?",
+      previousContent: "Hausdorffness separates the outside point from each point of the compact set."
+    });
     runtime.completeTeaching();
     await application.waitForModelWork();
+    expect(application.getState().sessions[0].questionCards[0].currentRevision.contextUsed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ typeLabel: "Previous Question Card question", identity: "Where is Hausdorff used?" }),
+      expect.objectContaining({ typeLabel: "Previous Question Card answer", preview: "Hausdorffness separates the outside point from each point of the compact set." }),
+      expect.objectContaining({ typeLabel: "Session Access Policy", identity: "Focused Access" })
+    ]));
 
     const relaunched = await LearningApplication.launch(dataDirectory);
     applications.push(relaunched);
@@ -499,6 +518,72 @@ describe("Learning Application", () => {
     ]);
     runtime.completeTeaching();
     await application.waitForModelWork();
+  });
+
+  it("makes an activated Anchor Marker the Ask Bar's primary context", async () => {
+    const { application } = await launch();
+    let state = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Every compact subset of a Hausdorff space is closed."
+    });
+    const sourceId = state.sessions[0].sourceIds[0];
+    for (const selection of [
+      { startOffset: 6, endOffset: 20, exactText: "compact subset", prefix: "Every ", suffix: " of a Hausdorff space is closed." },
+      { startOffset: 26, endOffset: 41, exactText: "Hausdorff space", prefix: "Every compact subset of a ", suffix: " is closed." }
+    ]) {
+      state = await application.submit({
+        type: "createSourceAnchor",
+        sourceId,
+        selection: { kind: "text", ...selection },
+        paletteAction: "annotate"
+      });
+    }
+    const [firstAnchor, secondAnchor] = state.sessions[0].sourceAnchors;
+    expect(state.sessions[0].askBarContext.includedIds[0]).toBe(`source-anchor:${secondAnchor.id}`);
+
+    state = await application.submit({ type: "activateSourceAnchor", sourceAnchorId: firstAnchor.id });
+
+    expect(state.sessions[0].activeSourceAnchorId).toBe(firstAnchor.id);
+    expect(state.sessions[0].askBarContext.includedIds[0]).toBe(`source-anchor:${firstAnchor.id}`);
+  });
+
+  it("preserves historical Question Card receipts when access is later restricted", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness", scope: "Use the notes", initialTeachingDirection: "Read the theorem",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const sourceAccess = new DeterministicSourceAccess();
+    sourceAccess.contentBySourceName.set("topology.txt", "Every compact subset of a Hausdorff space is closed.");
+    const { application, dataDirectory } = await launchWithRuntimeAndSourceAccess(runtime, sourceAccess);
+    let state = await application.submit({ type: "createWorkspace", name: "Topology" });
+    const workspaceId = state.navigation.workspaceId;
+    state = await application.submit({ type: "createMission", workspaceId, name: "Compactness" });
+    const missionId = state.navigation.missionId!;
+    state = await application.linkExternalAttachment(workspaceId, {
+      name: "topology.txt", resourceType: "file", lastKnownPath: "/Users/learner/topology.txt",
+      canonicalPath: "/Users/learner/topology.txt", accessGrant: null, fingerprint: { size: 52, modifiedAtMs: 1234 }
+    });
+    const workspaceSourceId = state.workspaces.find((workspace) => workspace.id === workspaceId)!.context.sourceIds[0];
+    state = await application.submit({
+      type: "submitSessionIntake", mathematics: "Where is Hausdorff used?", location: { workspaceId, missionId }
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    await application.submit({ type: "setAskBarContextItem", contextId: `source:${workspaceSourceId}`, included: true });
+    await application.submit({ type: "submitQuestion", text: "Use the linked theorem statement." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    state = await application.submit({ type: "selectSessionAccessPolicy", policy: "focused" });
+    expect(state.sessions[0].questionCards[0].currentRevision.contextUsed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: workspaceSourceId })
+    ]));
+    await application.submit({ type: "leaveSession" });
+
+    const relaunched = await LearningApplication.launch(dataDirectory, null, sourceAccess);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].questionCards[0].currentRevision.contextUsed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceId: workspaceSourceId })
+    ]));
   });
 
   it("revises one anchored Teaching Card coherently and restores an earlier revision", async () => {

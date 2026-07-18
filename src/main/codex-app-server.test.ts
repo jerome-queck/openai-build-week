@@ -261,6 +261,7 @@ describe("Codex app-server contract", () => {
     const questionTurnStart = transport.messages.filter((message) => message.method === "turn/start").at(-1)!;
     expect(JSON.stringify(questionTurnStart.params)).toContain("Learner-approved Ask Bar context");
     expect(JSON.stringify(questionTurnStart.params)).toContain("Text at characters 2–27");
+    expect(JSON.stringify(questionTurnStart.params)).not.toContain("Learning Goal:");
   });
 
   it("interrupts active teaching and shuts down the stdio transport", async () => {

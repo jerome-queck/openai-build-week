@@ -835,6 +835,7 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
                 const card = session.anchoredTeachingCards.find((candidate) => candidate.sourceAnchorId === sourceAnchorId);
                 setFocusAnchorId(null);
                 setInspectorCardId(card?.id ?? null);
+                void window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }).then(onState);
               }} />
             {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState} key={artifact.id} />)}
             <SessionAccessPanel state={state} session={session} onState={onState} />
@@ -1186,7 +1187,9 @@ function SessionRecord({ session }: { session: LearningSession }) {
           {card.currentRevision.agentWorkLogReference && <AgentWorkLogLink reference={card.currentRevision.agentWorkLogReference} />}
           {card.revisions.length > 0 && <details>
             <summary>{card.revisions.length} prior Question Card revisions</summary>
-            {card.revisions.map((revision, index) => <p key={revision.id}>Revision {index + 1}: {revision.content || revision.error}</p>)}
+            {card.revisions.map((revision, index) => <p key={revision.id}>
+              Revision {index + 1} · {revision.question}: {revision.content || revision.error}
+            </p>)}
           </details>}
         </article>
       ))}

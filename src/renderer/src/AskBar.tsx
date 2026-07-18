@@ -30,6 +30,7 @@ export function AskBar({
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [selectedContextId, setSelectedContextId] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const included = useMemo(() => {
     const ids = new Set(session.askBarContext.includedIds);
     return session.askBarContext.items.filter((item) => ids.has(item.id));
@@ -45,8 +46,11 @@ export function AskBar({
 
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
+    setError(null);
     try {
       await operation();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Ask Bar could not complete that action.");
     } finally {
       setBusy(false);
     }
@@ -110,6 +114,7 @@ export function AskBar({
           </button>
         </div>
       </form>
+      {error && <p className="failure-message" role="alert">{error}</p>}
       {activeCard && <QuestionCardView card={activeCard} disabled={busy} onRetry={onRetry} />}
     </section>
   );
@@ -156,7 +161,9 @@ function QuestionCardView({ card, disabled, onRetry }: {
       </details>
       {card.revisions.length > 0 && <details className="question-card-history">
         <summary>Earlier Question Card revisions · {card.revisions.length}</summary>
-        <ol>{card.revisions.map((previous) => <li key={previous.id}>{previous.content || previous.error || "No answer content."}</li>)}</ol>
+        <ol>{card.revisions.map((previous) => <li key={previous.id}>
+          <strong>{previous.question}</strong>: {previous.content || previous.error || "No answer content."}
+        </li>)}</ol>
       </details>}
     </article>
   );
