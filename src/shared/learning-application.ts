@@ -73,7 +73,12 @@ export interface SourceAnchor {
   id: string;
   sourceId: string;
   selection: SourceAnchorSelection;
-  paletteAction: SourceAnchorPaletteAction;
+}
+
+export interface SourceAnchorRequest {
+  id: string;
+  sourceAnchorId: string;
+  action: SourceAnchorPaletteAction;
 }
 
 export interface SubmittedPendingQuestion {
@@ -225,6 +230,7 @@ export interface LearningSession {
   accessRequests: SessionAccessRequest[];
   pendingFullAccessConfirmation: boolean;
   sourceAnchors: SourceAnchor[];
+  sourceAnchorRequests: SourceAnchorRequest[];
   activeSourceAnchorId: string | null;
 }
 
@@ -271,6 +277,7 @@ export type LearnerAction =
   | { type: "editPendingQuestion"; text: string }
   | { type: "discardPendingQuestion" }
   | { type: "submitPendingQuestion" }
+  | { type: "addSourceToSession"; sourceId: string }
   | {
       type: "createSourceAnchor";
       sourceId: string;
@@ -571,20 +578,33 @@ export class LearningApplication {
         const session = this.requireActiveSession();
         if (!isSourceAnchorPaletteAction(action.paletteAction)) throw new Error("Choose an available Selection Palette action.");
         const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
-        if (!source || source.workspaceId !== session.workspaceId) {
-          throw new Error("Choose a source in the active Learning Session's Study Workspace.");
+        if (!source || !session.sourceIds.includes(source.id)) {
+          throw new Error("Choose a source attached to the active Learning Session.");
         }
-        const selection = validatedSourceAnchorSelection(action.selection, source);
+        const selection = await this.validatedSourceAnchorSelection(action.selection, source);
         const anchor: SourceAnchor = {
           id: crypto.randomUUID(),
           sourceId: source.id,
-          selection,
-          paletteAction: action.paletteAction
+          selection
         };
         session.sourceAnchors.push(anchor);
+        session.sourceAnchorRequests.push({
+          id: crypto.randomUUID(),
+          sourceAnchorId: anchor.id,
+          action: action.paletteAction
+        });
         session.activeSourceAnchorId = anchor.id;
         session.activityOrder = this.nextActivityOrder();
         this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "addSourceToSession": {
+        const session = this.requireActiveSession();
+        const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
+        if (!source || source.workspaceId !== session.workspaceId || source.kind !== "linkedSource" || source.resourceType !== "file") {
+          throw new Error("Choose a Linked Source file in the active Study Workspace.");
+        }
+        if (!session.sourceIds.includes(source.id)) session.sourceIds.push(source.id);
         break;
       }
       case "navigateToWorkspace": {
@@ -639,6 +659,7 @@ export class LearningApplication {
           accessRequests: [],
           pendingFullAccessConfirmation: false,
           sourceAnchors: [],
+          sourceAnchorRequests: [],
           activeSourceAnchorId: null
         };
         this.state.sessions.push(session);
@@ -707,6 +728,7 @@ export class LearningApplication {
           accessRequests: [],
           pendingFullAccessConfirmation: false,
           sourceAnchors: [],
+          sourceAnchorRequests: [],
           activeSourceAnchorId: null
         };
         this.agentWorkLogs[session.id] = pendingLog;
@@ -1021,6 +1043,27 @@ export class LearningApplication {
       this.emitState();
     });
     this.modelWorks.set(session.id, { controller, promise });
+  }
+
+  private async validatedSourceAnchorSelection(
+    selection: SourceAnchorSelection,
+    source: WorkspaceSource
+  ): Promise<SourceAnchorSelection> {
+    const validated = validatedSourceAnchorSelection(selection, source);
+    if (source.kind === "managedAsset") return validated;
+    if (!this.sourceAccess) throw new Error("Local source access is unavailable.");
+    const view = await this.sourceAccess.read(source);
+    if (!sameFingerprint(source.link.fingerprint, view.fingerprint)) {
+      throw new Error("This source changed before the Source Anchor could be saved.");
+    }
+    if (selection.kind === "diagramRegion") return validated;
+    if (view.mediaType !== "text/plain") {
+      throw new Error("Text and equation anchors require an accessible text Source Layer.");
+    }
+    if (view.content.slice(selection.startOffset, selection.endOffset) !== selection.exactText) {
+      throw new Error("The selected source text no longer matches this Source Layer.");
+    }
+    return validated;
   }
 
   private async buildTeachingSourceContext(session: LearningSession): Promise<TeachingSourceContext[]> {
@@ -1395,8 +1438,10 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       accessRequests: migrateAccessRequests(session.accessRequests),
       pendingFullAccessConfirmation: false,
       sourceAnchors: migrateSourceAnchors(session.sourceAnchors),
+      sourceAnchorRequests: migrateSourceAnchorRequests(session.sourceAnchorRequests),
       activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null
     }));
+    attachManagedSourcesToLegacySessions(current);
     return current;
   }
 
@@ -1421,9 +1466,11 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       accessRequests: [],
       pendingFullAccessConfirmation: false,
       sourceAnchors: [],
+      sourceAnchorRequests: [],
       activeSourceAnchorId: null
     };
     migrated.sessions.push(session);
+    attachManagedSourcesToLegacySessions(migrated);
     migrated.resumeSessionId = session.id;
     migrated.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
     migrated.activityOrder = 1;
@@ -1566,16 +1613,45 @@ function migrateSourceAnchors(value: unknown): SourceAnchor[] {
   if (!Array.isArray(value)) throw new Error("Stored Source Anchors are invalid.");
   return value.map((candidate) => {
     if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.sourceId !== "string"
-      || !isSourceAnchorPaletteAction(candidate.paletteAction)) {
+    ) {
       throw new Error("Stored Source Anchor is invalid.");
     }
     return {
       id: candidate.id,
       sourceId: candidate.sourceId,
-      selection: validatedSourceAnchorSelection(candidate.selection),
-      paletteAction: candidate.paletteAction
+      selection: validatedSourceAnchorSelection(candidate.selection)
     };
   });
+}
+
+function migrateSourceAnchorRequests(value: unknown): SourceAnchorRequest[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new Error("Stored Source Anchor requests are invalid.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || typeof candidate.id !== "string" || typeof candidate.sourceAnchorId !== "string"
+      || !isSourceAnchorPaletteAction(candidate.action)) {
+      throw new Error("Stored Source Anchor request is invalid.");
+    }
+    return candidate as unknown as SourceAnchorRequest;
+  });
+}
+
+function attachManagedSourcesToLegacySessions(state: LearningApplicationState): void {
+  for (const session of state.sessions) {
+    if (session.sourceIds.length > 0) continue;
+    const source: ManagedAsset = {
+      id: `migrated-source-${session.id}`,
+      kind: "managedAsset",
+      workspaceId: session.workspaceId,
+      name: "Typed mathematics",
+      mediaType: "text/plain",
+      content: session.mathematics
+    };
+    state.sources.push(source);
+    session.sourceIds.push(source.id);
+    const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
+    if (workspace && !workspace.context.sourceIds.includes(source.id)) workspace.context.sourceIds.push(source.id);
+  }
 }
 
 function validatedSourceAnchorSelection(value: unknown, source?: WorkspaceSource): SourceAnchorSelection {

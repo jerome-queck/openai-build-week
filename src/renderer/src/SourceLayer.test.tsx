@@ -77,7 +77,11 @@ describe("Source Layer selection", () => {
     const onChooseAction = vi.fn();
     render(<SourceLayer sourceId="source-1" content="A commutative diagram" anchors={[]} onChooseAction={onChooseAction} />);
 
-    await user.click(screen.getByRole("button", { name: "Create diagram region with keyboard" }));
+    await user.click(screen.getByRole("button", { name: "Define diagram region with keyboard" }));
+    const leftEdge = screen.getByRole("spinbutton", { name: "Left edge percent" });
+    await user.clear(leftEdge);
+    await user.type(leftEdge, "20");
+    await user.click(screen.getByRole("button", { name: "Use diagram region" }));
 
     expect(screen.getByRole("button", { name: "Explain or unpack selected diagram region" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Ask about selected diagram region" })).toBeTruthy();
@@ -85,15 +89,22 @@ describe("Source Layer selection", () => {
     await user.click(screen.getByRole("button", { name: "Add selected diagram region to the Learning Trail" }));
     expect(onChooseAction).toHaveBeenCalledWith({
       kind: "diagramRegion",
-      bounds: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
+      bounds: { x: 0.2, y: 0.25, width: 0.5, height: 0.5 }
     }, "addToLearningTrail");
   });
 
   it("draws a bounded diagram-region selection using normalized Source Layer coordinates", async () => {
     const user = userEvent.setup();
     const onChooseAction = vi.fn();
-    render(<SourceLayer sourceId="source-1" content="A commutative diagram" anchors={[]} onChooseAction={onChooseAction} />);
+    render(<SourceLayer
+      sourceId="source-1"
+      content="data:image/png;base64,c3ludGhldGljLWRpYWdyYW0="
+      mediaType="image/png"
+      anchors={[]}
+      onChooseAction={onChooseAction}
+    />);
     const source = screen.getByRole("article", { name: "Read-only Source Layer" });
+    expect(screen.getByRole("img", { name: "Linked Source diagram" })).toBeTruthy();
     vi.spyOn(source, "getBoundingClientRect").mockReturnValue({
       x: 10, y: 20, left: 10, top: 20, right: 210, bottom: 120, width: 200, height: 100,
       toJSON: () => ({})
@@ -120,5 +131,24 @@ describe("Source Layer selection", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(equation).toBe(document.activeElement);
+  });
+
+  it("renders saved diagram bounds as zoom-stable percentage markers", () => {
+    render(<SourceLayer
+      sourceId="source-1"
+      content="data:image/png;base64,c3ludGhldGljLWRpYWdyYW0="
+      mediaType="image/png"
+      anchors={[{
+        id: "anchor-1",
+        sourceId: "source-1",
+        selection: { kind: "diagramRegion", bounds: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 } }
+      }]}
+      onChooseAction={vi.fn()}
+    />);
+
+    const marker = screen.getByLabelText("Saved diagram-region Source Anchor");
+    expect(marker.getAttribute("style")).toContain("left: 10%");
+    expect(marker.getAttribute("style")).toContain("top: 20%");
+    expect(screen.getByText(/Diagram region at 10% left, 20% top/)).toBeTruthy();
   });
 });

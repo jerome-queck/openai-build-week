@@ -51,6 +51,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "resumeSession":
     case "cancelSessionModelWork":
       return "sessionId" in action && typeof action.sessionId === "string";
+    case "addSourceToSession":
+      return "sourceId" in action && typeof action.sourceId === "string";
     case "startQuickStudy":
     case "submitSessionIntake":
       return "mathematics" in action && typeof action.mathematics === "string"

@@ -10,6 +10,7 @@ const SOURCE_CONTEXT_CHARACTERS = 32;
 interface SourceLayerProps {
   sourceId: string;
   content: string;
+  mediaType?: "text/plain" | "image/png" | "image/jpeg";
   anchors: SourceAnchor[];
   onChooseAction(selection: SourceAnchorSelection, action: SourceAnchorPaletteAction): void;
 }
@@ -31,13 +32,14 @@ interface TextSegment {
 
 type SourceSegment = EquationSegment | TextSegment;
 
-export function SourceLayer({ sourceId, content, anchors, onChooseAction }: SourceLayerProps) {
+export function SourceLayer({ sourceId, content, mediaType = "text/plain", anchors, onChooseAction }: SourceLayerProps) {
   const sourceRef = useRef<HTMLElement>(null);
   const originRef = useRef<HTMLElement | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const [selection, setSelection] = useState<SourceAnchorSelection | null>(null);
   const [drawingRegion, setDrawingRegion] = useState(false);
-  const segments = useMemo(() => sourceSegments(content), [content]);
+  const [keyboardRegion, setKeyboardRegion] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const segments = useMemo(() => mediaType === "text/plain" ? sourceSegments(content) : [], [content, mediaType]);
 
   const openPalette = (nextSelection: SourceAnchorSelection, origin: HTMLElement) => {
     originRef.current = origin;
@@ -106,12 +108,43 @@ export function SourceLayer({ sourceId, content, anchors, onChooseAction }: Sour
         >{drawingRegion ? "Cancel diagram-region drawing" : "Draw diagram region"}</button>
         <button
           className="secondary"
-          onClick={(event) => diagramSelection(
-            { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
-            event.currentTarget
-          )}
-        >Create diagram region with keyboard</button>
+          aria-expanded={Boolean(keyboardRegion)}
+          onClick={() => setKeyboardRegion((current) => current ? null : { x: 25, y: 25, width: 50, height: 50 })}
+        >Define diagram region with keyboard</button>
       </div>
+      {keyboardRegion && (
+        <fieldset className="keyboard-region-controls">
+          <legend>Diagram region bounds in percent</legend>
+          {(["x", "y", "width", "height"] as const).map((coordinate) => (
+            <label key={coordinate}>
+              {coordinate === "x" ? "Left edge" : coordinate === "y" ? "Top edge" : coordinate === "width" ? "Width" : "Height"} percent
+              <input
+                type="number"
+                min={coordinate === "width" || coordinate === "height" ? 1 : 0}
+                max={coordinate === "x" || coordinate === "y" ? 99 : 100 - keyboardRegion[coordinate === "width" ? "x" : "y"]}
+                value={keyboardRegion[coordinate]}
+                onChange={(event) => setKeyboardRegion(updateKeyboardRegion(
+                  keyboardRegion,
+                  coordinate,
+                  Number(event.target.value)
+                ))}
+              />
+            </label>
+          ))}
+          <button
+            className="primary"
+            onClick={(event) => {
+              diagramSelection({
+                x: keyboardRegion.x / 100,
+                y: keyboardRegion.y / 100,
+                width: Math.min(keyboardRegion.width, 100 - keyboardRegion.x) / 100,
+                height: Math.min(keyboardRegion.height, 100 - keyboardRegion.y) / 100
+              }, event.currentTarget);
+              setKeyboardRegion(null);
+            }}
+          >Use diagram region</button>
+        </fieldset>
+      )}
       <article
         ref={sourceRef}
         className={`source-selection-surface${drawingRegion ? " drawing-region" : ""}`}
@@ -122,14 +155,14 @@ export function SourceLayer({ sourceId, content, anchors, onChooseAction }: Sour
         onPointerDown={beginDiagramRegion}
         onPointerUp={finishDiagramRegion}
       >
-        {segments.map((segment) => segment.kind === "text" ? segment.text : (
+        {mediaType === "text/plain" ? segments.map((segment) => segment.kind === "text" ? segment.text : (
           <button
             className="source-equation"
             key={`${segment.startOffset}-${segment.endOffset}`}
             aria-label={`Select equation ${segment.equationIndex + 1}: ${segment.text}`}
             onClick={(event) => selectEquation(segment, event.currentTarget)}
           >{segment.text}</button>
-        ))}
+        )) : <img className="source-layer-image" src={content} alt="Linked Source diagram" />}
         {anchors.flatMap((anchor) => anchor.selection.kind === "diagramRegion" ? [(
           <span
             className="diagram-anchor-marker"
@@ -145,9 +178,14 @@ export function SourceLayer({ sourceId, content, anchors, onChooseAction }: Sour
         )] : [])}
       </article>
       {anchors.length > 0 && (
-        <p className="source-anchor-count" role="status">
-          {anchors.length} saved {anchors.length === 1 ? "Source Anchor" : "Source Anchors"}
-        </p>
+        <section className="saved-source-anchors" aria-label="Saved Source Anchors">
+          <p className="source-anchor-count" role="status">
+            {anchors.length} saved {anchors.length === 1 ? "Source Anchor" : "Source Anchors"}
+          </p>
+          <ul>
+            {anchors.map((anchor) => <li key={anchor.id}>{sourceAnchorLabel(anchor)}</li>)}
+          </ul>
+        </section>
       )}
       {selection && <SelectionPalette selection={selection} onChoose={chooseAction} onClose={closePalette} />}
     </section>
@@ -257,4 +295,28 @@ function textLocation(
 
 function clampRatio(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function updateKeyboardRegion(
+  region: { x: number; y: number; width: number; height: number },
+  coordinate: "x" | "y" | "width" | "height",
+  value: number
+): { x: number; y: number; width: number; height: number } {
+  const minimum = coordinate === "width" || coordinate === "height" ? 1 : 0;
+  const maximum = coordinate === "x" || coordinate === "y"
+    ? 99
+    : 100 - region[coordinate === "width" ? "x" : "y"];
+  const updated = { ...region, [coordinate]: Math.min(maximum, Math.max(minimum, Number.isFinite(value) ? value : minimum)) };
+  if (coordinate === "x") updated.width = Math.min(updated.width, 100 - updated.x);
+  if (coordinate === "y") updated.height = Math.min(updated.height, 100 - updated.y);
+  return updated;
+}
+
+function sourceAnchorLabel(anchor: SourceAnchor): string {
+  if (anchor.selection.kind === "diagramRegion") {
+    const { x, y, width, height } = anchor.selection.bounds;
+    return `Diagram region at ${Math.round(x * 100)}% left, ${Math.round(y * 100)}% top, ${Math.round(width * 100)}% wide, ${Math.round(height * 100)}% high`;
+  }
+  const kind = anchor.selection.kind === "equation" ? `Equation ${anchor.selection.equationIndex + 1}` : "Text";
+  return `${kind} Source Anchor: ${anchor.selection.exactText} (characters ${anchor.selection.startOffset}–${anchor.selection.endOffset})`;
 }
