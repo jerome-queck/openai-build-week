@@ -185,7 +185,9 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     const submitPending = page.getByRole("button", { name: "Submit Pending Question" });
     await submitPending.focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("region", { name: "Current Teaching Card" }).getByText(
+    const currentTeachingCard = page.getByRole("region", { name: "Current Teaching Card" });
+    await expect(currentTeachingCard.getByText("Complete", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(currentTeachingCard.getByText(
       "Start from the key definition, then connect each inference to the stated goal.",
       { exact: true }
     )).toBeVisible();

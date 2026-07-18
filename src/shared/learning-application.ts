@@ -749,7 +749,7 @@ export class LearningApplication {
     this.emitState(state);
     this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
     await this.persistence;
-    return state;
+    return this.getState();
   }
 
   private async persist(state: LearningApplicationState): Promise<void> {

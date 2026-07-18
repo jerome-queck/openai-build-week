@@ -300,6 +300,28 @@ describe("Learning Application", () => {
     });
   });
 
+  it("returns the latest Teaching Card when model work completes before submission persistence", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the definition",
+      scope: "Apply the definition once",
+      initialTeachingDirection: "Start from the definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    });
+    runtime.teachingDeltaOnStart = "Use the definition before simplifying.";
+    const { application } = await launchWithRuntime(runtime);
+
+    const returned = await application.submit({
+      type: "submitSessionIntake",
+      mathematics: "Explain compactness."
+    });
+
+    expect(returned.sessions[0].teachingCard).toMatchObject({
+      status: "completed",
+      content: "Use the definition before simplifying."
+    });
+  });
+
   it("restarts active teaching when an immediately accepted proposal is revised", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand the original goal",
@@ -1011,6 +1033,7 @@ class DeterministicModelRuntime implements ModelRuntime {
   proposalError: Error | null = null;
   authenticationError: Error | null = null;
   cancelError: Error | null = null;
+  teachingDeltaOnStart: string | null = null;
 
   constructor(private readonly proposal: SessionProposal, private readonly holdTeaching = false) {}
 
@@ -1040,6 +1063,7 @@ class DeterministicModelRuntime implements ModelRuntime {
     this.teachingRequests.push(request);
     request.onRuntimeEvent?.({ type: "threadStarted", threadId: `thread-${request.sessionId}`, turnId: null, detail: "Thread started." });
     request.onRuntimeEvent?.({ type: "turnStarted", threadId: `thread-${request.sessionId}`, turnId: `turn-${request.sessionId}`, detail: "Turn started." });
+    if (this.teachingDeltaOnStart !== null) request.onDelta(this.teachingDeltaOnStart);
     if (this.holdTeaching) {
       await new Promise<void>((resolve, reject) => {
         this.teachingCompletions.set(request.sessionId, resolve);
