@@ -2290,21 +2290,11 @@ export class LearningApplication {
       },
       fail: (error) => {
         Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true });
-        upsertSuggestedTrailItem(session, `question-card:${card.id}`, "unresolvedQuestion", card.question, {
-          sourceAnchorIds: context.flatMap((item) => item.sourceAnchorId ? [item.sourceAnchorId] : []),
-          teachingCardIds: [],
-          learningArtifactIds: [],
-          understandingEvidenceIds: []
-        });
+        upsertUnresolvedQuestionTrailItem(session, card, context);
       },
       stop: () => {
         interruptCardRevision(revision);
-        upsertSuggestedTrailItem(session, `question-card:${card.id}`, "unresolvedQuestion", card.question, {
-          sourceAnchorIds: context.flatMap((item) => item.sourceAnchorId ? [item.sourceAnchorId] : []),
-          teachingCardIds: [],
-          learningArtifactIds: [],
-          understandingEvidenceIds: []
-        });
+        upsertUnresolvedQuestionTrailItem(session, card, context);
       },
       markUnconfirmed: () => {
         revision.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
@@ -3610,6 +3600,19 @@ function upsertSuggestedTrailItem(
 function removeSuggestedTrailItem(session: LearningSession, curationKey: string): void {
   const index = session.trailDraft.items.findIndex((item) => item.curationKey === curationKey);
   if (index >= 0 && !session.trailDraft.items[index].required) session.trailDraft.items.splice(index, 1);
+}
+
+function upsertUnresolvedQuestionTrailItem(
+  session: LearningSession,
+  card: QuestionCard,
+  context: QuestionContextItem[]
+): void {
+  upsertSuggestedTrailItem(session, `question-card:${card.id}`, "unresolvedQuestion", card.question, {
+    sourceAnchorIds: context.flatMap((item) => item.sourceAnchorId ? [item.sourceAnchorId] : []),
+    teachingCardIds: [],
+    learningArtifactIds: [],
+    understandingEvidenceIds: []
+  });
 }
 
 function requireTrailItem(session: LearningSession, trailItemId: string): TrailItem {
