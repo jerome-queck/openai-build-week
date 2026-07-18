@@ -1438,6 +1438,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       activeSourceAnchorId: typeof session.activeSourceAnchorId === "string" ? session.activeSourceAnchorId : null
     }));
     attachManagedSourcesToLegacySessions(current);
+    for (const session of current.sessions) validateSessionSourceAnchorReferences(current, session);
     return current;
   }
 
@@ -1467,6 +1468,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     };
     migrated.sessions.push(session);
     attachManagedSourcesToLegacySessions(migrated);
+    validateSessionSourceAnchorReferences(migrated, session);
     migrated.resumeSessionId = session.id;
     migrated.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
     migrated.activityOrder = 1;
@@ -1647,6 +1649,23 @@ function attachManagedSourcesToLegacySessions(state: LearningApplicationState): 
     session.sourceIds.push(source.id);
     const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
     if (workspace && !workspace.context.sourceIds.includes(source.id)) workspace.context.sourceIds.push(source.id);
+  }
+}
+
+function validateSessionSourceAnchorReferences(state: LearningApplicationState, session: LearningSession): void {
+  const anchorsById = new Map(session.sourceAnchors.map((anchor) => [anchor.id, anchor]));
+  const sourceIds = new Set(session.sourceIds);
+  const stateSources = new Map(state.sources.map((source) => [source.id, source]));
+  const requestsAreValid = session.sourceAnchorRequests.every((request) => anchorsById.has(request.sourceAnchorId));
+  const anchorsAreValid = session.sourceAnchors.every((anchor) => {
+    const source = stateSources.get(anchor.sourceId);
+    return sourceIds.has(anchor.sourceId) && source?.workspaceId === session.workspaceId;
+  });
+  const activeAnchorIsValid = session.activeSourceAnchorId === null || anchorsById.has(session.activeSourceAnchorId);
+  const identifiersAreUnique = anchorsById.size === session.sourceAnchors.length
+    && new Set(session.sourceAnchorRequests.map((request) => request.id)).size === session.sourceAnchorRequests.length;
+  if (!requestsAreValid || !anchorsAreValid || !activeAnchorIsValid || !identifiersAreUnique) {
+    throw new Error("Stored Source Anchor references are invalid.");
   }
 }
 

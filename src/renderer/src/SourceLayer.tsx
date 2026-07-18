@@ -10,7 +10,7 @@ const SOURCE_CONTEXT_CHARACTERS = 32;
 interface SourceLayerProps {
   sourceId: string;
   content: string;
-  mediaType?: "text/plain" | "image/png" | "image/jpeg";
+  mediaType?: "text/plain" | "image/png" | "image/jpeg" | "application/pdf";
   anchors: SourceAnchor[];
   onChooseAction(selection: SourceAnchorSelection, action: SourceAnchorPaletteAction): void;
 }
@@ -147,7 +147,7 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
       )}
       <article
         ref={sourceRef}
-        className={`source-selection-surface${drawingRegion ? " drawing-region" : ""}`}
+        className={`source-selection-surface${mediaType !== "text/plain" ? " visual-source-surface" : ""}${drawingRegion ? " drawing-region" : ""}`}
         aria-label="Read-only Source Layer"
         tabIndex={0}
         onMouseUp={selectText}
@@ -162,7 +162,9 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
             aria-label={`Select equation ${segment.equationIndex + 1}: ${segment.text}`}
             onClick={(event) => selectEquation(segment, event.currentTarget)}
           >{segment.text}</button>
-        )) : <img className="source-layer-image" src={content} alt="Linked Source diagram" />}
+        )) : mediaType === "application/pdf" ? (
+          <object className="source-layer-pdf" data={content} type="application/pdf" aria-label="Linked PDF Source Layer" />
+        ) : <img className="source-layer-image" src={content} alt="Linked Source diagram" />}
         {anchors.flatMap((anchor) => anchor.selection.kind === "diagramRegion" ? [(
           <span
             className="diagram-anchor-marker"

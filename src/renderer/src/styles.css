@@ -159,6 +159,13 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
   user-select: text;
 }
 .source-selection-surface.drawing-region { cursor: crosshair; user-select: none; }
+.source-selection-surface.visual-source-surface {
+  display: inline-block;
+  min-height: 0;
+  max-width: 100%;
+  padding: 0;
+  line-height: 0;
+}
 .source-equation {
   display: inline;
   margin: 0 2px;
@@ -170,7 +177,9 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
   font: inherit;
 }
 .source-equation:hover, .source-equation:focus-visible { background: #dce9df; }
-.source-layer-image { display: block; width: 100%; max-height: 620px; object-fit: contain; pointer-events: none; }
+.source-layer-image { display: block; width: auto; max-width: 100%; height: auto; max-height: 620px; pointer-events: none; }
+.source-layer-pdf { display: block; width: min(760px, 100%); height: 620px; border: 0; }
+.source-selection-surface.drawing-region .source-layer-pdf { pointer-events: none; }
 .keyboard-region-controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(90px, 1fr));

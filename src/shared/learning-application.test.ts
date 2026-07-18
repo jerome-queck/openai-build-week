@@ -1442,6 +1442,43 @@ describe("Learning Application", () => {
     await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Linked Source is invalid");
   });
 
+  it("rejects persisted Source Anchor references that contradict session ownership", async () => {
+    const { application, dataDirectory } = await launch();
+    const started = await application.submit({ type: "startQuickStudy", mathematics: "Use $a=b$." });
+    const sourceId = started.sessions[0].sourceIds[0];
+    await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "equation",
+        equationIndex: 0,
+        startOffset: 4,
+        endOffset: 9,
+        exactText: "$a=b$",
+        prefix: "Use ",
+        suffix: "."
+      },
+      paletteAction: "explain"
+    });
+    const statePath = join(dataDirectory, "learning-application.json");
+    const valid = JSON.parse(await readFile(statePath, "utf8"));
+
+    const invalidActiveAnchor = structuredClone(valid);
+    invalidActiveAnchor.sessions[0].activeSourceAnchorId = "missing-anchor";
+    await writeFile(statePath, JSON.stringify(invalidActiveAnchor), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+
+    const invalidRequest = structuredClone(valid);
+    invalidRequest.sessions[0].sourceAnchorRequests[0].sourceAnchorId = "missing-anchor";
+    await writeFile(statePath, JSON.stringify(invalidRequest), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+
+    const detachedSource = structuredClone(valid);
+    detachedSource.sessions[0].sourceAnchors[0].sourceId = "other-source";
+    await writeFile(statePath, JSON.stringify(detachedSource), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+  });
+
   it("rejects malformed persisted Session Access Policy state", async () => {
     const { application, dataDirectory } = await launch();
     const started = await application.submit({ type: "startQuickStudy", mathematics: "Check a proof." });

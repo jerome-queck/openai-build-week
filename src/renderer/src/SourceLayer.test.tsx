@@ -151,4 +151,26 @@ describe("Source Layer selection", () => {
     expect(marker.getAttribute("style")).toContain("top: 20%");
     expect(screen.getByText(/Diagram region at 10% left, 20% top/)).toBeTruthy();
   });
+
+  it("keyboard-anchors a bounded region on a linked PDF Source Layer", async () => {
+    const user = userEvent.setup();
+    const onChooseAction = vi.fn();
+    render(<SourceLayer
+      sourceId="pdf-source"
+      content="data:application/pdf;base64,c3ludGhldGljLXBkZg=="
+      mediaType="application/pdf"
+      anchors={[]}
+      onChooseAction={onChooseAction}
+    />);
+
+    expect(screen.getByLabelText("Linked PDF Source Layer")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Define diagram region with keyboard" }));
+    await user.click(screen.getByRole("button", { name: "Use diagram region" }));
+    await user.click(screen.getByRole("button", { name: "Add selected diagram region to the Learning Trail" }));
+
+    expect(onChooseAction).toHaveBeenCalledWith({
+      kind: "diagramRegion",
+      bounds: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 }
+    }, "addToLearningTrail");
+  });
 });
