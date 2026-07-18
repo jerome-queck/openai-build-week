@@ -59,6 +59,7 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "refreshAuthentication":
     case "discardPendingQuestion":
     case "submitPendingQuestion":
+    case "returnToPrerequisiteOrigin":
       return true;
     case "resumeSession":
     case "cancelSessionModelWork":
@@ -107,6 +108,15 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "editLearningGoal":
     case "editSessionTarget":
       return "value" in action && typeof action.value === "string";
+    case "openConceptPeek":
+    case "proposePrerequisiteBranch":
+      return "sourceAnchorId" in action && typeof action.sourceAnchorId === "string"
+        && "prerequisite" in action && typeof action.prerequisite === "string";
+    case "closeConceptPeek":
+      return "conceptPeekId" in action && typeof action.conceptPeekId === "string";
+    case "decidePrerequisiteBranch":
+      return "proposalId" in action && typeof action.proposalId === "string"
+        && "decision" in action && ["accept", "defer", "keepInline"].includes(String(action.decision));
     case "selectSessionAccessPolicy":
       return "policy" in action && ["focused", "workspace", "full"].includes(String(action.policy));
     case "setFullAccessConfirmation":

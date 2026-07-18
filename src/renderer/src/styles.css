@@ -167,6 +167,15 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .argument-roadmap { margin: 0 0 20px; padding: 22px; border: 1px solid #c7d5c9; border-radius: 16px; background: #f4f7ef; }
 .argument-roadmap h2 { font-size: 25px; }
 .argument-roadmap > .subtle { margin: 8px 0 18px; }
+.prerequisite-navigation { display: grid; gap: 14px; margin-bottom: 20px; }
+.prerequisite-navigation nav, .concept-peek, .branch-proposal { padding: 18px; border: 1px solid #c7d5c9; border-radius: 14px; background: #f7f4e9; }
+.prerequisite-navigation nav ol { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 14px; padding: 0; list-style: none; }
+.prerequisite-navigation nav li { display: inline; }
+.concept-peek h2, .branch-proposal h2 { font-size: 22px; }
+.branch-proposal-actions, .immediate-prerequisites li > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.immediate-prerequisites { margin-top: 18px; padding-top: 16px; border-top: 1px solid #c7d5c9; }
+.immediate-prerequisites ul { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.immediate-prerequisites li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .roadmap-stages { margin: 0; padding-left: 24px; }
 .roadmap-stages li { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 10px; border-top: 1px solid #d7dfd4; }
 .roadmap-stages li.selected { border-radius: 10px; background: #e7efe5; }

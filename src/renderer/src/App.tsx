@@ -22,6 +22,7 @@ type StateHandler = (state: LearningApplicationState) => void;
 
 export function App() {
   const [state, setState] = useState<LearningApplicationState | null>(null);
+  const [returnFocusAnchorId, setReturnFocusAnchorId] = useState<string | null>(null);
 
   useEffect(() => {
     void window.quickStudy.getState().then(setState);
@@ -30,7 +31,16 @@ export function App() {
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
   if (state.screen === "workbench" && state.activeSessionId) {
-    return <Workbench key={state.activeSessionId} state={state} onState={setState} />;
+    return <Workbench
+      key={state.activeSessionId}
+      state={state}
+      onState={setState}
+      returnFocusAnchorId={returnFocusAnchorId}
+      onReturnToOrigin={(nextState, sourceAnchorId) => {
+        setReturnFocusAnchorId(sourceAnchorId);
+        setState(nextState);
+      }}
+    />;
   }
   return <Dashboard state={state} onState={setState} />;
 }
@@ -471,13 +481,19 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                             {sessions.map((session) => (
                               <li key={session.id}>
                                 <button
-                                  aria-label={`Resume grouped Learning Session ${session.learningGoal}`}
+                                  aria-label={session.prerequisiteBranch
+                                    ? `Resume Prerequisite Branch ${session.prerequisiteBranch.prerequisite}, linked from ${
+                                      state.sessions.find((candidate) => candidate.id === session.prerequisiteBranch?.returnPoint.originSessionId)?.learningGoal
+                                        ?? "originating Learning Session"
+                                    }`
+                                    : `Resume grouped Learning Session ${session.learningGoal}`}
                                   onClick={() => void window.quickStudy.submit({
                                     type: "resumeSession",
                                     sessionId: session.id
                                   }).then(onState)}
                                 >
                                   {session.learningGoal}
+                                  {session.prerequisiteBranch && <small>Prerequisite Branch · {session.prerequisiteBranch.prerequisite}</small>}
                                 </button>
                               </li>
                             ))}
@@ -756,7 +772,12 @@ function MissionHistory({ workspace, mission, state, onState }: {
   );
 }
 
-function Workbench({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+function Workbench({ state, onState, returnFocusAnchorId, onReturnToOrigin }: {
+  state: LearningApplicationState;
+  onState: StateHandler;
+  returnFocusAnchorId: string | null;
+  onReturnToOrigin(state: LearningApplicationState, sourceAnchorId: string): void;
+}) {
   const session = state.sessions.find((candidate) => candidate.id === state.activeSessionId)!;
   const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === session.missionId)!;
@@ -764,7 +785,7 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
   const [target, setTarget] = useState(session.sessionTarget);
   const [direction, setDirection] = useState(session.proposal.initialTeachingDirection);
   const [inspectorCardId, setInspectorCardId] = useState<string | null>(null);
-  const [focusAnchorId, setFocusAnchorId] = useState<string | null>(null);
+  const [focusAnchorId, setFocusAnchorId] = useState<string | null>(returnFocusAnchorId);
   const [workbenchError, setWorkbenchError] = useState<string | null>(null);
   const inspectorCard = session.anchoredTeachingCards.find((card) => card.id === inspectorCardId) ?? null;
   const inspectorArtifact = inspectorCard?.artifactId
@@ -825,6 +846,12 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
             <button className="secondary" onClick={() => void leave()}>Leave session</button>
           </aside>
           <section className="math-canvas">
+            <PrerequisiteNavigation
+              state={state}
+              session={session}
+              onState={onState}
+              onReturnToOrigin={onReturnToOrigin}
+            />
             <div className="canvas-heading">
               <div><p className="eyebrow">Source Layer</p><h2>Session source</h2></div>
               <span className="saved">Saved locally</span>
@@ -903,6 +930,80 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
   );
 }
 
+function PrerequisiteNavigation({ state, session, onState, onReturnToOrigin }: {
+  state: LearningApplicationState;
+  session: LearningSession;
+  onState: StateHandler;
+  onReturnToOrigin(state: LearningApplicationState, sourceAnchorId: string): void;
+}) {
+  const branchTrail: LearningSession[] = [];
+  let cursor: LearningSession | undefined = session;
+  const visited = new Set<string>();
+  while (cursor && !visited.has(cursor.id)) {
+    visited.add(cursor.id);
+    branchTrail.unshift(cursor);
+    cursor = cursor.prerequisiteBranch
+      ? state.sessions.find((candidate) => candidate.id === cursor!.prerequisiteBranch!.returnPoint.originSessionId)
+      : undefined;
+  }
+  const pending = session.prerequisiteBranchProposals.filter((proposal) => proposal.status === "pending");
+  const openPeeks = session.conceptPeeks.filter((peek) => peek.status === "open");
+  const returnToOrigin = async () => {
+    const returnPoint = session.prerequisiteBranch?.returnPoint;
+    if (!returnPoint) return;
+    const nextState = await window.quickStudy.submit({ type: "returnToPrerequisiteOrigin" });
+    onReturnToOrigin(nextState, returnPoint.sourceAnchorId);
+  };
+  if (!session.prerequisiteBranch && pending.length === 0 && openPeeks.length === 0) return null;
+  return (
+    <section className="prerequisite-navigation" aria-label="Prerequisite navigation">
+      {session.prerequisiteBranch && (
+        <nav aria-label="Branch Trail">
+          <p className="eyebrow">Branch Trail</p>
+          <ol>
+            {branchTrail.map((trailSession, index) => (
+              <li key={trailSession.id} aria-current={trailSession.id === session.id ? "page" : undefined}>
+                {index > 0 && <span aria-hidden="true"> → </span>}
+                <span>{trailSession.prerequisiteBranch?.prerequisite ?? trailSession.learningGoal}</span>
+              </li>
+            ))}
+          </ol>
+          <button className="primary" onClick={() => void returnToOrigin()}>
+            Return to {session.prerequisiteBranch.returnPoint.label}
+          </button>
+        </nav>
+      )}
+      {openPeeks.map((peek) => (
+        <article key={peek.id} className="concept-peek" aria-label={`Concept Peek ${peek.prerequisite}`}>
+          <div><p className="eyebrow">Concept Peek</p><h2>{peek.prerequisite}</h2></div>
+          <p>{peek.content}</p>
+          <button className="text-button" aria-label={`Close Concept Peek ${peek.prerequisite}`} onClick={() => void window.quickStudy.submit({
+            type: "closeConceptPeek", conceptPeekId: peek.id
+          }).then(onState)}>Close peek</button>
+        </article>
+      ))}
+      {pending.map((proposal) => (
+        <article key={proposal.id} className="branch-proposal" aria-label={`Prerequisite Branch proposal ${proposal.prerequisite}`}>
+          <p className="eyebrow">Learner approval required</p>
+          <h2>Study {proposal.prerequisite} in a Prerequisite Branch?</h2>
+          <p>This substantial prerequisite would open a linked Learning Session with its own Mathematical Workbench.</p>
+          <div className="branch-proposal-actions">
+            <button className="primary" aria-label={`Accept Prerequisite Branch ${proposal.prerequisite}`} onClick={() => void window.quickStudy.submit({
+              type: "decidePrerequisiteBranch", proposalId: proposal.id, decision: "accept"
+            }).then(onState)}>Open branch</button>
+            <button className="secondary" aria-label={`Keep ${proposal.prerequisite} inline as a Concept Peek`} onClick={() => void window.quickStudy.submit({
+              type: "decidePrerequisiteBranch", proposalId: proposal.id, decision: "keepInline"
+            }).then(onState)}>Keep inline instead</button>
+            <button className="text-button" aria-label={`Defer Prerequisite Branch ${proposal.prerequisite}`} onClick={() => void window.quickStudy.submit({
+              type: "decidePrerequisiteBranch", proposalId: proposal.id, decision: "defer"
+            }).then(onState)}>Defer</button>
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function ArgumentRoadmapPanel({ state, session, onState }: {
   state: LearningApplicationState;
   session: LearningSession;
@@ -917,6 +1018,7 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
     setPrerequisites(session.learningSlice?.immediatePrerequisites.join("\n") ?? "");
   }, [session.id, session.learningSlice?.boundary, session.learningSlice?.immediatePrerequisites]);
   if (!roadmap || !session.learningSlice) return null;
+  const activeStage = roadmap.stages.find((stage) => stage.id === session.learningSlice?.stageId);
   const editable = session.proposal.status === "awaitingConfirmation";
   const save = async () => {
     setError(null);
@@ -991,6 +1093,22 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
           onChange={(event) => setPrerequisites(event.target.value)} />
         {editable && <button className="secondary" disabled={!boundary.trim()} onClick={() => void save()}>Save Learning Slice</button>}
       </div>
+      {activeStage && session.learningSlice.immediatePrerequisites.length > 0 && (
+        <section className="immediate-prerequisites" aria-label="Learning Slice prerequisite choices">
+          <p className="proposal-label">Handle a prerequisite without losing orientation</p>
+          <ul>{session.learningSlice.immediatePrerequisites.map((prerequisite) => <li key={prerequisite}>
+            <span>{prerequisite}</span>
+            <div>
+              <button className="secondary" aria-label={`Open Concept Peek ${prerequisite}`} onClick={() => void window.quickStudy.submit({
+                type: "openConceptPeek", sourceAnchorId: activeStage.sourceAnchorId, prerequisite
+              }).then(onState)}>Open Concept Peek</button>
+              <button className="text-button" aria-label={`Propose Prerequisite Branch ${prerequisite}`} onClick={() => void window.quickStudy.submit({
+                type: "proposePrerequisiteBranch", sourceAnchorId: activeStage.sourceAnchorId, prerequisite
+              }).then(onState)}>Study as branch</button>
+            </div>
+          </li>)}</ul>
+        </section>
+      )}
       {error && <p className="failure-message" role="alert">{error}</p>}
     </section>
   );

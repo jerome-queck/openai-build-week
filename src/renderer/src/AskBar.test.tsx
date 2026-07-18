@@ -157,6 +157,7 @@ function questionSession(): LearningSession {
     pendingQuestion: null, askBarContext: { items, includedIds: items.slice(0, 4).map((item) => item.id), customized: true },
     questionCards: [], activeQuestionCardId: null, accessPolicy: "workspace", accessRequests: [], pendingFullAccessConfirmation: false,
     sourceAnchors: [], sourceAnchorRequests: [], activeSourceAnchorId: "anchor-1", anchoredTeachingCards: [], activeTeachingCardId: null,
+    conceptPeeks: [], prerequisiteBranchProposals: [], prerequisiteBranch: null,
     learningArtifacts: [], learningSlice: null
   };
 }

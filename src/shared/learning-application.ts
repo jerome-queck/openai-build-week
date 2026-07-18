@@ -410,6 +410,33 @@ export interface LearningSlice {
   immediatePrerequisites: string[];
 }
 
+export interface ConceptPeek {
+  id: string;
+  sourceAnchorId: string;
+  prerequisite: string;
+  content: string;
+  status: "open" | "closed";
+}
+
+export interface PrerequisiteBranchProposal {
+  id: string;
+  sourceAnchorId: string;
+  prerequisite: string;
+  status: "pending" | "accepted" | "deferred" | "overridden";
+  branchSessionId: string | null;
+}
+
+export interface PrerequisiteBranch {
+  prerequisite: string;
+  returnPoint: {
+    originSessionId: string;
+    sourceId: string;
+    sourceAnchorId: string;
+    activeTeachingCardId: string | null;
+    label: string;
+  };
+}
+
 export interface StudyLocation {
   workspaceId: string;
   missionId: string;
@@ -453,6 +480,9 @@ export interface LearningSession {
   activeTeachingCardId: string | null;
   learningArtifacts: LearningArtifact[];
   learningSlice: LearningSlice | null;
+  conceptPeeks: ConceptPeek[];
+  prerequisiteBranchProposals: PrerequisiteBranchProposal[];
+  prerequisiteBranch: PrerequisiteBranch | null;
 }
 
 export interface LearningApplicationState {
@@ -544,6 +574,15 @@ export type LearnerAction =
   | { type: "editSessionTarget"; value: string }
   | { type: "selectRoadmapStage"; roadmapId: string; stageId: string }
   | { type: "reviseLearningSlice"; boundary: string; immediatePrerequisites: string[] }
+  | { type: "openConceptPeek"; sourceAnchorId: string; prerequisite: string }
+  | { type: "closeConceptPeek"; conceptPeekId: string }
+  | { type: "proposePrerequisiteBranch"; sourceAnchorId: string; prerequisite: string }
+  | {
+      type: "decidePrerequisiteBranch";
+      proposalId: string;
+      decision: "accept" | "defer" | "keepInline";
+    }
+  | { type: "returnToPrerequisiteOrigin" }
   | { type: "leaveSession" }
   | { type: "resumeSession"; sessionId: string }
   | { type: "createWorkspace"; name: string }
@@ -1270,7 +1309,10 @@ export class LearningApplication {
           anchoredTeachingCards: [],
           activeTeachingCardId: null,
           learningArtifacts: [],
-          learningSlice: null
+          learningSlice: null,
+          conceptPeeks: [],
+          prerequisiteBranchProposals: [],
+          prerequisiteBranch: null
         };
         refreshAskBarContext(this.state, session);
         this.state.sessions.push(session);
@@ -1371,7 +1413,10 @@ export class LearningApplication {
           anchoredTeachingCards: [],
           activeTeachingCardId: null,
           learningArtifacts: [],
-          learningSlice: null
+          learningSlice: null,
+          conceptPeeks: [],
+          prerequisiteBranchProposals: [],
+          prerequisiteBranch: null
         };
         refreshAskBarContext(this.state, session);
         this.agentWorkLogs[session.id] = pendingLog;
@@ -1678,6 +1723,163 @@ export class LearningApplication {
         refreshAskBarContext(this.state, session);
         break;
       }
+      case "openConceptPeek": {
+        const session = this.requireActiveSession();
+        const anchor = requireSourceAnchor(session, action.sourceAnchorId);
+        const prerequisite = requiredName(action.prerequisite, "Concept Peek prerequisite");
+        const existing = session.conceptPeeks.find(
+          (peek) => peek.sourceAnchorId === anchor.id && peek.prerequisite === prerequisite
+        );
+        if (existing) {
+          existing.status = "open";
+        } else {
+          session.conceptPeeks.push({
+            id: crypto.randomUUID(),
+            sourceAnchorId: anchor.id,
+            prerequisite,
+            content: `Keep ${prerequisite} in view at ${sourceAnchorLocation(anchor)} while continuing this Learning Session.`,
+            status: "open"
+          });
+        }
+        session.activeSourceAnchorId = anchor.id;
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "closeConceptPeek": {
+        const session = this.requireActiveSession();
+        const peek = session.conceptPeeks.find((candidate) => candidate.id === action.conceptPeekId);
+        if (!peek) throw new Error("Choose a Concept Peek in the active Learning Session.");
+        peek.status = "closed";
+        break;
+      }
+      case "proposePrerequisiteBranch": {
+        const session = this.requireActiveSession();
+        const anchor = requireSourceAnchor(session, action.sourceAnchorId);
+        session.prerequisiteBranchProposals.push({
+          id: crypto.randomUUID(),
+          sourceAnchorId: anchor.id,
+          prerequisite: requiredName(action.prerequisite, "Prerequisite Branch"),
+          status: "pending",
+          branchSessionId: null
+        });
+        session.activeSourceAnchorId = anchor.id;
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "decidePrerequisiteBranch": {
+        const origin = this.requireActiveSession();
+        const proposal = origin.prerequisiteBranchProposals.find((candidate) => candidate.id === action.proposalId);
+        if (!proposal || proposal.status !== "pending") {
+          throw new Error("Choose a pending Prerequisite Branch proposal in this Learning Session.");
+        }
+        if (action.decision === "defer") {
+          proposal.status = "deferred";
+          break;
+        }
+        if (action.decision === "keepInline") {
+          proposal.status = "overridden";
+          const existing = origin.conceptPeeks.find(
+            (peek) => peek.sourceAnchorId === proposal.sourceAnchorId && peek.prerequisite === proposal.prerequisite
+          );
+          if (existing) existing.status = "open";
+          else {
+            const anchor = requireSourceAnchor(origin, proposal.sourceAnchorId);
+            origin.conceptPeeks.push({
+              id: crypto.randomUUID(),
+              sourceAnchorId: anchor.id,
+              prerequisite: proposal.prerequisite,
+              content: `Keep ${proposal.prerequisite} in view at ${sourceAnchorLocation(anchor)} while continuing this Learning Session.`,
+              status: "open"
+            });
+          }
+          break;
+        }
+        if (this.modelWorks.has(origin.id)) throw new Error("Stop current teaching before opening a Prerequisite Branch.");
+        const anchor = requireSourceAnchor(origin, proposal.sourceAnchorId);
+        const branch: LearningSession = {
+          id: crypto.randomUUID(),
+          workspaceId: origin.workspaceId,
+          missionId: origin.missionId,
+          mathematics: origin.mathematics,
+          sourceIds: [...origin.sourceIds],
+          learningGoal: `Understand ${proposal.prerequisite}`,
+          sessionTarget: proposal.prerequisite,
+          status: "active",
+          activityOrder: this.nextActivityOrder(),
+          returnContext: {
+            label: `Prerequisite Branch · ${proposal.prerequisite}`,
+            nextAction: `Return to ${sourceAnchorLocation(anchor)} when ready`
+          },
+          proposal: {
+            scope: proposal.prerequisite,
+            initialTeachingDirection: `Build the prerequisite needed at ${sourceAnchorLocation(anchor)}`,
+            status: "accepted",
+            confirmationReason: null
+          },
+          teachingCard: emptyTeachingCard(),
+          teachingCardHistory: [],
+          submittedPendingQuestions: [],
+          currentTeachingInput: { kind: "sessionIntake", text: proposal.prerequisite },
+          pendingQuestion: null,
+          askBarContext: emptyAskBarContext(),
+          questionCards: [],
+          activeQuestionCardId: null,
+          accessPolicy: origin.accessPolicy,
+          accessRequests: [],
+          pendingFullAccessConfirmation: false,
+          sourceAnchors: [],
+          sourceAnchorRequests: [],
+          activeSourceAnchorId: null,
+          anchoredTeachingCards: [],
+          activeTeachingCardId: null,
+          learningArtifacts: [],
+          learningSlice: null,
+          conceptPeeks: [],
+          prerequisiteBranchProposals: [],
+          prerequisiteBranch: {
+            prerequisite: proposal.prerequisite,
+            returnPoint: {
+              originSessionId: origin.id,
+              sourceId: anchor.sourceId,
+              sourceAnchorId: anchor.id,
+              activeTeachingCardId: origin.activeTeachingCardId,
+              label: sourceAnchorLocation(anchor)
+            }
+          }
+        };
+        origin.status = "paused";
+        proposal.status = "accepted";
+        proposal.branchSessionId = branch.id;
+        refreshAskBarContext(this.state, branch);
+        this.state.sessions.push(branch);
+        this.state.activeSessionId = branch.id;
+        this.state.resumeSessionId = branch.id;
+        this.state.navigation = { workspaceId: branch.workspaceId, missionId: branch.missionId };
+        break;
+      }
+      case "returnToPrerequisiteOrigin": {
+        const branch = this.requireActiveSession();
+        if (!branch.prerequisiteBranch) throw new Error("This Learning Session is not a Prerequisite Branch.");
+        const returnPoint = branch.prerequisiteBranch.returnPoint;
+        const origin = this.requireSession(returnPoint.originSessionId);
+        requireSourceAnchor(origin, returnPoint.sourceAnchorId);
+        if (returnPoint.activeTeachingCardId
+          && !origin.anchoredTeachingCards.some((card) => card.id === returnPoint.activeTeachingCardId)) {
+          throw new Error("The Return Point teaching context is no longer available.");
+        }
+        branch.status = "paused";
+        origin.status = "active";
+        origin.activeSourceAnchorId = returnPoint.sourceAnchorId;
+        origin.activeTeachingCardId = returnPoint.activeTeachingCardId;
+        origin.activityOrder = this.nextActivityOrder();
+        this.state.activeSessionId = origin.id;
+        this.state.resumeSessionId = origin.id;
+        this.state.navigation = { workspaceId: origin.workspaceId, missionId: origin.missionId };
+        refreshAskBarContext(this.state, origin);
+        break;
+      }
       case "fileSession": {
         const session = this.requireSession(action.sessionId);
         this.requireNamedWorkspace(action.workspaceId);
@@ -1687,25 +1889,24 @@ export class LearningApplication {
         }
         const originalWorkspace = this.requireWorkspace(session.workspaceId);
         const destinationWorkspace = this.requireWorkspace(action.workspaceId);
-        for (const sourceId of session.sourceIds) {
+        const linkedSessions = this.linkedSessionsForFiling(session);
+        const linkedSourceIds = new Set(linkedSessions.flatMap((linkedSession) => linkedSession.sourceIds));
+        for (const sourceId of linkedSourceIds) {
           const source = this.state.sources.find((candidate) => candidate.id === sourceId);
           if (!source || source.workspaceId !== originalWorkspace.id) continue;
           source.workspaceId = destinationWorkspace.id;
           originalWorkspace.context.sourceIds = originalWorkspace.context.sourceIds.filter((id) => id !== sourceId);
           if (!destinationWorkspace.context.sourceIds.includes(sourceId)) destinationWorkspace.context.sourceIds.push(sourceId);
         }
-        const linkedSessions = session.learningSlice
-          ? this.state.sessions.filter((candidate) => candidate.learningSlice?.roadmapId === session.learningSlice?.roadmapId)
-          : [session];
         for (const linkedSession of linkedSessions) {
           linkedSession.workspaceId = action.workspaceId;
           linkedSession.missionId = action.missionId;
           refreshAskBarContext(this.state, linkedSession);
         }
-        const roadmap = session.learningSlice
-          ? this.state.argumentRoadmaps.find((candidate) => candidate.id === session.learningSlice?.roadmapId)
-          : null;
-        if (roadmap) roadmap.missionId = action.missionId;
+        const roadmapIds = new Set(linkedSessions.flatMap((linkedSession) => linkedSession.learningSlice?.roadmapId ?? []));
+        for (const roadmap of this.state.argumentRoadmaps) {
+          if (roadmapIds.has(roadmap.id)) roadmap.missionId = action.missionId;
+        }
         session.activityOrder = this.nextActivityOrder();
         this.state.resumeSessionId = session.id;
         this.state.navigation = { workspaceId: action.workspaceId, missionId: action.missionId };
@@ -2389,7 +2590,10 @@ export class LearningApplication {
         anchoredTeachingCards: [],
         activeTeachingCardId: null,
         learningArtifacts: [],
-        learningSlice
+        learningSlice,
+        conceptPeeks: [],
+        prerequisiteBranchProposals: [],
+        prerequisiteBranch: null
       };
     });
     for (const session of sessions) refreshAskBarContext(this.state, session);
@@ -2470,6 +2674,34 @@ export class LearningApplication {
     const workspace = this.requireNamedWorkspace(location.workspaceId);
     const mission = this.requireMission(workspace.id, location.missionId);
     return { workspaceId: workspace.id, missionId: mission.id, accessPolicy: "workspace" };
+  }
+
+  private linkedSessionsForFiling(start: LearningSession): LearningSession[] {
+    const linkedIds = new Set([start.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const session of this.state.sessions) {
+        const linkedByRoadmap = session.learningSlice && this.state.sessions.some((candidate) => linkedIds.has(candidate.id)
+          && candidate.learningSlice?.roadmapId === session.learningSlice?.roadmapId);
+        const linkedByOrigin = session.prerequisiteBranch
+          && linkedIds.has(session.prerequisiteBranch.returnPoint.originSessionId);
+        const linksKnownBranch = session.prerequisiteBranch
+          && linkedIds.has(session.id) && !linkedIds.has(session.prerequisiteBranch.returnPoint.originSessionId);
+        const hasKnownBranch = session.prerequisiteBranchProposals.some(
+          (proposal) => proposal.branchSessionId !== null && linkedIds.has(proposal.branchSessionId)
+        );
+        if ((linkedByRoadmap || linkedByOrigin || linksKnownBranch || hasKnownBranch) && !linkedIds.has(session.id)) {
+          linkedIds.add(session.id);
+          changed = true;
+        }
+        if (linksKnownBranch) {
+          linkedIds.add(session.prerequisiteBranch!.returnPoint.originSessionId);
+          changed = true;
+        }
+      }
+    }
+    return this.state.sessions.filter((session) => linkedIds.has(session.id));
   }
 
   private pauseActiveSession(): void {
@@ -2613,7 +2845,10 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       anchoredTeachingCards: migrateAnchoredTeachingCards(session.anchoredTeachingCards),
       activeTeachingCardId: typeof session.activeTeachingCardId === "string" ? session.activeTeachingCardId : null,
       learningArtifacts: migrateLearningArtifacts(session.learningArtifacts),
-      learningSlice: migrateLearningSlice(session.learningSlice)
+      learningSlice: migrateLearningSlice(session.learningSlice),
+      conceptPeeks: migrateConceptPeeks(session.conceptPeeks),
+      prerequisiteBranchProposals: migratePrerequisiteBranchProposals(session.prerequisiteBranchProposals),
+      prerequisiteBranch: migratePrerequisiteBranch(session.prerequisiteBranch)
     }));
     attachManagedSourcesToLegacySessions(current);
     for (const session of current.sessions) {
@@ -2622,6 +2857,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       refreshAskBarContext(current, session);
     }
     validateArgumentRoadmapReferences(current);
+    validatePrerequisiteBranchReferences(current);
     return current;
   }
 
@@ -2654,11 +2890,15 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       anchoredTeachingCards: [],
       activeTeachingCardId: null,
       learningArtifacts: [],
-      learningSlice: null
+      learningSlice: null,
+      conceptPeeks: [],
+      prerequisiteBranchProposals: [],
+      prerequisiteBranch: null
     };
     migrated.sessions.push(session);
     attachManagedSourcesToLegacySessions(migrated);
     validateSessionSourceAnchorReferences(migrated, session);
+    validatePrerequisiteBranchReferences(migrated);
     refreshAskBarContext(migrated, session);
     migrated.resumeSessionId = session.id;
     migrated.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
@@ -2705,6 +2945,42 @@ function migrateLearningSlice(value: unknown): LearningSlice | null {
   return value as unknown as LearningSlice;
 }
 
+function migrateConceptPeeks(value: unknown): ConceptPeek[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((peek) => !isRecord(peek)
+    || typeof peek.id !== "string" || typeof peek.sourceAnchorId !== "string"
+    || typeof peek.prerequisite !== "string" || !peek.prerequisite.trim()
+    || typeof peek.content !== "string" || !peek.content.trim()
+    || !["open", "closed"].includes(String(peek.status)))) {
+    throw new Error("Stored Concept Peeks are invalid.");
+  }
+  return value as ConceptPeek[];
+}
+
+function migratePrerequisiteBranchProposals(value: unknown): PrerequisiteBranchProposal[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((proposal) => !isRecord(proposal)
+    || typeof proposal.id !== "string" || typeof proposal.sourceAnchorId !== "string"
+    || typeof proposal.prerequisite !== "string" || !proposal.prerequisite.trim()
+    || !["pending", "accepted", "deferred", "overridden"].includes(String(proposal.status))
+    || !(proposal.branchSessionId === null || typeof proposal.branchSessionId === "string"))) {
+    throw new Error("Stored Prerequisite Branch proposals are invalid.");
+  }
+  return value as PrerequisiteBranchProposal[];
+}
+
+function migratePrerequisiteBranch(value: unknown): PrerequisiteBranch | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || typeof value.prerequisite !== "string" || !value.prerequisite.trim()
+    || !isRecord(value.returnPoint) || typeof value.returnPoint.originSessionId !== "string"
+    || typeof value.returnPoint.sourceId !== "string" || typeof value.returnPoint.sourceAnchorId !== "string"
+    || !(value.returnPoint.activeTeachingCardId === null || typeof value.returnPoint.activeTeachingCardId === "string")
+    || typeof value.returnPoint.label !== "string" || !value.returnPoint.label.trim()) {
+    throw new Error("Stored Prerequisite Branch is invalid.");
+  }
+  return value as unknown as PrerequisiteBranch;
+}
+
 function validateArgumentRoadmapReferences(state: LearningApplicationState): void {
   const missionIds = new Set(state.missions.map((mission) => mission.id));
   const sourceIds = new Set(state.sources.map((source) => source.id));
@@ -2728,6 +3004,37 @@ function validateArgumentRoadmapReferences(state: LearningApplicationState): voi
   if (state.sessions.some((session) => session.learningSlice
     && !state.argumentRoadmaps.some((roadmap) => roadmap.id === session.learningSlice?.roadmapId))) {
     throw new Error("Stored Learning Slice references are invalid.");
+  }
+}
+
+function validatePrerequisiteBranchReferences(state: LearningApplicationState): void {
+  const sessions = new Map(state.sessions.map((session) => [session.id, session]));
+  for (const session of state.sessions) {
+    const anchorIds = new Set(session.sourceAnchors.map((anchor) => anchor.id));
+    if (session.conceptPeeks.some((peek) => !anchorIds.has(peek.sourceAnchorId))
+      || session.prerequisiteBranchProposals.some((proposal) => !anchorIds.has(proposal.sourceAnchorId))) {
+      throw new Error("Stored prerequisite navigation references are invalid.");
+    }
+    for (const proposal of session.prerequisiteBranchProposals) {
+      if (proposal.status === "accepted") {
+        const branch = proposal.branchSessionId ? sessions.get(proposal.branchSessionId) : null;
+        if (!branch || branch.prerequisiteBranch?.returnPoint.originSessionId !== session.id) {
+          throw new Error("Stored Prerequisite Branch relationship is invalid.");
+        }
+      } else if (proposal.branchSessionId !== null) {
+        throw new Error("Stored Prerequisite Branch proposal is invalid.");
+      }
+    }
+    if (!session.prerequisiteBranch) continue;
+    const origin = sessions.get(session.prerequisiteBranch.returnPoint.originSessionId);
+    const returnPoint = session.prerequisiteBranch.returnPoint;
+    if (!origin || origin.workspaceId !== session.workspaceId || origin.missionId !== session.missionId
+      || !origin.sourceIds.includes(returnPoint.sourceId)
+      || !origin.sourceAnchors.some((anchor) => anchor.id === returnPoint.sourceAnchorId && anchor.sourceId === returnPoint.sourceId)
+      || (returnPoint.activeTeachingCardId !== null
+        && !origin.anchoredTeachingCards.some((card) => card.id === returnPoint.activeTeachingCardId))) {
+      throw new Error("Stored Prerequisite Branch Return Point is invalid.");
+    }
   }
 }
 

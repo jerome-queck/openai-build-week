@@ -114,6 +114,119 @@ describe("anchored teaching workbench", () => {
     await user.click(screen.getByRole("button", { name: "Show Source Anchor for Compact subsets are closed" }));
     expect((await screen.findByRole("alert")).textContent).toContain("The roadmap Source Anchor is stale.");
   });
+
+  it("keeps prerequisite decisions accessible and restores focus from a Branch Trail Return Point", async () => {
+    const user = userEvent.setup();
+    const originState = workbenchState();
+    const origin = originState.sessions[0];
+    origin.learningSlice = {
+      roadmapId: "roadmap-1", stageId: "stage-1", boundary: "Prove compact subsets are closed",
+      immediatePrerequisites: ["Hausdorff separation"]
+    };
+    originState.argumentRoadmaps = [{
+      id: "roadmap-1", missionId: origin.missionId, sourceId: "source-1",
+      title: "Compactness route", selectedStageId: "stage-1",
+      stages: [{
+        id: "stage-1", title: "Compact subsets are closed", majorClaim: "Every compact subset is closed.",
+        dependsOnStageIds: [], sourceAnchorId: "anchor-1", sessionId: origin.id
+      }]
+    }];
+    origin.conceptPeeks = [{
+      id: "peek-1", sourceAnchorId: "anchor-1", prerequisite: "Hausdorff separation",
+      content: "Keep Hausdorff separation in view at the selected claim.", status: "open"
+    }];
+    origin.prerequisiteBranchProposals = [{
+      id: "proposal-1", sourceAnchorId: "anchor-1", prerequisite: "finite subcover arguments",
+      status: "pending", branchSessionId: null
+    }];
+    window.quickStudy = quickStudyApi(originState);
+
+    render(<App />);
+
+    expect((await screen.findByRole("article", { name: "Concept Peek Hausdorff separation" })).textContent)
+      .toContain("Keep Hausdorff separation in view");
+    const openPeek = screen.getByRole("button", { name: "Open Concept Peek Hausdorff separation" });
+    openPeek.focus();
+    await user.keyboard("{Enter}");
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "openConceptPeek", sourceAnchorId: "anchor-1", prerequisite: "Hausdorff separation"
+    });
+    await user.click(screen.getByRole("button", { name: "Propose Prerequisite Branch Hausdorff separation" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "proposePrerequisiteBranch", sourceAnchorId: "anchor-1", prerequisite: "Hausdorff separation"
+    });
+    await user.click(screen.getByRole("button", { name: "Close Concept Peek Hausdorff separation" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "closeConceptPeek", conceptPeekId: "peek-1" });
+    await user.click(screen.getByRole("button", { name: "Accept Prerequisite Branch finite subcover arguments" }));
+    await user.click(screen.getByRole("button", { name: "Keep finite subcover arguments inline as a Concept Peek" }));
+    await user.click(screen.getByRole("button", { name: "Defer Prerequisite Branch finite subcover arguments" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "accept"
+    });
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "keepInline"
+    });
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "defer"
+    });
+
+    cleanup();
+    origin.conceptPeeks = [];
+    origin.prerequisiteBranchProposals = [{
+      id: "proposal-1", sourceAnchorId: "anchor-1", prerequisite: "finite subcover arguments",
+      status: "accepted", branchSessionId: "branch-1"
+    }];
+    origin.status = "paused";
+    const branch = structuredClone(origin);
+    branch.id = "branch-1";
+    branch.learningGoal = "Understand finite subcover arguments";
+    branch.sessionTarget = "finite subcover arguments";
+    branch.status = "active";
+    branch.sourceAnchors = [];
+    branch.sourceAnchorRequests = [];
+    branch.activeSourceAnchorId = null;
+    branch.anchoredTeachingCards = [];
+    branch.activeTeachingCardId = null;
+    branch.learningArtifacts = [];
+    branch.learningSlice = null;
+    branch.prerequisiteBranchProposals = [];
+    branch.prerequisiteBranch = {
+      prerequisite: "finite subcover arguments",
+      returnPoint: {
+        originSessionId: origin.id,
+        sourceId: "source-1",
+        sourceAnchorId: "anchor-1",
+        activeTeachingCardId: "card-1",
+        label: "Text Source Anchor: compact subset (characters 6–20)"
+      }
+    };
+    const branchState = structuredClone(originState);
+    branchState.sessions = [structuredClone(origin), branch];
+    branchState.activeSessionId = branch.id;
+    branchState.resumeSessionId = branch.id;
+    const returnedState = structuredClone(originState);
+    returnedState.sessions[0].status = "active";
+    returnedState.activeSessionId = origin.id;
+    const api = quickStudyApi(branchState);
+    vi.mocked(api.submit).mockImplementation(async (action) => action.type === "returnToPrerequisiteOrigin" ? returnedState : branchState);
+    window.quickStudy = api;
+
+    render(<App />);
+    const trail = await screen.findByRole("navigation", { name: "Branch Trail" });
+    expect(trail.textContent).toContain("Understand compactness");
+    expect(trail.textContent).toContain("finite subcover arguments");
+    expect(screen.getByRole("button", {
+      name: "Resume Prerequisite Branch finite subcover arguments, linked from Understand compactness"
+    })).toBeTruthy();
+    const returnButton = screen.getByRole("button", { name: "Return to Text Source Anchor: compact subset (characters 6–20)" });
+    returnButton.focus();
+    await user.keyboard("{Enter}");
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "returnToPrerequisiteOrigin" });
+    const marker = await screen.findByRole("button", {
+      name: "Open Anchor Marker for Text Source Anchor: compact subset (characters 6–20)"
+    });
+    expect(marker).toBe(document.activeElement);
+  });
 });
 
 function quickStudyApi(state: LearningApplicationState): typeof window.quickStudy {
@@ -194,6 +307,9 @@ function workbenchState(): LearningApplicationState {
         revisions: [], variants: [], artifactId: "artifact-1"
       }],
       activeTeachingCardId: "card-1",
+      conceptPeeks: [],
+      prerequisiteBranchProposals: [],
+      prerequisiteBranch: null,
       learningArtifacts: [{
         id: "artifact-1",
         title: "Explain compact subset",

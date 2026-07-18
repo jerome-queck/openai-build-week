@@ -1377,6 +1377,198 @@ describe("Learning Application", () => {
     ]);
   });
 
+  it("opens and closes an anchored Concept Peek without creating or lengthening a Learning Session", async () => {
+    const { application, dataDirectory } = await launch();
+    let state = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Every compact subset of a Hausdorff space is closed."
+    });
+    const origin = state.sessions[0];
+    const sourceId = origin.sourceIds[0];
+    state = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text",
+        startOffset: 26,
+        endOffset: 41,
+        exactText: "Hausdorff space",
+        prefix: "compact subset of a ",
+        suffix: " is closed."
+      },
+      paletteAction: "annotate"
+    });
+    const sourceAnchorId = state.sessions[0].activeSourceAnchorId!;
+
+    state = await application.submit({
+      type: "openConceptPeek",
+      sourceAnchorId,
+      prerequisite: "Hausdorff separation"
+    });
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].mathematics).toBe(origin.mathematics);
+    expect(state.sessions[0].conceptPeeks).toEqual([
+      expect.objectContaining({
+        sourceAnchorId,
+        prerequisite: "Hausdorff separation",
+        status: "open"
+      })
+    ]);
+    expect(state.sessions[0].conceptPeeks[0].content).toContain("Hausdorff separation");
+
+    state = await application.submit({
+      type: "closeConceptPeek",
+      conceptPeekId: state.sessions[0].conceptPeeks[0].id
+    });
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].conceptPeeks[0].status).toBe("closed");
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].conceptPeeks[0]).toMatchObject({
+      sourceAnchorId,
+      prerequisite: "Hausdorff separation",
+      status: "closed"
+    });
+  });
+
+  it("requires a learner decision before branching and returns to the exact durable Return Point", async () => {
+    const { application, dataDirectory } = await launch();
+    let state = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Every compact subset of a Hausdorff space is closed."
+    });
+    const originSessionId = state.activeSessionId!;
+    const sourceId = state.sessions[0].sourceIds[0];
+    state = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text",
+        startOffset: 6,
+        endOffset: 20,
+        exactText: "compact subset",
+        prefix: "Every ",
+        suffix: " of a Hausdorff space"
+      },
+      paletteAction: "annotate"
+    });
+    const sourceAnchorId = state.sessions[0].activeSourceAnchorId!;
+
+    state = await application.submit({
+      type: "proposePrerequisiteBranch",
+      sourceAnchorId,
+      prerequisite: "finite subcover arguments"
+    });
+    const deferredProposalId = state.sessions[0].prerequisiteBranchProposals[0].id;
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].prerequisiteBranchProposals[0].status).toBe("pending");
+
+    state = await application.submit({
+      type: "decidePrerequisiteBranch",
+      proposalId: deferredProposalId,
+      decision: "defer"
+    });
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].prerequisiteBranchProposals[0].status).toBe("deferred");
+
+    state = await application.submit({
+      type: "proposePrerequisiteBranch",
+      sourceAnchorId,
+      prerequisite: "finite subcover arguments"
+    });
+    const acceptedProposalId = state.sessions[0].prerequisiteBranchProposals.at(-1)!.id;
+    state = await application.submit({
+      type: "decidePrerequisiteBranch",
+      proposalId: acceptedProposalId,
+      decision: "accept"
+    });
+
+    const branchSessionId = state.activeSessionId!;
+    const branch = state.sessions.find((session) => session.id === branchSessionId)!;
+    expect(branchSessionId).not.toBe(originSessionId);
+    expect(branch).toMatchObject({
+      learningGoal: "Understand finite subcover arguments",
+      status: "active",
+      prerequisiteBranch: {
+        prerequisite: "finite subcover arguments",
+        returnPoint: {
+          originSessionId,
+          sourceId,
+          sourceAnchorId,
+          activeTeachingCardId: null
+        }
+      }
+    });
+    expect(state.sessions.find((session) => session.id === originSessionId)?.status).toBe("paused");
+    expect(state.sessions.find((session) => session.id === originSessionId)?.prerequisiteBranchProposals.at(-1)).toMatchObject({
+      status: "accepted",
+      branchSessionId
+    });
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions.find((session) => session.id === branchSessionId)?.prerequisiteBranch?.returnPoint)
+      .toMatchObject({ originSessionId, sourceAnchorId });
+    await relaunched.submit({ type: "resumeSession", sessionId: branchSessionId });
+    state = await relaunched.submit({ type: "returnToPrerequisiteOrigin" });
+    expect(state.activeSessionId).toBe(originSessionId);
+    expect(state.sessions.find((session) => session.id === originSessionId)).toMatchObject({
+      status: "active",
+      activeSourceAnchorId: sourceAnchorId,
+      activeTeachingCardId: null
+    });
+
+    state = await relaunched.submit({ type: "createWorkspace", name: "Topology" });
+    const workspaceId = state.navigation.workspaceId;
+    state = await relaunched.submit({ type: "createMission", workspaceId, name: "Separation arguments" });
+    const missionId = state.navigation.missionId!;
+    state = await relaunched.submit({ type: "fileSession", sessionId: originSessionId, workspaceId, missionId });
+    expect(state.sessions.filter((session) => [originSessionId, branchSessionId].includes(session.id))
+      .map((session) => ({ workspaceId: session.workspaceId, missionId: session.missionId })))
+      .toEqual([{ workspaceId, missionId }, { workspaceId, missionId }]);
+
+    const filedRelaunch = await LearningApplication.launch(dataDirectory);
+    applications.push(filedRelaunch);
+    expect(filedRelaunch.getState().sessions.find((session) => session.id === branchSessionId)?.prerequisiteBranch?.returnPoint)
+      .toMatchObject({ originSessionId, sourceAnchorId });
+  });
+
+  it("lets the learner override a branch recommendation by keeping the prerequisite inline", async () => {
+    const { application } = await launch();
+    let state = await application.submit({ type: "startQuickStudy", mathematics: "Use the closed diagonal criterion." });
+    const sourceId = state.sessions[0].sourceIds[0];
+    state = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text", startOffset: 8, endOffset: 23, exactText: "closed diagonal", prefix: "Use the ", suffix: " criterion."
+      },
+      paletteAction: "annotate"
+    });
+    const sourceAnchorId = state.sessions[0].activeSourceAnchorId!;
+    state = await application.submit({
+      type: "proposePrerequisiteBranch", sourceAnchorId, prerequisite: "product topology"
+    });
+    state = await application.submit({
+      type: "decidePrerequisiteBranch",
+      proposalId: state.sessions[0].prerequisiteBranchProposals[0].id,
+      decision: "keepInline"
+    });
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.sessions[0].prerequisiteBranchProposals[0]).toMatchObject({
+      status: "overridden",
+      branchSessionId: null
+    });
+    expect(state.sessions[0].conceptPeeks[0]).toMatchObject({
+      sourceAnchorId,
+      prerequisite: "product topology",
+      status: "open"
+    });
+  });
+
   it("starts a clear proposal immediately and streams one Teaching Card to completion", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand why the harmonic series diverges",
