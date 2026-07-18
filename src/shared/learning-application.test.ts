@@ -531,6 +531,11 @@ describe("Learning Application", () => {
       learningArtifacts: [],
       trailDraft: { items: [] }
     });
+    expect(continuation.askBarContext.items).toContainEqual(expect.objectContaining({
+      id: "continuation-outcome",
+      typeLabel: "Prior Consolidated Session Outcome",
+      preview: expect.stringContaining("Compactness turns pointwise separation")
+    }));
     expect(state.sessions.find((session) => session.id === sessionId)).toEqual(historicalRecord);
   });
 
@@ -554,6 +559,92 @@ describe("Learning Application", () => {
     expect(runtime.canceledSessionIds).toEqual([sessionId]);
     expect(state.sessions[0].teachingCard.status).toBe("stopped");
     expect(state.sessions[0].consolidationDraft).not.toBeNull();
+
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Compactness makes the separation finite.",
+      learningProgress: "I can locate the finite-subcover step.",
+      unresolvedQuestions: [],
+      nextStep: "Reconstruct the proof.",
+      includedArtifactIds: [],
+      targetDisposition: "addressed"
+    });
+    const consolidated = await application.submit({ type: "consolidateSession" });
+    const historicalSessionId = consolidated.sessions[0].id;
+    const continued = await application.submit({ type: "continueSession", sessionId: historicalSessionId });
+    const firstContinuationId = continued.activeSessionId!;
+    await application.submit({ type: "submitQuestion", text: "Can I prove it another way?" });
+
+    const continuedAgain = await application.submit({ type: "continueSession", sessionId: historicalSessionId });
+    runtime.completeTeaching(firstContinuationId);
+    await application.waitForModelWork();
+
+    expect(runtime.canceledSessionIds).toEqual([sessionId, firstContinuationId]);
+    expect(continuedAgain.sessions.find((session) => session.id === firstContinuationId)?.status).toBe("paused");
+  });
+
+  it("keeps included Learning Artifacts revisable after consolidation", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the compactness step",
+      initialTeachingDirection: "Use finite subcovers",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    let state = await application.submit({
+      type: "submitSessionIntake",
+      mathematics: "Every compact subset of a Hausdorff space is closed."
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    state = await application.submit({
+      type: "createSourceAnchor",
+      sourceId: state.sessions[0].sourceIds[0],
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 20, exactText: "compact subset",
+        prefix: "Every ", suffix: " of a Hausdorff space is closed."
+      },
+      paletteAction: "explain"
+    });
+    runtime.emitTeaching("Use compactness to select finitely many separating neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const cardId = application.getState().sessions[0].anchoredTeachingCards[0].id;
+    state = await application.submit({ type: "pinTeachingCardArtifact", cardId });
+    const sessionId = state.sessions[0].id;
+    const artifactId = state.sessions[0].learningArtifacts[0].id;
+    await application.submit({ type: "beginSessionConsolidation" });
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Compactness turns the pointwise construction into a finite one.",
+      learningProgress: "I can identify the finite subcover.",
+      unresolvedQuestions: [],
+      nextStep: "Rewrite the proof.",
+      includedArtifactIds: [artifactId],
+      targetDisposition: "addressed"
+    });
+    await application.submit({ type: "consolidateSession" });
+
+    state = await application.submit({
+      type: "editLearningArtifact",
+      sessionId,
+      artifactId,
+      content: "Learner revision after consolidation."
+    });
+    expect(state.sessions[0].learningArtifacts[0]).toMatchObject({
+      currentRevision: { content: "Learner revision after consolidation.", claimOrigin: "mixed" },
+      revisions: [expect.objectContaining({ content: "Use compactness to select finitely many separating neighbourhoods." })]
+    });
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    const previousRevisionId = relaunched.getState().sessions[0].learningArtifacts[0].revisions[0].id;
+    state = await relaunched.submit({
+      type: "restoreLearningArtifactRevision", sessionId, artifactId, revisionId: previousRevisionId
+    });
+    expect(state.sessions[0].learningArtifacts[0].currentRevision.content)
+      .toBe("Use compactness to select finitely many separating neighbourhoods.");
   });
 
   it("opens an anchored question in the Contextual Inspector path without dispatching until the learner words it", async () => {

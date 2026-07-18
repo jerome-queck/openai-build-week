@@ -602,8 +602,8 @@ export type LearnerAction =
   | { type: "createTeachingVariant"; cardId: string; name: string; instruction: string }
   | { type: "retryAnchoredTeachingCard"; cardId: string; variantId?: string }
   | { type: "pinTeachingCardArtifact"; cardId: string }
-  | { type: "editLearningArtifact"; artifactId: string; content: string }
-  | { type: "restoreLearningArtifactRevision"; artifactId: string; revisionId: string }
+  | { type: "editLearningArtifact"; sessionId?: string; artifactId: string; content: string }
+  | { type: "restoreLearningArtifactRevision"; sessionId?: string; artifactId: string; revisionId: string }
   | { type: "addTrailItem"; kind: TrailItemKind; content: string }
   | { type: "editTrailItem"; trailItemId: string; content: string }
   | { type: "removeTrailItem"; trailItemId: string }
@@ -1305,7 +1305,7 @@ export class LearningApplication {
         break;
       }
       case "editLearningArtifact": {
-        const session = this.requireActiveSession();
+        const session = this.requireArtifactEditingSession(action.sessionId);
         const artifact = requireLearningArtifact(session, action.artifactId);
         const content = requiredText(action.content, "Learning Artifact");
         if (content === artifact.currentRevision.content) break;
@@ -1320,7 +1320,7 @@ export class LearningApplication {
         break;
       }
       case "restoreLearningArtifactRevision": {
-        const session = this.requireActiveSession();
+        const session = this.requireArtifactEditingSession(action.sessionId);
         const artifact = requireLearningArtifact(session, action.artifactId);
         const revisionIndex = artifact.revisions.findIndex((revision) => revision.id === action.revisionId);
         if (revisionIndex < 0) throw new Error("Choose an earlier Learning Artifact revision to restore.");
@@ -1430,7 +1430,13 @@ export class LearningApplication {
         if (historical.status !== "consolidated" || !historical.consolidatedOutcome) {
           throw new Error("Choose a consolidated Learning Session to continue.");
         }
-        this.pauseActiveSession();
+        if (this.state.activeSessionId) {
+          const active = this.requireSession(this.state.activeSessionId);
+          if (this.modelWorks.has(active.id) && !await this.stopModelWork(active)) {
+            throw new Error("Codex did not confirm interruption. The active Learning Session remains open.");
+          }
+          this.pauseActiveSession();
+        }
         const session: LearningSession = {
           id: crypto.randomUUID(),
           workspaceId: historical.workspaceId,
@@ -1469,8 +1475,7 @@ export class LearningApplication {
           activeTeachingCardId: null,
           learningArtifacts: [],
           trailDraft: emptyTrailDraft(),
-          consolidationDraft: null,
-          consolidatedOutcome: null,
+          ...emptySessionLifecycle(),
           continuationOf: { sessionId: historical.id, outcomeId: historical.consolidatedOutcome.id },
           learningSlice: null,
           conceptPeeks: [],
@@ -1557,9 +1562,7 @@ export class LearningApplication {
           activeTeachingCardId: null,
           learningArtifacts: [],
           trailDraft: emptyTrailDraft(),
-          consolidationDraft: null,
-          consolidatedOutcome: null,
-          continuationOf: null,
+          ...emptySessionLifecycle(),
           learningSlice: null,
           conceptPeeks: [],
           pendingConceptPeek: null,
@@ -1666,9 +1669,7 @@ export class LearningApplication {
           activeTeachingCardId: null,
           learningArtifacts: [],
           trailDraft: emptyTrailDraft(),
-          consolidationDraft: null,
-          consolidatedOutcome: null,
-          continuationOf: null,
+          ...emptySessionLifecycle(),
           learningSlice: null,
           conceptPeeks: [],
           pendingConceptPeek: null,
@@ -2065,9 +2066,7 @@ export class LearningApplication {
           activeTeachingCardId: null,
           learningArtifacts: [],
           trailDraft: emptyTrailDraft(),
-          consolidationDraft: null,
-          consolidatedOutcome: null,
-          continuationOf: null,
+          ...emptySessionLifecycle(),
           learningSlice: null,
           conceptPeeks: [],
           pendingConceptPeek: null,
@@ -2875,9 +2874,7 @@ export class LearningApplication {
         activeTeachingCardId: null,
         learningArtifacts: [],
         trailDraft: emptyTrailDraft(),
-        consolidationDraft: null,
-        consolidatedOutcome: null,
-        continuationOf: null,
+        ...emptySessionLifecycle(),
         learningSlice,
         conceptPeeks: [],
         pendingConceptPeek: null,
@@ -3084,6 +3081,15 @@ export class LearningApplication {
       .filter((session) => session.id !== excludedSessionId && session.status === "paused")
       .sort((left, right) => right.activityOrder - left.activityOrder)[0]?.id ?? null;
   }
+
+  private requireArtifactEditingSession(sessionId?: string): LearningSession {
+    if (!sessionId) return this.requireActiveSession();
+    const session = this.requireSession(sessionId);
+    if (session.status !== "consolidated" && session.id !== this.state.activeSessionId) {
+      throw new Error("Choose an active or consolidated Learning Session to revise its Learning Artifact.");
+    }
+    return session;
+  }
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -3266,9 +3272,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       activeTeachingCardId: null,
       learningArtifacts: [],
       trailDraft: emptyTrailDraft(),
-      consolidationDraft: null,
-      consolidatedOutcome: null,
-      continuationOf: null,
+      ...emptySessionLifecycle(),
       learningSlice: null,
       conceptPeeks: [],
       pendingConceptPeek: null,
@@ -3629,6 +3633,60 @@ function refreshAskBarContext(state: LearningApplicationState, session: Learning
     sourceId: null,
     sourceAnchorId: null
   });
+  const continuation = continuationOutcomeContext(state, session);
+  if (continuation) {
+    const { historical, outcome } = continuation;
+    items.push({
+      id: "continuation-outcome",
+      kind: "sessionContext",
+      typeLabel: "Prior Consolidated Session Outcome",
+      identity: historical.learningGoal,
+      location: "Linked prior Learning Session",
+      preview: [outcome.centralInsight, outcome.learningProgress, ...outcome.unresolvedQuestions, outcome.nextStep]
+        .filter(Boolean).join("\n"),
+      sourceId: null,
+      sourceAnchorId: null
+    });
+    const returnPoint = historical.prerequisiteBranch?.returnPoint;
+    if (returnPoint) {
+      items.push({
+        id: "continuation-return-point",
+        kind: "sessionContext",
+        typeLabel: "Return Point",
+        identity: returnPoint.label,
+        location: "Linked prior Learning Session",
+        preview: returnPoint.label,
+        sourceId: returnPoint.sourceId,
+        sourceAnchorId: null
+      });
+    }
+    for (const item of outcome.trailItems.filter((trailItem) => trailItem.kind === "evidence")) {
+      items.push({
+        id: `continuation-evidence:${item.id}`,
+        kind: "sessionContext",
+        typeLabel: "Understanding Evidence",
+        identity: item.content,
+        location: "Prior Consolidated Session Outcome",
+        preview: item.content,
+        sourceId: null,
+        sourceAnchorId: null
+      });
+    }
+    for (const artifactId of outcome.includedArtifactIds) {
+      const artifact = historical.learningArtifacts.find((candidate) => candidate.id === artifactId);
+      if (!artifact) continue;
+      items.push({
+        id: `continuation-artifact:${artifact.id}`,
+        kind: "sessionContext",
+        typeLabel: "Learning Artifact",
+        identity: artifact.title,
+        location: "Prior Consolidated Session Outcome",
+        preview: artifact.currentRevision.content,
+        sourceId: null,
+        sourceAnchorId: null
+      });
+    }
+  }
   const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
   const availableSourceIds = session.accessPolicy === "focused"
     ? session.sourceIds
@@ -3654,13 +3712,25 @@ function refreshAskBarContext(state: LearningApplicationState, session: Learning
   const availableIds = new Set(items.map((item) => item.id));
   const shouldUseDefaults = reset || !session.askBarContext.customized;
   const includedIds = shouldUseDefaults
-    ? activeAnchor ? [`source-anchor:${activeAnchor.id}`, "learning-goal"] : ["learning-goal", "session-target"]
+    ? activeAnchor
+      ? [`source-anchor:${activeAnchor.id}`, "learning-goal"]
+      : continuation ? ["learning-goal", "continuation-outcome"] : ["learning-goal", "session-target"]
     : session.askBarContext.includedIds.filter((id) => availableIds.has(id));
   session.askBarContext = {
     items,
     includedIds,
     customized: shouldUseDefaults ? false : session.askBarContext.customized
   };
+}
+
+function continuationOutcomeContext(state: LearningApplicationState, session: LearningSession): {
+  historical: LearningSession;
+  outcome: ConsolidatedSessionOutcome;
+} | null {
+  if (!session.continuationOf) return null;
+  const historical = state.sessions.find((candidate) => candidate.id === session.continuationOf?.sessionId);
+  const outcome = historical?.consolidatedOutcome;
+  return historical && outcome?.id === session.continuationOf.outcomeId ? { historical, outcome } : null;
 }
 
 function selectedAskBarContext(session: LearningSession): QuestionContextItem[] {
@@ -3728,6 +3798,10 @@ function sourceAnchorLocation(anchor: SourceAnchor): string {
 
 function emptyTrailDraft(): TrailDraft {
   return { items: [] };
+}
+
+function emptySessionLifecycle(): Pick<LearningSession, "consolidationDraft" | "consolidatedOutcome" | "continuationOf"> {
+  return { consolidationDraft: null, consolidatedOutcome: null, continuationOf: null };
 }
 
 function suggestedSessionConsolidation(session: LearningSession): SessionConsolidationDraft {

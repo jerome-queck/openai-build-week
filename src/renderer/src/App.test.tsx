@@ -349,6 +349,16 @@ describe("anchored teaching workbench", () => {
     await user.click(screen.getByText("Expand complete outcome details"));
     expect(outcome.textContent).toContain("Use the finite subcover. · Required Trail Item");
     expect(outcome.textContent).toContain("Explain compact subset");
+    const artifactContent = screen.getByLabelText("Learning Artifact content");
+    await user.clear(artifactContent);
+    await user.type(artifactContent, "A learner revision retained after consolidation.");
+    await user.click(screen.getByRole("button", { name: "Save Learning Artifact revision" }));
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "editLearningArtifact",
+      sessionId: "session-1",
+      artifactId: "artifact-1",
+      content: "A learner revision retained after consolidation."
+    });
     await user.click(screen.getByRole("button", { name: "Continue this work" }));
     expect(api.submit).toHaveBeenCalledWith({ type: "continueSession", sessionId: "session-1" });
   });

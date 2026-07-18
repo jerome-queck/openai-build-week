@@ -783,7 +783,7 @@ function MissionHistory({ workspace, mission, state, onState }: {
                     type: "resumeSession", sessionId: session.id
                   }).then(onState)}>Resume</button>}
               </div>
-              {session.consolidatedOutcome && <ConsolidatedOutcome session={session} />}
+              {session.consolidatedOutcome && <ConsolidatedOutcome session={session} onState={onState} />}
             </li>
           ))}
         </ul>
@@ -994,6 +994,8 @@ function ContinuationContext({ state, session }: { state: LearningApplicationSta
   const historical = state.sessions.find((candidate) => candidate.id === session.continuationOf?.sessionId);
   const outcome = historical?.consolidatedOutcome;
   if (!historical || !outcome || outcome.id !== session.continuationOf.outcomeId) return null;
+  const evidence = outcome.trailItems.filter((item) => item.kind === "evidence");
+  const artifacts = historical.learningArtifacts.filter((artifact) => outcome.includedArtifactIds.includes(artifact.id));
   return (
     <section className="continuation-context" aria-label="Continuation context">
       <p className="eyebrow">Linked Continuation Session</p>
@@ -1001,6 +1003,9 @@ function ContinuationContext({ state, session }: { state: LearningApplicationSta
       <p>{outcome.centralInsight}</p>
       {outcome.unresolvedQuestions.length > 0 && <p><strong>Unresolved:</strong> {outcome.unresolvedQuestions.join("; ")}</p>}
       <p><strong>Next step:</strong> {outcome.nextStep}</p>
+      {historical.prerequisiteBranch && <p><strong>Return Point:</strong> {historical.prerequisiteBranch.returnPoint.label}</p>}
+      {evidence.length > 0 && <p><strong>Understanding Evidence:</strong> {evidence.map((item) => item.content).join("; ")}</p>}
+      {artifacts.length > 0 && <p><strong>Included Learning Artifacts:</strong> {artifacts.map((artifact) => artifact.title).join("; ")}</p>}
       <small>The prior Session Record remains a separate stable historical record.</small>
     </section>
   );
@@ -1082,7 +1087,7 @@ function SessionConsolidation({ session, onState }: { session: LearningSession; 
   );
 }
 
-function ConsolidatedOutcome({ session }: { session: LearningSession }) {
+function ConsolidatedOutcome({ session, onState }: { session: LearningSession; onState: StateHandler }) {
   const outcome = session.consolidatedOutcome!;
   const includedArtifacts = session.learningArtifacts.filter((artifact) => outcome.includedArtifactIds.includes(artifact.id));
   const essentialReasoning = outcome.trailItems.filter((item) => item.kind === "reasoningStep").map((item) => item.content);
@@ -1102,11 +1107,41 @@ function ConsolidatedOutcome({ session }: { session: LearningSession }) {
       <details>
         <summary>Expand complete outcome details</summary>
         <h4>Learning Trail</h4>
-        <ul>{outcome.trailItems.map((item) => <li key={item.id}>{item.content}{item.required && <strong> · Required Trail Item</strong>}</li>)}</ul>
+        <ul>{outcome.trailItems.map((item) => <TrailItemOutcomeDetail key={item.id} item={item} session={session} />)}</ul>
         <h4>Included Learning Artifacts</h4>
-        {includedArtifacts.length ? <ul>{includedArtifacts.map((artifact) => <li key={artifact.id}>{artifact.title}</li>)}</ul> : <p>None included.</p>}
+        {includedArtifacts.length ? includedArtifacts.map((artifact) => (
+          <PinnedLearningArtifact key={artifact.id} artifact={artifact} sessionId={session.id}
+            statusLabel="Included in this Consolidated Session Outcome" onState={onState} />
+        )) : <p>None included.</p>}
+        <p className="subtle">Proof, source, note, Teaching Variant, and verification details appear above when they were retained in this Learning Session.</p>
       </details>
     </article>
+  );
+}
+
+function TrailItemOutcomeDetail({ item, session }: { item: LearningSession["trailDraft"]["items"][number]; session: LearningSession }) {
+  const anchors = item.links.sourceAnchorIds.flatMap((anchorId) => {
+    const anchor = session.sourceAnchors.find((candidate) => candidate.id === anchorId);
+    return anchor ? [anchor.selection.kind === "diagramRegion" ? "Selected diagram region" : `“${anchor.selection.exactText}”`] : [];
+  });
+  const cards = item.links.teachingCardIds.flatMap((cardId) => {
+    const card = session.anchoredTeachingCards.find((candidate) => candidate.id === cardId);
+    return card ? [`${card.title}${card.variants.length ? `; Teaching Variants: ${card.variants.map((variant) => variant.name).join(", ")}` : ""}`] : [];
+  });
+  const artifacts = item.links.learningArtifactIds.flatMap((artifactId) => {
+    const artifact = session.learningArtifacts.find((candidate) => candidate.id === artifactId);
+    return artifact ? [`${artifact.title} · ${artifact.currentRevision.claimOrigin} · Not independently checked`] : [];
+  });
+  return (
+    <li>
+      {item.content}{item.required && <strong> · Required Trail Item</strong>}
+      {(anchors.length > 0 || cards.length > 0 || artifacts.length > 0 || item.links.understandingEvidenceIds.length > 0) && <ul className="trail-links">
+        {anchors.map((anchor) => <li key={`anchor-${anchor}`}>Source Anchor: {anchor}</li>)}
+        {cards.map((card) => <li key={`card-${card}`}>Teaching Card: {card}</li>)}
+        {artifacts.map((artifact) => <li key={`artifact-${artifact}`}>Learning Artifact: {artifact}</li>)}
+        {item.links.understandingEvidenceIds.map((evidenceId) => <li key={evidenceId}>Understanding Evidence: {evidenceId}</li>)}
+      </ul>}
+    </li>
   );
 }
 
@@ -1428,11 +1463,17 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
   );
 }
 
-function PinnedLearningArtifact({ artifact, onState }: { artifact: LearningArtifact; onState: StateHandler }) {
+function PinnedLearningArtifact({ artifact, onState, sessionId, statusLabel = "Pinned on the main canvas" }: {
+  artifact: LearningArtifact;
+  onState: StateHandler;
+  sessionId?: string;
+  statusLabel?: string;
+}) {
   const [content, setContent] = useState(artifact.currentRevision.content);
   useEffect(() => setContent(artifact.currentRevision.content), [artifact.currentRevision.id, artifact.currentRevision.content]);
   const save = async () => onState(await window.quickStudy.submit({
     type: "editLearningArtifact",
+    ...(sessionId ? { sessionId } : {}),
     artifactId: artifact.id,
     content
   }));
@@ -1440,7 +1481,7 @@ function PinnedLearningArtifact({ artifact, onState }: { artifact: LearningArtif
     <article id={`learning-artifact-${artifact.id}`} className="learning-artifact" aria-label={`Pinned Learning Artifact ${artifact.title}`}>
       <div className="card-heading">
         <div><p className="eyebrow">Learning Artifact</p><h2>{artifact.title}</h2></div>
-        <span className="saved">Pinned on the main canvas</span>
+        <span className="saved">{statusLabel}</span>
       </div>
       <label htmlFor={`artifact-content-${artifact.id}`}>Learning Artifact content</label>
       <textarea id={`artifact-content-${artifact.id}`} className="artifact-content" value={content}
@@ -1461,6 +1502,7 @@ function PinnedLearningArtifact({ artifact, onState }: { artifact: LearningArtif
           <button className="text-button" aria-label={`Restore Learning Artifact revision ${index + 1}`}
             onClick={() => void window.quickStudy.submit({
               type: "restoreLearningArtifactRevision",
+              ...(sessionId ? { sessionId } : {}),
               artifactId: artifact.id,
               revisionId: revision.id
             }).then(onState)}>Restore this artifact revision</button>
