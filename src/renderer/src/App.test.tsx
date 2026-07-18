@@ -291,6 +291,11 @@ describe("anchored teaching workbench", () => {
       includedArtifactIds: ["artifact-1"],
       targetDisposition: null
     };
+    consolidationState.sessions[0].modelStopConfirmation = {
+      attemptId: "stop-attempt-1",
+      status: "unconfirmed",
+      message: "Codex did not confirm interruption. Retry before leaving this work unattended."
+    };
     const api = quickStudyApi(state);
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "beginSessionConsolidation" ? consolidationState : consolidationState
@@ -305,6 +310,9 @@ describe("anchored teaching workbench", () => {
 
     const review = await screen.findByRole("region", { name: "Session Consolidation" });
     expect(review.textContent).toContain("Required Trail Item");
+    expect(screen.getByRole("alert").textContent).toContain("Codex did not confirm interruption");
+    await user.click(screen.getByRole("button", { name: "Retry Codex interruption for Understand compactness" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "retrySessionModelStop", sessionId: "session-1" });
     expect(screen.getByRole("button", { name: "Create Consolidated Session Outcome" }).hasAttribute("disabled")).toBe(true);
     await user.type(screen.getByLabelText("Learning Progress"), "I can locate the finite-subcover step.");
     await user.type(screen.getByLabelText("Unresolved questions"), "Can regularity replace Hausdorffness?");

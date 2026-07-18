@@ -893,6 +893,18 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <button className="primary" disabled={Boolean(session.consolidationDraft)} onClick={() => void beginConsolidation()}>
               {session.consolidationDraft ? "Consolidation review open" : "Finish & consolidate"}
             </button>
+            {session.modelStopConfirmation && (
+              <div className="model-stop-confirmation" role={session.modelStopConfirmation.status === "unconfirmed" ? "alert" : "status"}>
+                <span>{session.modelStopConfirmation.message}</span>
+                {session.modelStopConfirmation.status === "unconfirmed" && (
+                  <button className="secondary" aria-label={`Retry Codex interruption for ${session.learningGoal}`}
+                    onClick={() => void window.quickStudy.submit({ type: "retrySessionModelStop", sessionId: session.id })
+                      .then(onState).catch((cause: unknown) => setWorkbenchError(
+                        cause instanceof Error ? cause.message : "Codex interruption could not be retried."
+                      ))}>Retry interruption</button>
+                )}
+              </div>
+            )}
           </aside>
           <section className="math-canvas">
             <ContinuationContext state={state} session={session} />
