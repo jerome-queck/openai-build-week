@@ -13,6 +13,7 @@ export function App() {
 
   useEffect(() => {
     void window.quickStudy.getState().then(setState);
+    return window.quickStudy.onStateChanged(setState);
   }, []);
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
@@ -48,13 +49,66 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
             <h1 id="dashboard-title">Continue your mathematics</h1>
             <p className="lede">Return to the exact focus you left behind, or begin a new durable Quick Study.</p>
           </header>
+          <AuthenticationPanel state={state} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
-          <Intake onState={onState} />
+          <Intake state={state} onState={onState} />
           <WorkspaceEditor workspace={workspace} mission={mission} state={state} onState={onState} />
           <MissionHistory workspace={workspace} mission={mission} state={state} onState={onState} />
         </section>
       </div>
     </main>
+  );
+}
+
+function AuthenticationPanel({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+  const [apiKey, setApiKey] = useState("");
+  const authentication = state.authentication;
+  const signInWithChatGpt = async () => {
+    const next = await window.quickStudy.submit({ type: "startChatGptLogin" });
+    onState(next);
+    if (next.authentication.loginUrl) await window.quickStudy.openExternal(next.authentication.loginUrl);
+  };
+  const useApiKey = async (event: FormEvent) => {
+    event.preventDefault();
+    const next = await window.quickStudy.submit({ type: "loginWithApiKey", apiKey });
+    setApiKey("");
+    onState(next);
+  };
+
+  return (
+    <section className="authentication-card" aria-labelledby="authentication-title">
+      <div>
+        <p className="eyebrow">Codex Runtime</p>
+        <h2 id="authentication-title">
+          {!state.runtimeAvailable
+            ? "Codex Runtime unavailable"
+            : authentication.status === "signedIn"
+            ? `Connected with ${authentication.method === "chatgpt" ? "ChatGPT subscription" : "API key"}`
+            : "Connect Codex to begin teaching"}
+        </h2>
+        {authentication.status === "signedIn" ? (
+          <p className="subtle">{authentication.accountLabel ?? "Codex owns this credential; Quick Study does not store it."}</p>
+        ) : (
+          <p className="subtle">Use included ChatGPT plan access or usage-based OpenAI API billing.</p>
+        )}
+        {authentication.error && <p className="failure-message" role="alert">{authentication.error}</p>}
+      </div>
+      {state.runtimeAvailable && authentication.status !== "signedIn" && (
+        <div className="authentication-actions">
+          <button className="primary" onClick={() => void signInWithChatGpt()}>Sign in with ChatGPT</button>
+          <form className="api-key-form" onSubmit={(event) => void useApiKey(event)}>
+            <label htmlFor="api-key">OpenAI API key</label>
+            <div><input id="api-key" type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+            <button className="secondary" disabled={!apiKey.trim()}>Use API key</button></div>
+          </form>
+          {authentication.status === "signingIn" && (
+            <button className="text-button" onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
+              I’ve completed sign-in
+            </button>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -168,6 +222,15 @@ function ResumeCard({ state, session, onState }: {
         <p>{session.returnContext.label}</p>
         <small>{session.returnContext.nextAction}</small>
       </div>
+      {session.teachingCard.status === "streaming" && (
+        <div className="background-work" role="status">
+          <span>Codex is teaching in the background</span>
+          <button className="secondary" onClick={() => void window.quickStudy.submit({
+            type: "cancelSessionModelWork",
+            sessionId: session.id
+          }).then(onState)}>Stop background teaching</button>
+        </div>
+      )}
       <div className="resume-actions">
         <button className="primary" onClick={() => void window.quickStudy.submit({
           type: "resumeSession",
@@ -225,17 +288,20 @@ function EmptyResume() {
   );
 }
 
-function Intake({ onState }: { onState: StateHandler }) {
+function Intake({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [mathematics, setMathematics] = useState("");
   const start = async (event: FormEvent) => {
     event.preventDefault();
-    onState(await window.quickStudy.submit({ type: "startQuickStudy", mathematics }));
+    onState(await window.quickStudy.submit({
+      type: state.authentication.status === "signedIn" ? "submitSessionIntake" : "startQuickStudy",
+      mathematics
+    }));
   };
   return (
     <section className="intake-card" aria-labelledby="intake-title">
       <p className="eyebrow">Session Intake</p>
       <h2 id="intake-title">Begin with the mathematics</h2>
-      <p className="lede">Paste a question, proof, or expression. Quick Study gives it a durable home immediately.</p>
+      <p className="lede">Paste a question, proof, or expression. Codex proposes a focused Learning Session before teaching.</p>
       <form onSubmit={(event) => void start(event)}>
         <label htmlFor="mathematics">Typed mathematics</label>
         <textarea
@@ -245,9 +311,10 @@ function Intake({ onState }: { onState: StateHandler }) {
           placeholder="What would you like to understand?"
         />
         <div className="intake-actions">
-          <span>No workspace setup required</span>
-          <button className="primary" disabled={!mathematics.trim()}>Start Quick Study</button>
+          <span>{state.authentication.status === "signedIn" ? "Focused Access · no workspace setup required" : "Local Working Mode · connect Codex for model teaching"}</span>
+          <button className="primary" disabled={!mathematics.trim()}>{state.authentication.status === "signedIn" ? "Propose Learning Session" : "Start local Learning Session"}</button>
         </div>
+        {state.intakeError && <p className="failure-message" role="alert">{state.intakeError}</p>}
       </form>
     </section>
   );
@@ -310,11 +377,19 @@ function MissionHistory({ workspace, mission, state, onState }: {
         <ul className="session-list">
           {sessions.map((session) => (
             <li key={session.id}>
-              <div><strong>{session.learningGoal}</strong><small>{session.sessionTarget}</small></div>
-              <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
-                type: "resumeSession",
-                sessionId: session.id
-              }).then(onState)}>Resume</button>
+              <div><strong>{session.learningGoal}</strong><small>{session.sessionTarget}</small>
+                {session.teachingCard.status === "streaming" && <small>Codex teaching in background</small>}
+              </div>
+              <div className="session-actions">
+                {session.teachingCard.status === "streaming" && <button className="secondary" onClick={() => void window.quickStudy.submit({
+                  type: "cancelSessionModelWork",
+                  sessionId: session.id
+                }).then(onState)}>Stop</button>}
+                <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
+                  type: "resumeSession",
+                  sessionId: session.id
+                }).then(onState)}>Resume</button>
+              </div>
             </li>
           ))}
         </ul>
@@ -329,11 +404,21 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
   const mission = state.missions.find((candidate) => candidate.id === session.missionId)!;
   const [goal, setGoal] = useState(session.learningGoal);
   const [target, setTarget] = useState(session.sessionTarget);
+  const [direction, setDirection] = useState(session.proposal.initialTeachingDirection);
 
+  const saveProposal = (applyToTeaching = false) => window.quickStudy.submit({
+      type: applyToTeaching ? "applySessionProposalRevision" : "reviseSessionProposal",
+      learningGoal: goal,
+      scope: target,
+      initialTeachingDirection: direction
+    });
   const leave = async () => {
-    await window.quickStudy.submit({ type: "editLearningGoal", value: goal });
-    await window.quickStudy.submit({ type: "editSessionTarget", value: target });
+    await saveProposal();
     onState(await window.quickStudy.submit({ type: "leaveSession" }));
+  };
+  const acceptProposal = async () => {
+    await saveProposal();
+    onState(await window.quickStudy.submit({ type: "confirmSessionProposal" }));
   };
 
   return (
@@ -345,18 +430,25 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
           <aside className="session-panel">
             <p className="eyebrow">{workspace.name} · {mission.name}</p>
             <h1>Mathematical Workbench</h1>
+            <p className="proposal-label">Session Proposal</p>
             <label htmlFor="goal">Learning Goal</label>
-            <textarea id="goal" className="field" value={goal} onChange={(event) => {
-              const value = event.target.value;
-              setGoal(value);
-              void window.quickStudy.submit({ type: "editLearningGoal", value });
-            }} />
+            <textarea id="goal" className="field" value={goal} onChange={(event) => setGoal(event.target.value)} />
             <label htmlFor="target">Session Target</label>
-            <textarea id="target" className="field" value={target} onChange={(event) => {
-              const value = event.target.value;
-              setTarget(value);
-              void window.quickStudy.submit({ type: "editSessionTarget", value });
-            }} />
+            <textarea id="target" className="field" value={target} onChange={(event) => setTarget(event.target.value)} />
+            <label htmlFor="direction">Initial teaching direction</label>
+            <textarea id="direction" className="field" value={direction} onChange={(event) => setDirection(event.target.value)} />
+            {session.proposal.status === "awaitingConfirmation" ? (
+              <>
+                <p className="confirmation-reason">{session.proposal.confirmationReason}</p>
+                <button className="primary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void acceptProposal()}>
+                  Accept and start teaching
+                </button>
+              </>
+            ) : (
+              <button className="secondary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void saveProposal(true).then(onState)}>
+                Apply proposal changes
+              </button>
+            )}
             <button className="secondary" onClick={() => void leave()}>Leave session</button>
           </aside>
           <section className="math-canvas">
@@ -365,10 +457,40 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
               <span className="saved">Saved locally</span>
             </div>
             <article>{session.mathematics}</article>
-            <div className="next-step"><span>Next teaching move</span><strong>{session.returnContext.nextAction}</strong></div>
+            <p className="access-policy"><strong>Session Access Policy:</strong> Focused Access · only the mathematics pasted into this session</p>
+            <TeachingCard session={session} onState={onState} />
           </section>
         </div>
       </div>
     </main>
   );
+}
+
+function TeachingCard({ session, onState }: { session: LearningSession; onState: StateHandler }) {
+  const card = session.teachingCard;
+  if (session.proposal.status === "awaitingConfirmation") {
+    return <div className="next-step"><span>Session Confirmation</span><strong>Review the proposal before Codex begins.</strong></div>;
+  }
+  return (
+    <section className={`teaching-card ${card.status}`} aria-live="polite" aria-labelledby="teaching-card-title">
+      <div className="card-heading">
+        <div><p className="eyebrow">Teaching Card</p><h2 id="teaching-card-title">{session.learningGoal}</h2></div>
+        <span className="saved">{teachingStatusLabel(card.status)}</span>
+      </div>
+      <div className="teaching-section">
+        <h3>Explanation</h3>
+        {card.content ? <div className="teaching-content">{card.content}</div> : card.status === "streaming" ? <p className="subtle">Codex is preparing the first teaching move…</p> : null}
+      </div>
+      <div className="teaching-section next-step"><span>Next step</span><strong>{session.returnContext.nextAction}</strong></div>
+      {card.error && <p className="failure-message" role="alert">{card.error}</p>}
+      <div className="teaching-actions">
+        {card.status === "streaming" && <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "cancelModelWork" }).then(onState)}>Stop teaching</button>}
+        {card.retryable && <button className="primary" onClick={() => void window.quickStudy.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
+      </div>
+    </section>
+  );
+}
+
+function teachingStatusLabel(status: LearningSession["teachingCard"]["status"]): string {
+  return ({ idle: "Ready", streaming: "Streaming", completed: "Complete", stopped: "Stopped", failed: "Needs attention" })[status];
 }

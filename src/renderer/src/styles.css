@@ -33,7 +33,7 @@ h2 { margin: 0; font-size: 27px; }
 .dashboard-grid, .workbench-layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 24px; margin-top: 24px; }
 .dashboard-content { width: min(940px, 100%); margin: 0 auto; }
 .dashboard-heading { padding: 24px 4px 28px; }
-.hierarchy, .resume-card, .intake-card, .organize-card, .history-card, .session-panel, .math-canvas {
+.hierarchy, .authentication-card, .resume-card, .intake-card, .organize-card, .history-card, .session-panel, .math-canvas {
   border: 1px solid rgba(105,118,105,.22);
   border-radius: 20px;
   background: rgba(255,255,255,.74);
@@ -55,7 +55,15 @@ h2 { margin: 0; font-size: 27px; }
 .session-nav-list button { width: 100%; padding: 6px 8px; overflow: hidden; border: 0; color: #5f746d; background: transparent; font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .session-nav-list button::before { content: "↳ "; color: #b65d38; }
 
-.resume-card, .intake-card, .organize-card, .history-card { margin-bottom: 18px; padding: 28px; }
+.authentication-card, .resume-card, .intake-card, .organize-card, .history-card { margin-bottom: 18px; padding: 28px; }
+.authentication-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-color: rgba(182,93,56,.3); }
+.authentication-card h2 { font-size: 25px; }
+.authentication-card .subtle { margin: 8px 0 0; }
+.authentication-actions { display: flex; min-width: min(100%, 440px); align-items: end; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.api-key-form { flex: 1 1 250px; }
+.api-key-form > div { display: flex; gap: 7px; }
+.api-key-form input { min-width: 140px; }
+.api-key-form .secondary { white-space: nowrap; }
 .resume-card { border-color: rgba(41, 102, 84, .38); background: rgba(249,253,248,.9); }
 .card-heading, .canvas-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .resume-card h2 { max-width: 680px; font-size: 32px; }
@@ -64,6 +72,7 @@ h2 { margin: 0; font-size: 27px; }
 .return-context p { margin: 7px 0 3px; font-weight: 750; }
 .return-context small { color: #5b746d; }
 .resume-actions { display: flex; align-items: end; gap: 16px; flex-wrap: wrap; }
+.background-work { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: -7px 0 18px; padding: 12px 14px; border-radius: 10px; color: #704a32; background: #f4e4d5; font-size: 12px; font-weight: 750; }
 .empty-resume p:last-child { margin-bottom: 0; color: #647971; }
 
 .intake-card textarea { width: 100%; min-height: 125px; padding: 18px; resize: vertical; border: 1px solid #c5c5b8; border-radius: 14px; color: #16362f; background: rgba(255,255,255,.78); font-family: Georgia, serif; font-size: 19px; line-height: 1.5; }
@@ -88,16 +97,31 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .session-list li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 0; border-top: 1px solid #deddd4; }
 .session-list div { display: flex; flex-direction: column; gap: 4px; }
 .session-list small { color: #6b7c76; }
+.session-list .session-actions { align-items: center; flex-direction: row; }
+.session-list .session-actions .secondary { padding: 7px 10px; }
 
 .workbench-grid { display: grid; grid-template-columns: minmax(280px, 340px) 1fr; gap: 20px; min-height: calc(100vh - 100px); }
 .session-panel { padding: 26px; }
 .session-panel h1 { margin-bottom: 30px; font-size: 38px; }
+.proposal-label { margin: -17px 0 20px; color: #b65d38; font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .field { width: 100%; min-height: 82px; margin-bottom: 20px; padding: 12px; resize: vertical; border: 1px solid #c8d0c8; border-radius: 10px; color: #17332e; background: #fbfaf6; line-height: 1.4; }
 .session-panel > .secondary { width: 100%; }
+.session-panel .proposal-action { width: 100%; margin-bottom: 10px; }
+.confirmation-reason { margin: -8px 0 18px; padding: 12px; border-radius: 9px; color: #7b4c36; background: #f7e9df; font-size: 12px; line-height: 1.45; }
 .math-canvas { display: flex; flex-direction: column; padding: 30px; }
 .canvas-heading { padding-bottom: 24px; border-bottom: 1px solid #deddd4; }
 .math-canvas article { flex: 1; padding: 46px 5%; color: #1c332f; font-family: Georgia, serif; font-size: clamp(24px, 3vw, 38px); line-height: 1.45; }
 .next-step { display: flex; flex-direction: column; gap: 5px; padding: 16px; border-radius: 12px; color: #31534a; background: #eaf0e9; }
+.teaching-card { padding: 24px; border: 1px solid #c9d8cd; border-radius: 16px; background: #eef4ec; }
+.teaching-card.failed, .teaching-card.stopped { border-color: #dfbaa9; background: #f9eee8; }
+.teaching-card h2 { font-size: 25px; }
+.teaching-content { margin-top: 20px; white-space: pre-wrap; color: #1c332f; font-family: Georgia, serif; font-size: 19px; line-height: 1.65; }
+.teaching-section { margin-top: 20px; }
+.teaching-section h3 { margin: 0 0 8px; color: #385950; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.teaching-section .teaching-content { margin-top: 0; }
+.failure-message { margin: 14px 0 0; color: #8d3d2b; font-weight: 650; line-height: 1.45; }
+.teaching-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+.access-policy { margin: 0 0 14px; padding: 11px 14px; border: 1px solid #d5d4ca; border-radius: 10px; color: #506861; background: rgba(255,255,255,.55); font-size: 12px; }
 .loading { display: grid; min-height: 100vh; place-items: center; color: #49665e; background: #f4efe5; }
 
 @media (max-width: 1000px) {
@@ -111,4 +135,5 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
   .hierarchy { position: static; max-height: none; }
   .organize-forms { grid-template-columns: 1fr; }
   .card-heading { flex-direction: column; }
+  .authentication-card { align-items: stretch; flex-direction: column; }
 }

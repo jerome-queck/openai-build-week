@@ -1,9 +1,12 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { LearningApplication, type LearnerAction } from "../shared/learning-application";
+import { CodexAppServerRuntime } from "./codex-app-server";
+import type { ModelRuntime } from "../shared/model-runtime";
 
 let learningApplication: LearningApplication;
+let modelRuntime: ModelRuntime | null = null;
 
 function isTrustedSender(frameUrl: string | undefined): boolean {
   if (!frameUrl) return false;
@@ -19,11 +22,25 @@ function isLearnerAction(value: unknown): value is LearnerAction {
   const action = value as Partial<LearnerAction>;
   switch (action.type) {
     case "leaveSession":
+    case "confirmSessionProposal":
+    case "cancelModelWork":
+    case "retryModelWork":
+    case "startChatGptLogin":
+    case "refreshAuthentication":
       return true;
     case "resumeSession":
+    case "cancelSessionModelWork":
       return "sessionId" in action && typeof action.sessionId === "string";
     case "startQuickStudy":
+    case "submitSessionIntake":
       return "mathematics" in action && typeof action.mathematics === "string";
+    case "loginWithApiKey":
+      return "apiKey" in action && typeof action.apiKey === "string";
+    case "reviseSessionProposal":
+    case "applySessionProposalRevision":
+      return "learningGoal" in action && typeof action.learningGoal === "string"
+        && "scope" in action && typeof action.scope === "string"
+        && "initialTeachingDirection" in action && typeof action.initialTeachingDirection === "string";
     case "editLearningGoal":
     case "editSessionTarget":
       return "value" in action && typeof action.value === "string";
@@ -47,6 +64,9 @@ function isLearnerAction(value: unknown): value is LearnerAction {
 }
 
 function registerLearningApplicationHandlers(): void {
+  learningApplication.subscribe((state) => {
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send("learning:stateChanged", state);
+  });
   ipcMain.handle("learning:getState", (event) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     return learningApplication.getState();
@@ -55,6 +75,11 @@ function registerLearningApplicationHandlers(): void {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (!isLearnerAction(action)) throw new Error("Invalid learner action.");
     return learningApplication.submit(action);
+  });
+  ipcMain.handle("authentication:openExternal", async (event, url: unknown) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (typeof url !== "string" || new URL(url).protocol !== "https:") throw new Error("Invalid authentication URL.");
+    await shell.openExternal(url);
   });
 }
 
@@ -88,7 +113,12 @@ function createWindow(): void {
 
 void app.whenReady().then(async () => {
   const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
-  learningApplication = await LearningApplication.launch(dataDirectory);
+  try {
+    modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+  } catch (error) {
+    console.error("Codex app-server is unavailable:", error);
+  }
+  learningApplication = await LearningApplication.launch(dataDirectory, modelRuntime);
   registerLearningApplicationHandlers();
   createWindow();
 
@@ -98,5 +128,5 @@ void app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  app.quit();
+  void learningApplication.shutdown().finally(() => app.quit());
 });

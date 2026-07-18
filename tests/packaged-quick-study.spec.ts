@@ -22,7 +22,12 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   const launch = async () => {
     const port = await availablePort();
     const child = spawn(executablePath, [`--remote-debugging-port=${port}`], {
-      env: { ...process.env, ELECTRON_ENABLE_LOGGING: "1", QUICK_STUDY_DATA_DIR: dataDirectory },
+      env: {
+        ...process.env,
+        ELECTRON_ENABLE_LOGGING: "1",
+        QUICK_STUDY_DATA_DIR: dataDirectory,
+        QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs")
+      },
       stdio: "pipe"
     });
     let output = "";
@@ -30,8 +35,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
     await waitForDebugger(port, child, () => output);
     const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    const page = browser.contexts()[0]?.pages()[0];
-    if (!page) throw new Error("Packaged Quick Study did not open a renderer page.");
+    const page = await waitForPage(browser, child, () => output);
     launched = { browser, page, process: child };
     return page;
   };
@@ -61,7 +65,8 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await page.getByRole("button", { name: "Create Study Mission" }).click();
 
     await page.getByLabel("Typed mathematics").fill("Show that every convergent sequence is bounded.");
-    await page.getByRole("button", { name: "Start Quick Study" }).click();
+    await page.getByRole("button", { name: "Propose Learning Session" }).click();
+    await expect(page.getByText("Teaching Card", { exact: true })).toBeVisible();
     await page.getByLabel("Learning Goal").fill("Understand where convergence controls the tail");
     await page.getByLabel("Session Target").fill("Bound the sequence using its finite prefix and tail");
     await page.getByRole("button", { name: "Leave session" }).click();
@@ -72,7 +77,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await page.getByRole("button", { name: "File Quick Study session" }).click();
 
     await page.getByLabel("Typed mathematics").fill("Determine the subgroups of a cyclic group of order 12.");
-    await page.getByRole("button", { name: "Start Quick Study" }).click();
+    await page.getByRole("button", { name: "Propose Learning Session" }).click();
     await page.getByLabel("Learning Goal").fill("Relate subgroups to divisors");
     await page.getByRole("button", { name: "Leave session" }).click();
     await page.getByLabel("Destination Study Mission").selectOption({ label: "Abstract Algebra — Finite group structure" });
@@ -129,7 +134,9 @@ async function availablePort(): Promise<number> {
 async function waitForDebugger(port: number, child: ChildProcess, output: () => string): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`Packaged Quick Study exited early with code ${child.exitCode}.`);
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged Quick Study exited early with code ${child.exitCode}.\n${output()}`);
+    }
     try {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`);
       if (response.ok) return;
@@ -139,6 +146,19 @@ async function waitForDebugger(port: number, child: ChildProcess, output: () => 
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for packaged Quick Study to expose its renderer.\n${output()}`);
+}
+
+async function waitForPage(browser: Browser, child: ChildProcess, output: () => string): Promise<Page> {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const page = browser.contexts()[0]?.pages()[0];
+    if (page) return page;
+    if (child.exitCode !== null) {
+      throw new Error(`Packaged Quick Study exited before opening a renderer page.\n${output()}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Packaged Quick Study did not open a renderer page.\n${output()}`);
 }
 
 async function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
