@@ -552,7 +552,10 @@ describe("Learning Application", () => {
     expect(failed.currentRevision).toMatchObject({
       status: "failed",
       retryable: true,
-      contextUsed: [{ sourceName: "Typed mathematics", location: "Text at characters 6–13" }],
+      contextUsed: [
+        { sourceName: "Typed mathematics", location: "Focused Text at characters 6–13" },
+        { sourceName: "Typed mathematics", location: "Supplied bounded source excerpt at characters 0–28" }
+      ],
       agentWorkLogReference: { sessionId: started.sessions[0].id }
     });
     const reference = failed.currentRevision.agentWorkLogReference!;

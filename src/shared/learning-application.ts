@@ -1645,13 +1645,18 @@ export class LearningApplication {
     };
     await this.runModelTeaching(session, sourceAnchorMathematics(anchor), focus, {
       start: (sourceContext, nextLogSequence) => {
-        revision.contextUsed = sourceContext.map((context) => ({
-          sourceId: context.sourceId,
-          sourceName: context.name,
-          location: context.sourceId === anchor.sourceId
-            ? sourceAnchorLocation(anchor)
-            : "Entire source supplied within the bounded runtime context"
-        }));
+        revision.contextUsed = sourceContext.flatMap((context) => [
+          ...(context.sourceId === anchor.sourceId ? [{
+            sourceId: context.sourceId,
+            sourceName: context.name,
+            location: `Focused ${sourceAnchorLocation(anchor)}`
+          }] : []),
+          {
+            sourceId: context.sourceId,
+            sourceName: context.name,
+            location: `Supplied bounded source excerpt at characters 0–${context.content.length}`
+          }
+        ]);
         revision.agentWorkLogReference = {
           sessionId: session.id,
           fromSequence: nextLogSequence,
