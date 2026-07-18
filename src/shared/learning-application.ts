@@ -601,7 +601,7 @@ export class LearningApplication {
   private sourceIndexWork = Promise.resolve();
   private readonly modelWorks = new Map<string, {
     controller: AbortController;
-    promise: Promise<void>;
+    promise: Promise<unknown>;
     stop(): void;
     markUnconfirmed(): void;
     restart(): Promise<void>;
@@ -2655,9 +2655,14 @@ export class LearningApplication {
       existing.status = "open";
     } else {
       this.requireModelAccess();
+      if (this.modelWorks.has(session.id)) {
+        throw new Error("Wait for the current model teaching to finish before opening a Concept Peek.");
+      }
       const log = this.agentWorkLogs[session.id] ?? [];
       this.agentWorkLogs[session.id] = log;
-      const content = requiredText(await this.modelRuntime!.createConceptPeek({
+      const controller = new AbortController();
+      const runtime = this.modelRuntime!;
+      const promise = runtime.createConceptPeek({
         sessionId: session.id,
         prerequisite,
         mathematics: session.mathematics,
@@ -2665,8 +2670,29 @@ export class LearningApplication {
         sourceAnchorId: anchor.id,
         sourceId: anchor.sourceId,
         selection: anchor.selection,
-        onRuntimeEvent: (event) => log.push({ ...event, sequence: log.length + 1 })
-      }), "Concept Peek explanation");
+        signal: controller.signal,
+        onRuntimeEvent: (event) => {
+          if (!controller.signal.aborted) log.push({ ...event, sequence: log.length + 1 });
+        }
+      });
+      this.modelWorks.set(session.id, {
+        controller,
+        promise,
+        stop: () => undefined,
+        markUnconfirmed: () => undefined,
+        restart: () => this.openConceptPeek(session, anchor.id, prerequisite)
+      });
+      let generated: string;
+      try {
+        generated = await promise;
+      } catch (error) {
+        if (controller.signal.aborted) throw new Error("Concept Peek generation was stopped.");
+        this.recordModelAccessLoss(error);
+        throw error;
+      } finally {
+        if (this.modelWorks.get(session.id)?.promise === promise) this.modelWorks.delete(session.id);
+      }
+      const content = requiredText(generated, "Concept Peek explanation");
       session.conceptPeeks.push({
         id: crypto.randomUUID(),
         sourceAnchorId: anchor.id,

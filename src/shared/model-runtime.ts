@@ -106,6 +106,7 @@ export interface ConceptPeekRequest {
   sourceAnchorId: string;
   sourceId: string;
   selection: SourceAnchorSelection;
+  signal: AbortSignal;
   onRuntimeEvent?(event: ModelRuntimeEvent): void;
 }
 

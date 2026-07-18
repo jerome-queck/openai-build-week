@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LearningApplicationState } from "../../shared/learning-application";
@@ -119,6 +119,11 @@ describe("anchored teaching workbench", () => {
     const user = userEvent.setup();
     const originState = workbenchState();
     const origin = originState.sessions[0];
+    origin.sourceIds = ["source-2", "source-1"];
+    originState.sources.unshift({
+      id: "source-2", kind: "managedAsset", workspaceId: "quick-study-workspace", name: "Supporting notes",
+      mediaType: "text/plain", content: "Supporting notes that are not the Concept Peek anchor source."
+    });
     origin.learningSlice = {
       roadmapId: "roadmap-1", stageId: "stage-1", boundary: "Prove compact subsets are closed",
       immediatePrerequisites: ["Hausdorff separation"]
@@ -149,6 +154,11 @@ describe("anchored teaching workbench", () => {
       .toContain("Anchored at “compact subset” (characters 6–20)");
     await user.click(screen.getByRole("button", { name: "Show Source Anchor for Concept Peek Hausdorff separation" }));
     expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
+    expect((screen.getByRole("combobox", { name: "Workbench Source Layer" }) as HTMLSelectElement).value).toBe("source-1");
+    const peekAnchorMarker = screen.getByRole("button", {
+      name: "Open Anchor Marker for Text Source Anchor: compact subset (characters 6–20)"
+    });
+    await waitFor(() => expect(peekAnchorMarker).toBe(document.activeElement));
     const openPeek = screen.getByRole("button", { name: "Open Concept Peek Hausdorff separation" });
     openPeek.focus();
     await user.keyboard("{Enter}");
@@ -210,11 +220,6 @@ describe("anchored teaching workbench", () => {
         label: "Text Source Anchor: compact subset (characters 6–20)"
       }
     };
-    origin.sourceIds = ["source-2", "source-1"];
-    originState.sources.unshift({
-      id: "source-2", kind: "managedAsset", workspaceId: "quick-study-workspace", name: "Supporting notes",
-      mediaType: "text/plain", content: "Supporting notes that are not the Return Point source."
-    });
     const branchState = structuredClone(originState);
     branchState.sessions = [structuredClone(origin), branch];
     branchState.activeSessionId = branch.id;

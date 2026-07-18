@@ -1442,6 +1442,35 @@ describe("Learning Application", () => {
     });
   });
 
+  it("tracks and cancels Concept Peek generation without retaining partial learner-facing content", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    });
+    runtime.holdConceptPeek = true;
+    const { application } = await launchWithRuntime(runtime);
+    let state = await application.submit({ type: "startQuickStudy", mathematics: "Every compact subset is closed." });
+    const sessionId = state.activeSessionId!;
+    const sourceId = state.sessions[0].sourceIds[0];
+    state = await application.submit({
+      type: "createSourceAnchor",
+      sourceId,
+      selection: {
+        kind: "text", startOffset: 6, endOffset: 20, exactText: "compact subset", prefix: "Every ", suffix: " is closed."
+      },
+      paletteAction: "annotate"
+    });
+    const sourceAnchorId = state.sessions[0].activeSourceAnchorId!;
+
+    const opening = application.submit({ type: "openConceptPeek", sourceAnchorId, prerequisite: "open covers" });
+    const stopped = expect(opening).rejects.toThrow("Concept Peek generation was stopped");
+    await application.submit({ type: "cancelSessionModelWork", sessionId });
+
+    await stopped;
+    expect(runtime.canceledSessionIds).toContain(sessionId);
+    expect(application.getState().sessions[0].conceptPeeks).toEqual([]);
+  });
+
   it("requires a learner decision before branching and returns to the exact durable Return Point", async () => {
     const { application, dataDirectory } = await launch();
     let state = await application.submit({
@@ -2826,6 +2855,7 @@ class DeterministicModelRuntime implements ModelRuntime {
   cancelError: Error | null = null;
   completeTeachingOnCancel = true;
   teachingDeltaOnStart: string | null = null;
+  holdConceptPeek = false;
 
   constructor(private readonly proposal: SessionProposal, private readonly holdTeaching = false) {}
 
@@ -2854,6 +2884,11 @@ class DeterministicModelRuntime implements ModelRuntime {
   async createConceptPeek(request: Parameters<ModelRuntime["createConceptPeek"]>[0]): Promise<string> {
     this.conceptPeekRequests.push(request);
     request.onRuntimeEvent?.({ type: "threadStarted", threadId: "peek-thread", turnId: null, detail: "Thread started." });
+    if (this.holdConceptPeek) {
+      await new Promise<void>((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(new Error("Concept Peek aborted.")), { once: true });
+      });
+    }
     request.onRuntimeEvent?.({ type: "turnCompleted", threadId: "peek-thread", turnId: "peek-turn", detail: "Completed." });
     if (request.prerequisite === "Hausdorff separation") {
       return "A Hausdorff space lets any two distinct points be enclosed in disjoint open neighbourhoods. At this Source Anchor, that separation is what turns compactness into the closed-set conclusion.";

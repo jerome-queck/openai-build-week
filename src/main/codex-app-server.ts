@@ -319,8 +319,14 @@ export class CodexAppServerRuntime implements ModelRuntime {
   }
 
   async createConceptPeek(request: ConceptPeekRequest): Promise<string> {
+    let resolveStart!: () => void;
+    const start = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    this.teachingStartSignals.set(request.sessionId, { promise: start, resolve: resolveStart });
     try {
-      return await this.runTurn(
+      if (request.signal.aborted) throw new Error("Concept Peek generation was stopped.");
+      const content = await this.runTurn(
         [
           "Write one compact Concept Peek explaining the named prerequisite at the supplied Source Anchor.",
           "Use two to four learner-facing sentences. State the relevant definition, lemma, or technique and connect it directly to the anchored mathematics. Do not branch into a full lesson, claim verification, or mention internal tools.",
@@ -332,12 +338,17 @@ export class CodexAppServerRuntime implements ModelRuntime {
         ].join("\n\n"),
         undefined,
         undefined,
-        undefined,
+        request.sessionId,
         request.onRuntimeEvent
       );
+      if (request.signal.aborted) throw new Error("Concept Peek generation was stopped.");
+      return content;
     } catch (error) {
+      resolveStart();
       request.onRuntimeEvent?.({ type: "turnFailed", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
       throw error;
+    } finally {
+      this.teachingStartSignals.delete(request.sessionId);
     }
   }
 

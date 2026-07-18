@@ -57,7 +57,7 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
     : null;
   useEffect(() => {
     if (focusAnchorId) anchorMarkerRefs.current.get(focusAnchorId)?.focus();
-  }, [focusAnchorId]);
+  }, [focusAnchorId, sourceId]);
 
   const openPalette = (nextSelection: SourceAnchorSelection, origin: HTMLElement) => {
     originRef.current = origin;

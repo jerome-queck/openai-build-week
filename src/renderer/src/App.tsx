@@ -1201,7 +1201,10 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
   };
   useEffect(() => {
     const returnSource = selectableSources.find((candidate) => candidate.id === returnSourceId);
-    if (returnSource?.kind === "linkedSource" && linkedView?.sourceId !== returnSource.id) {
+    if (returnSource?.kind === "managedAsset") {
+      setSourceId(returnSource.id);
+      setLinkedView(null);
+    } else if (returnSource?.kind === "linkedSource" && linkedView?.sourceId !== returnSource.id) {
       void chooseSource(returnSource.id).catch((cause: unknown) => setSourceError(
         cause instanceof Error ? cause.message : "The Return Point source could not be reopened."
       ));
