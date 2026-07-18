@@ -185,23 +185,29 @@ function FilingControls({ state, session, onState }: {
   onState: StateHandler;
 }) {
   const destinations = state.missions.filter((mission) => mission.kind === "named");
-  const [destination, setDestination] = useState(destinations[0] ? `${destinations[0].workspaceId}|${destinations[0].id}` : "");
+  const [destinationMissionId, setDestinationMissionId] = useState(destinations[0]?.id ?? "");
   useEffect(() => {
-    const available = destinations.map((mission) => `${mission.workspaceId}|${mission.id}`);
-    if (!available.includes(destination)) setDestination(available[0] ?? "");
-  }, [destination, destinations]);
+    if (!destinations.some((mission) => mission.id === destinationMissionId)) {
+      setDestinationMissionId(destinations[0]?.id ?? "");
+    }
+  }, [destinationMissionId, destinations]);
   if (destinations.length === 0) return <span className="filing-hint">Create a named workspace and mission to file this session.</span>;
   const file = async () => {
-    const [workspaceId, missionId] = destination.split("|");
-    onState(await window.quickStudy.submit({ type: "fileSession", sessionId: session.id, workspaceId, missionId }));
+    const mission = destinations.find((candidate) => candidate.id === destinationMissionId)!;
+    onState(await window.quickStudy.submit({
+      type: "fileSession",
+      sessionId: session.id,
+      workspaceId: mission.workspaceId,
+      missionId: mission.id
+    }));
   };
   return (
     <div className="filing-controls">
       <label htmlFor={`filing-${session.id}`}>Destination Study Mission</label>
-      <select id={`filing-${session.id}`} value={destination} onChange={(event) => setDestination(event.target.value)}>
+      <select id={`filing-${session.id}`} value={destinationMissionId} onChange={(event) => setDestinationMissionId(event.target.value)}>
         {destinations.map((mission) => {
           const workspace = state.workspaces.find((candidate) => candidate.id === mission.workspaceId)!;
-          return <option key={mission.id} value={`${workspace.id}|${mission.id}`}>{workspace.name} — {mission.name}</option>;
+          return <option key={mission.id} value={mission.id}>{workspace.name} — {mission.name}</option>;
         })}
       </select>
       <button className="secondary" onClick={() => void file()}>File Quick Study session</button>

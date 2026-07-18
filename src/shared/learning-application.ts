@@ -20,6 +20,12 @@ export interface StudyWorkspace {
   id: string;
   kind: "system" | "named";
   name: string;
+  context: WorkspaceContext;
+}
+
+export interface WorkspaceContext {
+  sourceIds: string[];
+  learnerContextIds: string[];
 }
 
 export interface StudyMission {
@@ -27,6 +33,11 @@ export interface StudyMission {
   kind: "unfiled" | "named";
   workspaceId: string;
   name: string;
+}
+
+export interface StudyLocation {
+  workspaceId: string;
+  missionId: string;
 }
 
 export interface LearningSession {
@@ -69,8 +80,8 @@ export type LearnerAction =
   | { type: "renameWorkspace"; workspaceId: string; name: string }
   | { type: "createMission"; workspaceId: string; name: string }
   | { type: "navigateToWorkspace"; workspaceId: string }
-  | { type: "navigateToMission"; workspaceId: string; missionId: string }
-  | { type: "fileSession"; sessionId: string; workspaceId: string; missionId: string };
+  | ({ type: "navigateToMission" } & StudyLocation)
+  | ({ type: "fileSession"; sessionId: string } & StudyLocation);
 
 export class LearningApplication {
   private state: LearningApplicationState = initialState();
@@ -84,7 +95,7 @@ export class LearningApplication {
   static async launch(dataDirectory: string): Promise<LearningApplication> {
     const application = new LearningApplication(dataDirectory);
     try {
-      const persisted = JSON.parse(await readFile(application.statePath, "utf8")) as LearningApplicationState;
+      const persisted = migratePersistedState(JSON.parse(await readFile(application.statePath, "utf8")));
       for (const session of persisted.sessions) {
         if (session.status === "active") session.status = "paused";
       }
@@ -108,7 +119,8 @@ export class LearningApplication {
         const workspace: StudyWorkspace = {
           id: crypto.randomUUID(),
           kind: "named",
-          name: requiredName(action.name, "Study Workspace")
+          name: requiredName(action.name, "Study Workspace"),
+          context: emptyWorkspaceContext()
         };
         this.state.workspaces.push(workspace);
         this.state.navigation = { workspaceId: workspace.id, missionId: null };
@@ -296,6 +308,37 @@ function mostRecentSessionId(sessions: LearningSession[]): string | null {
   )?.id ?? null;
 }
 
+function migratePersistedState(value: unknown): LearningApplicationState {
+  if (!value || typeof value !== "object") throw new Error("Stored Learning Application state is invalid.");
+  const stored = value as Record<string, unknown>;
+  if (Array.isArray(stored.sessions)) {
+    const current = value as LearningApplicationState;
+    current.workspaces = current.workspaces.map((workspace) => ({
+      ...workspace,
+      context: workspace.context ?? emptyWorkspaceContext()
+    }));
+    return current;
+  }
+
+  if (!("session" in stored)) throw new Error("Stored Learning Application state uses an unsupported version.");
+  const legacy = value as {
+    session: Omit<LearningSession, "activityOrder"> | null;
+  };
+  const migrated = initialState();
+  if (legacy.session) {
+    const session: LearningSession = { ...legacy.session, status: "paused", activityOrder: 1 };
+    migrated.sessions.push(session);
+    migrated.resumeSessionId = session.id;
+    migrated.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
+    migrated.activityOrder = 1;
+  }
+  return migrated;
+}
+
+function emptyWorkspaceContext(): WorkspaceContext {
+  return { sourceIds: [], learnerContextIds: [] };
+}
+
 function initialState(): LearningApplicationState {
   return {
     screen: "dashboard",
@@ -307,7 +350,12 @@ function initialState(): LearningApplicationState {
         workspaceId: "quick-study-workspace"
       }
     },
-    workspaces: [{ id: "quick-study-workspace", kind: "system", name: "Quick Study" }],
+    workspaces: [{
+      id: "quick-study-workspace",
+      kind: "system",
+      name: "Quick Study",
+      context: emptyWorkspaceContext()
+    }],
     missions: [
       {
         id: "quick-study-unfiled-mission",

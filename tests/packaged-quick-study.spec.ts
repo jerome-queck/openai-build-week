@@ -75,15 +75,27 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await workspaceControl.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("heading", { name: "Abstract Algebra", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open Study Mission Finite group structure" })).toBeVisible();
+    const missionControl = page.getByRole("button", { name: "Open Study Mission Finite group structure" });
+    await missionControl.focus();
+    await page.keyboard.press("Enter");
+    await expect(missionControl).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("button", { name: "Open Study Mission Group actions" })).toBeVisible();
+    const groupedSessionControl = page.getByRole("button", {
+      name: "Resume grouped Learning Session Understand where convergence controls the tail"
+    });
+    await groupedSessionControl.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Mathematical Workbench" })).toBeVisible();
+    await page.getByRole("button", { name: "Leave session" }).click();
     await quit();
 
     page = await launch();
     await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Study Workspace Abstract Algebra" })).toBeVisible();
     await expect(page.getByText("Bound the sequence using its finite prefix and tail")).toBeVisible();
-    await page.getByRole("button", { name: "Resume Learning Session", exact: true }).click();
+    const resumeControl = page.getByRole("button", { name: "Resume Learning Session", exact: true });
+    await resumeControl.focus();
+    await page.keyboard.press("Enter");
 
     await expect(page.getByRole("heading", { name: "Mathematical Workbench" })).toBeVisible();
     await expect(page.getByLabel("Learning Goal")).toHaveValue("Understand where convergence controls the tail");

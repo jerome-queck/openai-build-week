@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -120,6 +120,11 @@ describe("Learning Application", () => {
       workspaces: [{ id: "quick-study-workspace", name: "Quick Study" }, { id: workspace!.id, name: "Algebra II" }]
     });
     expect(reloaded.getState().missions.filter((mission) => mission.workspaceId === workspace!.id)).toHaveLength(2);
+    expect(reloaded.getState().workspaces.find((candidate) => candidate.id === workspace!.id)).toMatchObject({
+      context: { sourceIds: [], learnerContextIds: [] }
+    });
+    expect(firstMission).not.toHaveProperty("context");
+    expect(secondMission).not.toHaveProperty("context");
   });
 
   it("files Quick Study work intact and orders the Resume Card by the most recently touched session", async () => {
@@ -165,5 +170,48 @@ describe("Learning Application", () => {
       navigation: { workspaceId, missionId }
     });
     expect(reloaded.getState().sessions).toHaveLength(2);
+  });
+
+  it("migrates the durable Quick Study session created by the previous application version", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    await writeFile(join(dataDirectory, "learning-application.json"), JSON.stringify({
+      screen: "resume",
+      quickStudy: {
+        workspace: { id: "quick-study-workspace", kind: "system", name: "Quick Study" },
+        mission: {
+          id: "quick-study-unfiled-mission",
+          kind: "unfiled",
+          workspaceId: "quick-study-workspace"
+        }
+      },
+      session: {
+        id: "legacy-session",
+        workspaceId: "quick-study-workspace",
+        missionId: "quick-study-unfiled-mission",
+        mathematics: "Prove that the square root of 3 is irrational.",
+        learningGoal: "Understand the contradiction",
+        sessionTarget: "Track divisibility by three",
+        status: "paused",
+        returnContext: {
+          label: "Your typed mathematics",
+          nextAction: "Continue working through the key idea"
+        }
+      }
+    }, null, 2), "utf8");
+
+    const migrated = await LearningApplication.launch(dataDirectory);
+    expect(migrated.getState()).toMatchObject({
+      screen: "dashboard",
+      activeSessionId: null,
+      resumeSessionId: "legacy-session",
+      sessions: [{
+        id: "legacy-session",
+        mathematics: "Prove that the square root of 3 is irrational.",
+        learningGoal: "Understand the contradiction",
+        sessionTarget: "Track divisibility by three",
+        status: "paused"
+      }]
+    });
   });
 });
