@@ -237,12 +237,12 @@ describe("Learning Application", () => {
       content: "Differentiate the polynomial term by term."
     });
     const nextStep = state.sessions[0].trailDraft.items[1];
+    expect(nextStep.required).toBe(true);
     state = await application.submit({
       type: "editTrailItem",
       trailItemId: nextStep.id,
       content: "Differentiate using the power rule."
     });
-    state = await application.submit({ type: "setTrailItemRequired", trailItemId: nextStep.id, required: true });
     state = await application.submit({ type: "moveTrailItem", trailItemId: nextStep.id, direction: "up" });
     expect(state.sessions[0].trailDraft.items.map((item) => item.content)).toEqual([
       "Differentiate using the power rule.",
@@ -256,7 +256,10 @@ describe("Learning Application", () => {
     expect(state.sessions[0].trailDraft.items).toHaveLength(1);
 
     await application.submit({ type: "leaveSession" });
-    state = await application.submit({ type: "resumeSession", sessionId });
+    const pausedRelaunch = await LearningApplication.launch(dataDirectory);
+    applications.push(pausedRelaunch);
+    expect(pausedRelaunch.getState().sessions[0].trailDraft.items).toEqual([anchoredItem]);
+    state = await pausedRelaunch.submit({ type: "resumeSession", sessionId });
     expect(state.sessions[0].trailDraft.items).toEqual([anchoredItem]);
 
     const relaunched = await LearningApplication.launch(dataDirectory);
@@ -411,6 +414,12 @@ describe("Learning Application", () => {
       origin: "teachingAgent",
       links: { sourceAnchorIds: [anchorId], teachingCardIds: [cardId] }
     });
+    expect(state.sessions[0].trailDraft.items).toContainEqual(expect.objectContaining({
+      kind: "evidence",
+      content: expect.stringContaining("Context used:"),
+      origin: "teachingAgent",
+      links: expect.objectContaining({ sourceAnchorIds: [anchorId], teachingCardIds: [cardId] })
+    }));
 
     await application.submit({ type: "reviseTeachingCard", cardId, instruction: "Make the separation step explicit." });
     runtime.emitTeaching("Choose one separating neighbourhood for each point, then take a finite subcover.");
@@ -440,6 +449,16 @@ describe("Learning Application", () => {
         learningArtifactIds: [artifact.id]
       })
     }));
+
+    const concept = state.sessions[0].trailDraft.items.find((item) => item.curationKey === `source-anchor:${anchorId}`)!;
+    state = await application.submit({
+      type: "editTrailItem", trailItemId: concept.id, content: "Compactness supplies the finite choice."
+    });
+    expect(state.sessions[0].trailDraft.items.find((item) => item.id === concept.id)).toMatchObject({
+      content: "Compactness supplies the finite choice.",
+      origin: "learner",
+      curationKey: null
+    });
   });
 
   it("opens an anchored question in the Contextual Inspector path without dispatching until the learner words it", async () => {
@@ -600,6 +619,9 @@ describe("Learning Application", () => {
     });
     runtime.completeTeaching();
     await application.waitForModelWork();
+    expect(application.getState().sessions[0].trailDraft.items.some(
+      (item) => item.curationKey === `question-card:${questionCard.id}`
+    )).toBe(false);
     expect(application.getState().sessions[0].questionCards[0].currentRevision.contextUsed).toEqual(expect.arrayContaining([
       expect.objectContaining({ typeLabel: "Previous Question Card question", identity: "Where is Hausdorff used?" }),
       expect.objectContaining({ typeLabel: "Previous Question Card answer", preview: "Hausdorffness separates the outside point from each point of the compact set." }),

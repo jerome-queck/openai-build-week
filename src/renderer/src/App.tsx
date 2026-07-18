@@ -902,6 +902,16 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState} key={artifact.id} />)}
             <TrailDraft session={session} onAction={async (action) => {
               onState(await window.quickStudy.submit(action));
+            }} onActivateSourceAnchor={async (sourceAnchorId) => {
+              setFocusAnchorId(sourceAnchorId);
+              setInspectorCardId(null);
+              onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }));
+            }} onOpenTeachingCard={async (teachingCardId) => {
+              const card = session.anchoredTeachingCards.find((candidate) => candidate.id === teachingCardId);
+              if (!card) throw new Error("Choose a linked Teaching Card in this Learning Session.");
+              setFocusAnchorId(null);
+              setInspectorCardId(card.id);
+              onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
             }} />
             <SessionAccessPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
@@ -1288,7 +1298,7 @@ function PinnedLearningArtifact({ artifact, onState }: { artifact: LearningArtif
     content
   }));
   return (
-    <article className="learning-artifact" aria-label={`Pinned Learning Artifact ${artifact.title}`}>
+    <article id={`learning-artifact-${artifact.id}`} className="learning-artifact" aria-label={`Pinned Learning Artifact ${artifact.title}`}>
       <div className="card-heading">
         <div><p className="eyebrow">Learning Artifact</p><h2>{artifact.title}</h2></div>
         <span className="saved">Pinned on the main canvas</span>

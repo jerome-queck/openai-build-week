@@ -1,22 +1,32 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LearningSession } from "../../shared/learning-application";
 import { TrailDraft } from "./TrailDraft";
 
 describe("Trail Draft", () => {
+  afterEach(cleanup);
   it("supports keyboard editing, requiring, reordering, and removal with visible linked context", async () => {
     const user = userEvent.setup();
     const session = trailSession();
     const onAction = vi.fn().mockResolvedValue(undefined);
+    const onActivateSourceAnchor = vi.fn().mockResolvedValue(undefined);
+    const onOpenTeachingCard = vi.fn().mockResolvedValue(undefined);
 
-    render(<TrailDraft session={session} onAction={onAction} />);
+    render(<TrailDraft session={session} onAction={onAction}
+      onActivateSourceAnchor={onActivateSourceAnchor} onOpenTeachingCard={onOpenTeachingCard} />);
 
     const trail = screen.getByRole("region", { name: "Trail Draft" });
     expect(trail.textContent).toContain("Source Anchor · compact subset");
     expect(trail.textContent).toContain("Teaching Card · Explain compact subset");
     expect(trail.textContent).toContain("Learning Artifact · Compactness walkthrough");
+    await user.click(screen.getByRole("button", { name: "Open Source Anchor compact subset" }));
+    expect(onActivateSourceAnchor).toHaveBeenCalledWith("anchor-1");
+    await user.click(screen.getByRole("button", { name: "Open Teaching Card Explain compact subset" }));
+    expect(onOpenTeachingCard).toHaveBeenCalledWith("card-1");
+    expect(screen.getByRole("link", { name: "Open Learning Artifact Compactness walkthrough" }).getAttribute("href"))
+      .toBe("#learning-artifact-artifact-1");
     expect((screen.getByRole("button", { name: "Remove Trail Item compact subset" }) as HTMLButtonElement).disabled).toBe(true);
     expect(trail.textContent).toContain("Required Trail Items cannot be removed");
 
@@ -53,6 +63,22 @@ describe("Trail Draft", () => {
     expect(onAction).toHaveBeenCalledWith({
       type: "addTrailItem", kind: "evidence", content: "I reconstructed the separation step."
     });
+  });
+
+  it("keeps a new Trail Item draft when persistence fails", async () => {
+    const user = userEvent.setup();
+    const session = trailSession();
+    session.trailDraft.items = [];
+    const onAction = vi.fn().mockRejectedValue(new Error("Local storage is unavailable."));
+    render(<TrailDraft session={session} onAction={onAction}
+      onActivateSourceAnchor={vi.fn()} onOpenTeachingCard={vi.fn()} />);
+
+    const content = screen.getByRole("textbox", { name: "New Trail Item content" }) as HTMLTextAreaElement;
+    await user.type(content, "Preserve this learner draft.");
+    await user.click(screen.getByRole("button", { name: "Add Trail Item" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Local storage is unavailable");
+    expect(content.value).toBe("Preserve this learner draft.");
   });
 });
 

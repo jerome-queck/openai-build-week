@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   isSourceAnchorPaletteAction,
   isSourceAnchorSelection,
+  isTrailItemKind,
   LearningApplication,
   type LearnerAction
 } from "../shared/learning-application";
@@ -99,8 +100,7 @@ function isLearnerAction(value: unknown): value is LearnerAction {
       return "artifactId" in action && typeof action.artifactId === "string"
         && "revisionId" in action && typeof action.revisionId === "string";
     case "addTrailItem":
-      return "kind" in action && ["concept", "reasoningStep", "learningArtifact", "evidence", "unresolvedQuestion", "nextStep"]
-        .includes(String(action.kind))
+      return "kind" in action && isTrailItemKind(action.kind)
         && "content" in action && typeof action.content === "string";
     case "editTrailItem":
       return "trailItemId" in action && typeof action.trailItemId === "string"

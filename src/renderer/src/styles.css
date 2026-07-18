@@ -299,6 +299,8 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .trail-item .field { min-height: 72px; margin-bottom: 10px; }
 .trail-links { margin: 4px 0 14px; padding-left: 20px; color: #557069; font-size: 12px; }
 .trail-links li + li { margin-top: 4px; }
+.trail-links .text-button { padding: 0; font-size: inherit; }
+.trail-links a { color: #1d5548; font-weight: 750; }
 .trail-required { display: flex; align-items: center; gap: 8px; width: fit-content; margin: 8px 0; }
 .trail-required input { width: auto; min-height: auto; }
 .trail-item-actions { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }

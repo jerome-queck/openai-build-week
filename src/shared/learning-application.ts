@@ -183,7 +183,10 @@ export interface LearningArtifactRevision {
   verificationCurrency: "current";
 }
 
-export type TrailItemKind = "concept" | "reasoningStep" | "learningArtifact" | "evidence" | "unresolvedQuestion" | "nextStep";
+export const TRAIL_ITEM_KINDS = [
+  "concept", "reasoningStep", "learningArtifact", "evidence", "unresolvedQuestion", "nextStep"
+] as const;
+export type TrailItemKind = typeof TRAIL_ITEM_KINDS[number];
 
 export interface TrailItemLinks {
   sourceAnchorIds: string[];
@@ -1298,7 +1301,7 @@ export class LearningApplication {
           id: crypto.randomUUID(),
           kind: action.kind,
           content: requiredText(action.content, "Trail Item"),
-          required: false,
+          required: true,
           origin: "learner",
           links: activeTrailItemLinks(session),
           curationKey: null
@@ -1307,7 +1310,11 @@ export class LearningApplication {
       }
       case "editTrailItem": {
         const session = this.requireActiveSession();
-        requireTrailItem(session, action.trailItemId).content = requiredText(action.content, "Trail Item");
+        Object.assign(requireTrailItem(session, action.trailItemId), {
+          content: requiredText(action.content, "Trail Item"),
+          origin: "learner" as const,
+          curationKey: null
+        });
         break;
       }
       case "removeTrailItem": {
@@ -2193,6 +2200,15 @@ export class LearningApplication {
             learningArtifactIds: card.artifactId ? [card.artifactId] : [],
             understandingEvidenceIds: []
           });
+          const contextSummary = revision.contextUsed.map((context) => `${context.sourceName} · ${context.location}`).join("; ");
+          if (contextSummary) {
+            upsertSuggestedTrailItem(session, `teaching-card-evidence:${card.id}`, "evidence", `Context used: ${contextSummary}`, {
+              sourceAnchorIds: [anchor.id],
+              teachingCardIds: [card.id],
+              learningArtifactIds: card.artifactId ? [card.artifactId] : [],
+              understandingEvidenceIds: []
+            });
+          }
         }
       },
       fail: (error) => Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true }),
@@ -2270,6 +2286,10 @@ export class LearningApplication {
       append: (delta) => { revision.content += delta; },
       complete: () => {
         revision.status = "completed";
+        removeSuggestedTrailItem(session, `question-card:${card.id}`);
+      },
+      fail: (error) => {
+        Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true });
         upsertSuggestedTrailItem(session, `question-card:${card.id}`, "unresolvedQuestion", card.question, {
           sourceAnchorIds: context.flatMap((item) => item.sourceAnchorId ? [item.sourceAnchorId] : []),
           teachingCardIds: [],
@@ -2277,8 +2297,15 @@ export class LearningApplication {
           understandingEvidenceIds: []
         });
       },
-      fail: (error) => Object.assign(revision, { status: "failed", error: usefulRuntimeError(error), retryable: true }),
-      stop: () => interruptCardRevision(revision),
+      stop: () => {
+        interruptCardRevision(revision);
+        upsertSuggestedTrailItem(session, `question-card:${card.id}`, "unresolvedQuestion", card.question, {
+          sourceAnchorIds: context.flatMap((item) => item.sourceAnchorId ? [item.sourceAnchorId] : []),
+          teachingCardIds: [],
+          learningArtifactIds: [],
+          understandingEvidenceIds: []
+        });
+      },
       markUnconfirmed: () => {
         revision.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
       },
@@ -3580,6 +3607,11 @@ function upsertSuggestedTrailItem(
   });
 }
 
+function removeSuggestedTrailItem(session: LearningSession, curationKey: string): void {
+  const index = session.trailDraft.items.findIndex((item) => item.curationKey === curationKey);
+  if (index >= 0 && !session.trailDraft.items[index].required) session.trailDraft.items.splice(index, 1);
+}
+
 function requireTrailItem(session: LearningSession, trailItemId: string): TrailItem {
   const item = session.trailDraft.items.find((candidate) => candidate.id === trailItemId);
   if (!item) throw new Error("Choose a Trail Item in the active Learning Session.");
@@ -3938,12 +3970,12 @@ function validTrailItemLinks(value: unknown): value is TrailItemLinks {
     value.teachingCardIds,
     value.learningArtifactIds,
     value.understandingEvidenceIds
-  ].every((identifiers) => Array.isArray(identifiers) && identifiers.every((identifier) => typeof identifier === "string"));
+  ].every((identifiers) => Array.isArray(identifiers) && identifiers.every((identifier) => typeof identifier === "string"))
+    && (value.understandingEvidenceIds as unknown[]).length === 0;
 }
 
-function isTrailItemKind(value: unknown): value is TrailItemKind {
-  return ["concept", "reasoningStep", "learningArtifact", "evidence", "unresolvedQuestion", "nextStep"]
-    .includes(String(value));
+export function isTrailItemKind(value: unknown): value is TrailItemKind {
+  return TRAIL_ITEM_KINDS.includes(value as TrailItemKind);
 }
 
 function validTeachingCardRevision(value: unknown): value is TeachingCardRevision {

@@ -10,9 +10,11 @@ const TRAIL_ITEM_LABELS: Record<TrailItemKind, string> = {
   nextStep: "Next step"
 };
 
-export function TrailDraft({ session, onAction }: {
+export function TrailDraft({ session, onAction, onActivateSourceAnchor, onOpenTeachingCard }: {
   session: LearningSession;
   onAction(action: LearnerAction): Promise<void>;
+  onActivateSourceAnchor(sourceAnchorId: string): Promise<void> | void;
+  onOpenTeachingCard(teachingCardId: string): Promise<void> | void;
 }) {
   const [newKind, setNewKind] = useState<TrailItemKind>("concept");
   const [newContent, setNewContent] = useState("");
@@ -20,21 +22,32 @@ export function TrailDraft({ session, onAction }: {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
-  const run = async (action: LearnerAction, success: string) => {
+  const run = async (action: LearnerAction, success: string): Promise<boolean> => {
     setError(null);
     setStatus(null);
     try {
       await onAction(action);
       setStatus(success);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Trail Draft could not be updated.");
+      return false;
     }
   };
   const add = async (event: FormEvent) => {
     event.preventDefault();
     if (!newContent.trim()) return;
-    await run({ type: "addTrailItem", kind: newKind, content: newContent }, "Trail Item added.");
-    setNewContent("");
+    if (await run({ type: "addTrailItem", kind: newKind, content: newContent }, "Trail Item added.")) {
+      setNewContent("");
+    }
+  };
+  const followLink = async (follow: () => Promise<void> | void) => {
+    setError(null);
+    try {
+      await follow();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The linked learning context could not be opened.");
+    }
   };
 
   return (
@@ -61,7 +74,9 @@ export function TrailDraft({ session, onAction }: {
                 value={drafts[item.id] ?? item.content}
                 onChange={(event) => setDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
               />
-              <TrailItemLinks item={item} session={session} />
+              <TrailItemLinks item={item} session={session}
+                onActivateSourceAnchor={(sourceAnchorId) => followLink(() => onActivateSourceAnchor(sourceAnchorId))}
+                onOpenTeachingCard={(teachingCardId) => followLink(() => onOpenTeachingCard(teachingCardId))} />
               <label className="trail-required">
                 <input
                   type="checkbox"
@@ -109,23 +124,33 @@ export function TrailDraft({ session, onAction }: {
   );
 }
 
-function TrailItemLinks({ item, session }: { item: TrailItem; session: LearningSession }) {
-  const labels = [
+function TrailItemLinks({ item, session, onActivateSourceAnchor, onOpenTeachingCard }: {
+  item: TrailItem;
+  session: LearningSession;
+  onActivateSourceAnchor(sourceAnchorId: string): Promise<void> | void;
+  onOpenTeachingCard(teachingCardId: string): Promise<void> | void;
+}) {
+  const links = [
     ...item.links.sourceAnchorIds.flatMap((id) => {
       const anchor = session.sourceAnchors.find((candidate) => candidate.id === id);
       if (!anchor) return [];
-      return [`Source Anchor · ${anchor.selection.kind === "diagramRegion" ? "selected diagram region" : anchor.selection.exactText}`];
+      const label = anchor.selection.kind === "diagramRegion" ? "selected diagram region" : anchor.selection.exactText;
+      return [{ key: `source-anchor:${id}`, content: <button className="text-button" aria-label={`Open Source Anchor ${label}`}
+        onClick={() => void onActivateSourceAnchor(id)}>Source Anchor · {label}</button> }];
     }),
     ...item.links.teachingCardIds.flatMap((id) => {
       const card = session.anchoredTeachingCards.find((candidate) => candidate.id === id);
-      return card ? [`Teaching Card · ${card.title}`] : [];
+      return card ? [{ key: `teaching-card:${id}`, content: <button className="text-button" aria-label={`Open Teaching Card ${card.title}`}
+        onClick={() => void onOpenTeachingCard(id)}>Teaching Card · {card.title}</button> }] : [];
     }),
     ...item.links.learningArtifactIds.flatMap((id) => {
       const artifact = session.learningArtifacts.find((candidate) => candidate.id === id);
-      return artifact ? [`Learning Artifact · ${artifact.title}`] : [];
-    }),
-    ...item.links.understandingEvidenceIds.map((id) => `Understanding Evidence · ${id}`)
+      return artifact ? [{ key: `learning-artifact:${id}`, content: <a aria-label={`Open Learning Artifact ${artifact.title}`}
+        href={`#learning-artifact-${id}`}>Learning Artifact · {artifact.title}</a> }] : [];
+    })
   ];
-  if (labels.length === 0) return null;
-  return <ul className="trail-links" aria-label="Linked learning context">{labels.map((label) => <li key={label}>{label}</li>)}</ul>;
+  if (links.length === 0) return null;
+  return <ul className="trail-links" aria-label="Linked learning context">
+    {links.map((link) => <li key={link.key}>{link.content}</li>)}
+  </ul>;
 }
