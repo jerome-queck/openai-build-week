@@ -83,7 +83,7 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       throw new Error(resourceType === "file" ? "Choose an existing file." : "Choose an existing folder.");
     }
     return {
-      name: basename(path),
+      name: basename(path) || path,
       resourceType,
       lastKnownPath: path,
       canonicalPath: await this.dependencies.realpath(path),

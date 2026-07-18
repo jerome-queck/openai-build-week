@@ -34,6 +34,25 @@ describe("macOS source access", () => {
     });
   });
 
+  it("gives a selected filesystem root a stable display name", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ["/"],
+      bookmarks: ["root-bookmark"]
+    });
+    sourceDependencies.stat.mockResolvedValue({
+      size: 64,
+      mtimeMs: 1234,
+      isFile: () => false,
+      isDirectory: () => true
+    });
+
+    const selected = await new MacOsSourceAccess(sourceDependencies).select("folder");
+
+    expect(selected).toMatchObject({ name: "/", lastKnownPath: "/", canonicalPath: "/" });
+  });
+
   it("balances security-scoped access around a read-only file view", async () => {
     const stopAccess = vi.fn();
     const readFile = vi.fn().mockResolvedValue(Buffer.from("A compact space admits a finite subcover."));
