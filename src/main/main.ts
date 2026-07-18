@@ -1,7 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, ShareMenu, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
@@ -15,6 +14,7 @@ import {
 import { CodexAppServerRuntime } from "./codex-app-server";
 import type { ModelRuntime } from "../shared/model-runtime";
 import { MacOsSourceAccess } from "./source-access";
+import { MacOsArtifactSharing } from "./artifact-sharing";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
@@ -232,14 +232,7 @@ function registerLearningApplicationHandlers(): void {
     if (typeof sessionId !== "string" || typeof artifactId !== "string") {
       throw new Error("Invalid Learning Artifact share request.");
     }
-    const portableCopy = learningApplication.createArtifactPortableCopy(sessionId, artifactId);
-    const shareDirectory = join(app.getPath("temp"), "quick-study-artifact-shares", randomUUID());
-    await mkdir(shareDirectory, { recursive: true });
-    const sharePath = join(shareDirectory, portableCopy.suggestedFilename);
-    await learningApplication.exportLearningArtifact(sessionId, artifactId, sharePath);
-    const shareMenu = new ShareMenu({ filePaths: [sharePath] });
-    shareMenu.popup({ window: BrowserWindow.fromWebContents(event.sender) ?? undefined });
-    return { status: "shared", path: sharePath } as const;
+    return learningApplication.shareLearningArtifact(sessionId, artifactId);
   });
   ipcMain.handle("source:linkPrimaryFolder", async (event, workspaceId: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
@@ -331,7 +324,12 @@ void app.whenReady().then(async () => {
   } catch (error) {
     console.error("Codex app-server is unavailable:", error);
   }
-  learningApplication = await LearningApplication.launch(dataDirectory, modelRuntime, sourceAccess);
+  learningApplication = await LearningApplication.launch(
+    dataDirectory,
+    modelRuntime,
+    sourceAccess,
+    new MacOsArtifactSharing(app.getPath("temp"))
+  );
   registerLearningApplicationHandlers();
   createWindow();
 

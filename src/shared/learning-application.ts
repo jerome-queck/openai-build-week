@@ -201,6 +201,9 @@ export interface ArtifactPortableCopy {
 
 export type ArtifactExportResult = { status: "canceled" } | { status: "exported"; path: string };
 export interface ArtifactShareResult { status: "shared"; path: string }
+export interface ArtifactSharing {
+  share(copy: ArtifactPortableCopy): Promise<ArtifactShareResult>;
+}
 
 export const TRAIL_ITEM_KINDS = [
   "concept", "reasoningStep", "learningArtifact", "evidence", "unresolvedQuestion", "nextStep"
@@ -705,7 +708,8 @@ export class LearningApplication {
   private constructor(
     dataDirectory: string,
     modelRuntime: ModelRuntime | null,
-    private readonly sourceAccess: LocalSourceAccess | null
+    private readonly sourceAccess: LocalSourceAccess | null,
+    private readonly artifactSharing: ArtifactSharing | null
   ) {
     this.statePath = join(dataDirectory, "learning-application.json");
     this.sourceIndexPath = join(dataDirectory, "source-index.json");
@@ -715,9 +719,10 @@ export class LearningApplication {
   static async launch(
     dataDirectory: string,
     modelRuntime: ModelRuntime | null = null,
-    sourceAccess: LocalSourceAccess | null = null
+    sourceAccess: LocalSourceAccess | null = null,
+    artifactSharing: ArtifactSharing | null = null
   ): Promise<LearningApplication> {
-    const application = new LearningApplication(dataDirectory, modelRuntime, sourceAccess);
+    const application = new LearningApplication(dataDirectory, modelRuntime, sourceAccess, artifactSharing);
     try {
       const stored = JSON.parse(await readFile(application.statePath, "utf8")) as Record<string, unknown>;
       const { agentWorkLogs, ...storedState } = stored;
@@ -816,6 +821,11 @@ export class LearningApplication {
     await mkdir(dirname(destinationPath), { recursive: true });
     await writeFile(destinationPath, portableCopy.content, "utf8");
     return portableCopy;
+  }
+
+  async shareLearningArtifact(sessionId: string, artifactId: string): Promise<ArtifactShareResult> {
+    if (!this.artifactSharing) throw new Error("Artifact Share is unavailable on this platform.");
+    return this.artifactSharing.share(this.createArtifactPortableCopy(sessionId, artifactId));
   }
 
   getAgentWorkLogEvidence(sessionId: string, fromSequence: number, toSequence: number): AgentWorkLogEvidence[] {
@@ -4280,7 +4290,10 @@ function migrateLearningArtifacts(value: unknown, sessionId: string): LearningAr
     }
     const currentRevision = migrateLearningArtifactRevision(candidate.currentRevision, "promoted");
     const revisions = candidate.revisions.map((revision) => migrateLearningArtifactRevision(revision, "edited"));
-    const kind = candidate.kind === "reformulatedProof" ? "reformulatedProof" : "learningArtifact";
+    if (candidate.kind !== undefined && candidate.kind !== "learningArtifact" && candidate.kind !== "reformulatedProof") {
+      throw new Error("Stored Learning Artifact kind is invalid.");
+    }
+    const kind = candidate.kind ?? "learningArtifact";
     if (candidate.originatingSessionId !== undefined && candidate.originatingSessionId !== sessionId) {
       throw new Error("Stored Learning Artifact origin is invalid.");
     }
@@ -4294,12 +4307,14 @@ function migrateLearningArtifactRevision(
   fallbackAction: LearningArtifactRevision["provenance"]["action"]
 ): LearningArtifactRevision {
   if (!isRecord(value)) throw new Error("Stored Learning Artifact revision is invalid.");
-  const provenance = isRecord(value.provenance)
-    && ["promoted", "edited", "restored"].includes(String(value.provenance.action))
-    && (value.provenance.createdAt === null || typeof value.provenance.createdAt === "string")
-    && (value.provenance.priorRevisionId === null || typeof value.provenance.priorRevisionId === "string")
-    ? value.provenance as unknown as LearningArtifactRevision["provenance"]
-    : { action: fallbackAction, createdAt: null, priorRevisionId: null };
+  let provenance: LearningArtifactRevision["provenance"];
+  if (value.provenance === undefined) {
+    provenance = { action: fallbackAction, createdAt: null, priorRevisionId: null };
+  } else if (validLearningArtifactRevisionProvenance(value.provenance)) {
+    provenance = value.provenance;
+  } else {
+    throw new Error("Stored Learning Artifact revision is invalid.");
+  }
   const migrated = { ...value, provenance };
   if (!validLearningArtifactRevision(migrated)) throw new Error("Stored Learning Artifact revision is invalid.");
   return migrated as unknown as LearningArtifactRevision;
@@ -4434,10 +4449,15 @@ function validLearningArtifactRevision(value: unknown): boolean {
   return isRecord(value) && typeof value.id === "string" && typeof value.content === "string"
     && (value.claimOrigin === "modelGenerated" || value.claimOrigin === "learner" || value.claimOrigin === "mixed")
     && value.verificationLevel === "notIndependentlyChecked" && value.verificationCurrency === "current"
-    && isRecord(value.provenance)
-    && ["promoted", "edited", "restored"].includes(String(value.provenance.action))
-    && (value.provenance.createdAt === null || typeof value.provenance.createdAt === "string")
-    && (value.provenance.priorRevisionId === null || typeof value.provenance.priorRevisionId === "string");
+    && validLearningArtifactRevisionProvenance(value.provenance);
+}
+
+function validLearningArtifactRevisionProvenance(value: unknown): value is LearningArtifactRevision["provenance"] {
+  return isRecord(value)
+    && ["promoted", "edited", "restored"].includes(String(value.action))
+    && (value.createdAt === null || (typeof value.createdAt === "string"
+      && !Number.isNaN(Date.parse(value.createdAt)) && new Date(value.createdAt).toISOString() === value.createdAt))
+    && (value.priorRevisionId === null || typeof value.priorRevisionId === "string");
 }
 
 function validTeachingVariant(value: unknown): value is TeachingVariant {

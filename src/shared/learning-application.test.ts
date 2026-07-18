@@ -716,6 +716,21 @@ describe("Learning Application", () => {
     await relaunched.exportLearningArtifact(sessionId, artifactId, exportPath);
     expect(await readFile(exportPath, "utf8")).toBe(portableCopy.content);
     expect(relaunched.getState()).toEqual(beforePortableCopy);
+
+    const sharedCopies: unknown[] = [];
+    const sharingApplication = await LearningApplication.launch(dataDirectory, null, null, {
+      share: async (copy) => {
+        sharedCopies.push(copy);
+        return { status: "shared", path: "/tmp/shared-portable-proof.md" };
+      }
+    });
+    applications.push(sharingApplication);
+    expect(await sharingApplication.shareLearningArtifact(sessionId, artifactId)).toEqual({
+      status: "shared", path: "/tmp/shared-portable-proof.md"
+    });
+    expect(sharedCopies).toEqual([portableCopy]);
+    expect(Object.keys(sharedCopies[0] as object)).not.toContain("workspaceId");
+    expect(sharingApplication.getState()).toEqual(beforePortableCopy);
   });
 
   it("migrates Learning Artifacts saved before kind, origin, and revision provenance were recorded", async () => {
@@ -758,6 +773,17 @@ describe("Learning Application", () => {
         provenance: { action: "promoted", createdAt: null, priorRevisionId: null }
       }
     });
+
+    persisted.sessions[0].learningArtifacts[0].kind = "sourceLayer";
+    await writeFile(statePath, JSON.stringify(persisted), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Learning Artifact kind is invalid");
+
+    persisted.sessions[0].learningArtifacts[0].kind = "learningArtifact";
+    persisted.sessions[0].learningArtifacts[0].currentRevision.provenance = {
+      action: "edited", createdAt: "not-a-date", priorRevisionId: null
+    };
+    await writeFile(statePath, JSON.stringify(persisted), "utf8");
+    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Learning Artifact revision is invalid");
   });
 
   it("opens an anchored question in the Contextual Inspector path without dispatching until the learner words it", async () => {

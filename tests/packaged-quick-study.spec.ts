@@ -286,6 +286,12 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     expect(exportedArtifact).toContain("# Reformulated Proof");
     expect(exportedArtifact).toContain("`$a=b$`");
     expect(exportedArtifact).toContain("Start from the key definition, then connect each inference to the stated goal.");
+    await expect(reformulatedProof.getByLabel("Learning Artifact content for Explain $a=b$")).toHaveValue(
+      "Start from the key definition, then connect each inference to the stated goal."
+    );
+    await expect(page.getByRole("article", { name: "Read-only Source Layer" })).toContainText(
+      "Adapt the source proof around $a=b$ without changing the supplied source."
+    );
   } finally {
     await quit();
     await rm(dataDirectory, { recursive: true, force: true });
