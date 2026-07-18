@@ -27,6 +27,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "retryModelWork":
     case "startChatGptLogin":
     case "refreshAuthentication":
+    case "discardPendingQuestion":
+    case "submitPendingQuestion":
       return true;
     case "resumeSession":
     case "cancelSessionModelWork":
@@ -34,6 +36,9 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "startQuickStudy":
     case "submitSessionIntake":
       return "mathematics" in action && typeof action.mathematics === "string";
+    case "savePendingQuestion":
+    case "editPendingQuestion":
+      return "text" in action && typeof action.text === "string";
     case "loginWithApiKey":
       return "apiKey" in action && typeof action.apiKey === "string";
     case "reviseSessionProposal":
@@ -71,10 +76,24 @@ function registerLearningApplicationHandlers(): void {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     return learningApplication.getState();
   });
-  ipcMain.handle("learning:submit", (event, action: unknown) => {
+  ipcMain.handle("learning:submit", async (event, action: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (!isLearnerAction(action)) throw new Error("Invalid learner action.");
+    if (action.type === "refreshAuthentication" && !learningApplication.getState().runtimeAvailable) {
+      try {
+        const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+        modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+        return learningApplication.restoreModelRuntime(modelRuntime);
+      } catch (error) {
+        return learningApplication.reportModelRuntimeFailure(error);
+      }
+    }
     return learningApplication.submit(action);
+  });
+  ipcMain.handle("learning:searchSessions", (event, query: unknown) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (typeof query !== "string") throw new Error("Invalid search query.");
+    return learningApplication.searchSessions(query);
   });
   ipcMain.handle("authentication:openExternal", async (event, url: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");

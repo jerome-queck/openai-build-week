@@ -1,4 +1,4 @@
-import type {
+import { ModelAccessError, type
   AuthenticationState,
   ChatGptLogin,
   ModelRuntime,
@@ -88,7 +88,10 @@ class AppServerClient {
 
   constructor(private readonly transport: AppServerTransport) {
     transport.onLine((line) => this.receive(line));
-    transport.onClose((error) => this.rejectPending(error ?? new Error("Codex app-server stopped.")));
+    transport.onClose((error) => this.rejectPending(new ModelAccessError(
+      "runtime",
+      `Codex runtime became unavailable. ${error?.message ?? "Codex app-server stopped."}`
+    )));
   }
 
   async initialize(): Promise<void> {
@@ -104,7 +107,7 @@ class AppServerClient {
 
   request(method: string, params?: unknown, timeoutMs = 10_000): Promise<unknown> {
     if (this.failureError) {
-      return Promise.reject(new Error("Codex runtime became unavailable. Restart Codex and retry."));
+      return Promise.reject(new ModelAccessError("runtime", "Codex runtime became unavailable. Restart Codex and retry."));
     }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
@@ -144,7 +147,7 @@ class AppServerClient {
     try {
       this.transport.write(`${JSON.stringify(message)}\n`);
     } catch {
-      const error = new Error("Codex runtime became unavailable. Restart Codex and retry.");
+      const error = new ModelAccessError("runtime", "Codex runtime became unavailable. Restart Codex and retry.");
       this.rejectPending(error);
       throw error;
     }
@@ -376,7 +379,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
       ...(outputSchema ? { outputSchema } : {})
     }) as { turn: { id: string } };
     if (this.runtimeFailure) {
-      throw new Error(`Codex runtime became unavailable. ${this.runtimeFailure.message}`);
+      throw new ModelAccessError("runtime", `Codex runtime became unavailable. ${this.runtimeFailure.message}`);
     }
     onRuntimeEvent?.({
       type: "turnStarted",
@@ -504,7 +507,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         turnId,
       detail: error.message
       });
-      turn.reject(new Error("Codex runtime became unavailable. Restart Codex and retry this Teaching Card."));
+      turn.reject(new ModelAccessError("runtime", "Codex runtime became unavailable. Restart Codex and retry this Teaching Card."));
       this.removeActiveTeachingTurn(turnId);
     }
     this.turns.clear();
@@ -533,11 +536,17 @@ function createUnrefTimer(callback: () => void, timeoutMs: number): ReturnType<t
 }
 
 function curatedProtocolError(message: string): Error {
+  if (/network|offline|connection/i.test(message)) {
+    return new ModelAccessError("network", "Network connection is unavailable.");
+  }
+  if (/subscription.*capacity|capacity.*subscription/i.test(message)) {
+    return new ModelAccessError("subscriptionCapacity", "ChatGPT subscription capacity is unavailable.");
+  }
   if (/auth|unauthor|credential/i.test(message)) {
-    return new Error("Codex authentication is unavailable. Sign in and retry.");
+    return new ModelAccessError("authentication", "Codex authentication is unavailable. Sign in and retry.");
   }
   if (/rate|quota|usage|limit/i.test(message)) {
-    return new Error("Codex usage is currently unavailable. Check your plan or API usage, then retry.");
+    return new ModelAccessError("quota", "Codex usage is currently unavailable. Check your plan or API usage, then retry.");
   }
   if (/interrupt/i.test(message)) return new Error("Codex teaching was interrupted.");
   return new Error("Codex could not complete this request. Retry when the runtime is available.");

@@ -1,6 +1,6 @@
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,7 @@ const executablePath = join(
 
 test("packaged Quick Study organizes durable work and resumes the latest session", async () => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-smoke-"));
+  const accessStatePath = join(dataDirectory, "fake-codex-access.json");
   let launched: { browser: Browser; page: Page; process: ChildProcess } | undefined;
 
   const launch = async () => {
@@ -113,6 +114,45 @@ test("packaged Quick Study organizes durable work and resumes the latest session
 
     await expect(page.getByRole("heading", { name: "Mathematical Workbench" })).toBeVisible();
     await expect(page.getByLabel("Learning Goal")).toHaveValue("Understand where convergence controls the tail");
+
+    await page.getByRole("button", { name: "Leave session" }).click();
+    await quit();
+    await writeFile(accessStatePath, JSON.stringify({
+      status: "runtime"
+    }), "utf8");
+
+    page = await launch();
+    await expect(page.getByRole("heading", { name: "Local Working Mode" })).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("Codex runtime became unavailable.");
+    await page.getByLabel("Search Learning Sessions").fill("finite prefix");
+    const searchResult = page.getByRole("button", {
+      name: "Open search result Understand where convergence controls the tail"
+    });
+    await searchResult.focus();
+    await page.keyboard.press("Enter");
+
+    await page.getByLabel("Learning Goal").fill("Keep studying convergence locally");
+    await page.getByLabel("Session Target").fill("Review the finite prefix and tail bounds");
+    await page.getByRole("button", { name: "Save local session changes" }).click();
+    await page.getByLabel("Ask Bar question").fill("Why does the finite prefix have a maximum absolute value?");
+    const savePending = page.getByRole("button", { name: "Save Pending Question" });
+    await savePending.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Pending Question" })).toBeVisible();
+
+    await writeFile(accessStatePath, JSON.stringify({ status: "available" }), "utf8");
+    const checkAccess = page.getByRole("button", { name: "Check Codex access" });
+    await checkAccess.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { name: "Model teaching available" })).toBeVisible();
+    await expect(page.getByLabel("Pending Question text")).toHaveValue(
+      "Why does the finite prefix have a maximum absolute value?"
+    );
+    await page.getByLabel("Pending Question text").fill("Why must a finite set of absolute values have a maximum?");
+    const submitPending = page.getByRole("button", { name: "Submit Pending Question" });
+    await submitPending.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Start from the key definition, then connect each inference to the stated goal.")).toBeVisible();
   } finally {
     await quit();
     await rm(dataDirectory, { recursive: true, force: true });

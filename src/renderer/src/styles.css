@@ -33,7 +33,7 @@ h2 { margin: 0; font-size: 27px; }
 .dashboard-grid, .workbench-layout { display: grid; grid-template-columns: 255px minmax(0, 1fr); gap: 24px; margin-top: 24px; }
 .dashboard-content { width: min(940px, 100%); margin: 0 auto; }
 .dashboard-heading { padding: 24px 4px 28px; }
-.hierarchy, .authentication-card, .resume-card, .intake-card, .organize-card, .history-card, .session-panel, .math-canvas {
+.hierarchy, .authentication-card, .model-access, .resume-card, .intake-card, .search-card, .organize-card, .history-card, .session-panel, .math-canvas {
   border: 1px solid rgba(105,118,105,.22);
   border-radius: 20px;
   background: rgba(255,255,255,.74);
@@ -55,11 +55,17 @@ h2 { margin: 0; font-size: 27px; }
 .session-nav-list button { width: 100%; padding: 6px 8px; overflow: hidden; border: 0; color: #5f746d; background: transparent; font-size: 11px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .session-nav-list button::before { content: "↳ "; color: #b65d38; }
 
-.authentication-card, .resume-card, .intake-card, .organize-card, .history-card { margin-bottom: 18px; padding: 28px; }
+.authentication-card, .model-access, .resume-card, .intake-card, .search-card, .organize-card, .history-card { margin-bottom: 18px; padding: 28px; }
 .authentication-card { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-color: rgba(182,93,56,.3); }
 .authentication-card h2 { font-size: 25px; }
 .authentication-card .subtle { margin: 8px 0 0; }
 .authentication-actions { display: flex; min-width: min(100%, 440px); align-items: end; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.model-access { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 24px; }
+.model-access.available { border-color: rgba(41,102,84,.3); background: #edf5ed; }
+.model-access.unavailable { border-color: #dfbaa9; background: #f9eee8; }
+.model-access h2 { font-size: 23px; }
+.model-access p { margin: 7px 0; color: #557069; }
+.model-access small { color: #704a32; }
 .api-key-form { flex: 1 1 250px; }
 .api-key-form > div { display: flex; gap: 7px; }
 .api-key-form input { min-width: 140px; }
@@ -93,6 +99,12 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .filing-controls label { grid-column: 1 / -1; margin: 0; }
 .filing-hint { max-width: 320px; color: #647971; font-size: 12px; }
 
+.search-card label { margin-top: 18px; }
+.search-results { margin: 12px 0 0; padding: 0; list-style: none; }
+.search-results li { border-top: 1px solid #deddd4; }
+.search-results button { display: flex; width: 100%; align-items: start; flex-direction: column; gap: 4px; text-align: left; }
+.search-results small { color: #6b7c76; }
+
 .history-card { opacity: .9; }
 .session-list li { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 0; border-top: 1px solid #deddd4; }
 .session-list div { display: flex; flex-direction: column; gap: 4px; }
@@ -114,6 +126,13 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .next-step { display: flex; flex-direction: column; gap: 5px; padding: 16px; border-radius: 12px; color: #31534a; background: #eaf0e9; }
 .teaching-card { padding: 24px; border: 1px solid #c9d8cd; border-radius: 16px; background: #eef4ec; }
 .teaching-card.failed, .teaching-card.stopped { border-color: #dfbaa9; background: #f9eee8; }
+.teaching-card.unavailable { border-color: #d5d4ca; background: rgba(255,255,255,.55); }
+.session-record { margin-bottom: 16px; padding: 20px 24px; border: 1px solid #d5d4ca; border-radius: 16px; background: rgba(255,255,255,.55); }
+.session-record h2 { font-size: 23px; }
+.session-record article { margin-top: 16px; padding-top: 14px; border-top: 1px solid #deddd4; }
+.session-record h3 { margin: 0 0 7px; font-size: 13px; }
+.session-record p { margin: 0; color: #385950; line-height: 1.5; }
+.session-record details { margin-top: 10px; color: #557069; }
 .teaching-card h2 { font-size: 25px; }
 .teaching-content { margin-top: 20px; white-space: pre-wrap; color: #1c332f; font-family: Georgia, serif; font-size: 19px; line-height: 1.65; }
 .teaching-section { margin-top: 20px; }
@@ -121,6 +140,12 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .teaching-section .teaching-content { margin-top: 0; }
 .failure-message { margin: 14px 0 0; color: #8d3d2b; font-weight: 650; line-height: 1.45; }
 .teaching-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 18px; }
+.math-canvas > .model-access { margin-top: 4px; }
+.ask-bar { margin-top: 16px; padding: 24px; border: 1px solid #c9d8cd; border-radius: 16px; background: rgba(255,255,255,.62); }
+.ask-bar h2 { font-size: 25px; }
+.ask-bar label { margin-top: 18px; }
+.ask-bar textarea { width: 100%; min-height: 92px; padding: 12px; resize: vertical; border: 1px solid #c8d0c8; border-radius: 10px; color: #17332e; background: #fbfaf6; line-height: 1.4; }
+.ask-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 .access-policy { margin: 0 0 14px; padding: 11px 14px; border: 1px solid #d5d4ca; border-radius: 10px; color: #506861; background: rgba(255,255,255,.55); font-size: 12px; }
 .loading { display: grid; min-height: 100vh; place-items: center; color: #49665e; background: #f4efe5; }
 

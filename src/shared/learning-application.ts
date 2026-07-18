@@ -1,8 +1,45 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { AuthenticationState, ModelRuntime, ModelRuntimeEvent, SessionProposal } from "./model-runtime";
+import {
+  ModelAccessError,
+  type AuthenticationState,
+  type ModelAccessCause,
+  type ModelRuntime,
+  type ModelRuntimeEvent,
+  type SessionProposal
+} from "./model-runtime";
 
 export type SessionStatus = "active" | "paused";
+
+export type ModelAccessState =
+  | { status: "available" }
+  | { status: "unavailable"; cause: ModelAccessCause; message: string };
+
+export interface PendingQuestion {
+  id: string;
+  text: string;
+}
+
+export interface SubmittedPendingQuestion {
+  id: string;
+  text: string;
+  teachingCard: TeachingCardState;
+}
+
+export interface TeachingCardState {
+  status: "idle" | "streaming" | "completed" | "stopped" | "failed";
+  content: string;
+  error: string | null;
+  retryable: boolean;
+}
+
+export interface SessionSearchResult {
+  sessionId: string;
+  learningGoal: string;
+  sessionTarget: string;
+  workspaceName: string;
+  missionName: string;
+}
 
 export interface QuickStudyHome {
   workspace: {
@@ -60,12 +97,11 @@ export interface LearningSession {
     status: "accepted" | "awaitingConfirmation";
     confirmationReason: string | null;
   };
-  teachingCard: {
-    status: "idle" | "streaming" | "completed" | "stopped" | "failed";
-    content: string;
-    error: string | null;
-    retryable: boolean;
-  };
+  teachingCard: TeachingCardState;
+  teachingCardHistory: TeachingCardState[];
+  submittedPendingQuestions: SubmittedPendingQuestion[];
+  currentTeachingInput: { kind: "sessionIntake"; text: string } | { kind: "pendingQuestion"; submissionId: string; text: string };
+  pendingQuestion: PendingQuestion | null;
   accessPolicy: "focused";
 }
 
@@ -91,6 +127,7 @@ export interface LearningApplicationState {
   };
   intakeError: string | null;
   runtimeAvailable: boolean;
+  modelAccess: ModelAccessState;
 }
 
 export type LearnerAction =
@@ -103,6 +140,10 @@ export type LearnerAction =
   | { type: "startChatGptLogin" }
   | { type: "loginWithApiKey"; apiKey: string }
   | { type: "refreshAuthentication" }
+  | { type: "savePendingQuestion"; text: string }
+  | { type: "editPendingQuestion"; text: string }
+  | { type: "discardPendingQuestion" }
+  | { type: "submitPendingQuestion" }
   | {
       type: "reviseSessionProposal";
       learningGoal: string;
@@ -129,7 +170,7 @@ export type LearnerAction =
 export class LearningApplication {
   private state: LearningApplicationState = initialState();
   private readonly statePath: string;
-  private readonly modelRuntime: ModelRuntime | null;
+  private modelRuntime: ModelRuntime | null;
   private persistence = Promise.resolve();
   private readonly modelWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
@@ -150,7 +191,7 @@ export class LearningApplication {
       for (const session of persisted.sessions) {
         if (session.status === "active") session.status = "paused";
         if (session.teachingCard.status === "streaming") {
-          session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+          replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
         }
       }
       persisted.activeSessionId = null;
@@ -163,13 +204,16 @@ export class LearningApplication {
     if (modelRuntime) {
       application.state.runtimeAvailable = true;
       try {
-        application.state.authentication = authenticationView(await modelRuntime.getAuthentication());
+        application.updateAuthentication(await modelRuntime.getAuthentication());
       } catch (error) {
         application.state.authentication = failedAuthentication(null, error);
+        application.applyModelAccessFailure(error);
       }
     } else {
       application.state.runtimeAvailable = false;
-      application.state.authentication = failedAuthentication(null, new Error("Codex Runtime is unavailable. Restart Codex and try again."));
+      const error = new Error("Codex Runtime is unavailable. Restart Codex and try again.");
+      application.state.authentication = failedAuthentication(null, error);
+      application.state.modelAccess = unavailableModelAccess(error);
     }
     return application;
   }
@@ -183,6 +227,50 @@ export class LearningApplication {
     return () => this.stateListeners.delete(listener);
   }
 
+  searchSessions(query: string): SessionSearchResult[] {
+    const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return [];
+    return this.state.sessions.flatMap((session) => {
+      const workspace = this.state.workspaces.find((candidate) => candidate.id === session.workspaceId);
+      const mission = this.state.missions.find((candidate) => candidate.id === session.missionId);
+      if (!workspace || !mission) return [];
+      const searchable = [session.learningGoal, session.sessionTarget, workspace.name, mission.name]
+        .join(" ")
+        .toLocaleLowerCase();
+      if (!terms.every((term) => searchable.includes(term))) return [];
+      return [{
+        sessionId: session.id,
+        learningGoal: session.learningGoal,
+        sessionTarget: session.sessionTarget,
+        workspaceName: workspace.name,
+        missionName: mission.name
+      }];
+    });
+  }
+
+  async restoreModelRuntime(modelRuntime: ModelRuntime): Promise<LearningApplicationState> {
+    if (this.modelRuntime && this.modelRuntime !== modelRuntime) {
+      await this.modelRuntime.shutdown().catch(() => undefined);
+    }
+    this.modelRuntime = modelRuntime;
+    this.state.runtimeAvailable = true;
+    try {
+      this.updateAuthentication(await modelRuntime.getAuthentication());
+    } catch (error) {
+      this.state.authentication = failedAuthentication(null, error);
+      this.applyModelAccessFailure(error);
+    }
+    return this.publishAndPersist();
+  }
+
+  async reportModelRuntimeFailure(error: unknown): Promise<LearningApplicationState> {
+    this.state.runtimeAvailable = false;
+    this.state.modelAccess = unavailableModelAccess(
+      error instanceof ModelAccessError ? error : new ModelAccessError("runtime", usefulRuntimeError(error))
+    );
+    return this.publishAndPersist();
+  }
+
   async waitForModelWork(): Promise<void> {
     await Promise.all([...this.modelWorks.values()].map((work) => work.promise));
     await this.persistence;
@@ -192,7 +280,7 @@ export class LearningApplication {
     const activeWorks = [...this.modelWorks.entries()];
     for (const [sessionId, work] of activeWorks) {
       const session = this.requireSession(sessionId);
-      session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+      replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
       work.controller.abort();
     }
     if (activeWorks.length > 0) {
@@ -277,6 +365,10 @@ export class LearningApplication {
           },
           proposal: defaultAcceptedProposal(),
           teachingCard: emptyTeachingCard(),
+          teachingCardHistory: [],
+          submittedPendingQuestions: [],
+          currentTeachingInput: { kind: "sessionIntake", text: mathematics },
+          pendingQuestion: null,
           accessPolicy: "focused"
         };
         this.state.sessions.push(session);
@@ -289,13 +381,14 @@ export class LearningApplication {
       case "submitSessionIntake": {
         const mathematics = action.mathematics.trim();
         if (!mathematics) throw new Error("Typed mathematics is required to start Quick Study.");
-        if (!this.modelRuntime) throw new Error("Connect a Model Runtime before starting model-backed teaching.");
+        this.requireModelAccess();
         let proposal: SessionProposal;
         const pendingLog: Array<ModelRuntimeEvent & { sequence: number }> = [];
         const proposalAttemptId = `proposal:${crypto.randomUUID()}`;
         this.agentWorkLogs[proposalAttemptId] = pendingLog;
+        const runtime = this.modelRuntime!;
         try {
-          proposal = await this.modelRuntime.proposeSession(mathematics, (event) => {
+          proposal = await runtime.proposeSession(mathematics, (event) => {
             pendingLog.push({ ...event, sequence: pendingLog.length + 1 });
           });
           this.state.intakeError = null;
@@ -309,7 +402,7 @@ export class LearningApplication {
             sequence: pendingLog.length + 1
           });
           this.state.intakeError = message;
-          this.recordAuthenticationLoss(message);
+          this.recordModelAccessLoss(error);
           break;
         }
         this.pauseActiveSession();
@@ -333,6 +426,10 @@ export class LearningApplication {
             confirmationReason: proposal.confirmationReason
           },
           teachingCard: emptyTeachingCard(),
+          teachingCardHistory: [],
+          submittedPendingQuestions: [],
+          currentTeachingInput: { kind: "sessionIntake", text: mathematics },
+          pendingQuestion: null,
           accessPolicy: "focused"
         };
         this.agentWorkLogs[session.id] = pendingLog;
@@ -376,9 +473,14 @@ export class LearningApplication {
       }
       case "retryModelWork": {
         const session = this.requireActiveSession();
+        this.requireModelAccess();
         if (!session.teachingCard.retryable) throw new Error("This Teaching Card is not ready to retry.");
         if (this.modelWorks.has(session.id)) throw new Error("Restart Codex before retrying this Teaching Card.");
-        this.beginTeaching(session);
+        const input = session.currentTeachingInput;
+        const submission = input.kind === "pendingQuestion"
+          ? session.submittedPendingQuestions.find((candidate) => candidate.id === input.submissionId) ?? null
+          : null;
+        this.beginTeaching(session, input.text, submission);
         break;
       }
       case "startChatGptLogin": {
@@ -402,19 +504,58 @@ export class LearningApplication {
         if (!action.apiKey.trim()) throw new Error("An OpenAI API key is required.");
         try {
           await this.modelRuntime.loginWithApiKey(action.apiKey);
-          this.state.authentication = authenticationView(await this.modelRuntime.getAuthentication());
+          this.updateAuthentication(await this.modelRuntime.getAuthentication());
         } catch (error) {
           this.state.authentication = failedAuthentication("apiKey", error);
+          this.applyModelAccessFailure(error);
         }
         break;
       }
       case "refreshAuthentication": {
         if (!this.modelRuntime) throw new Error("Codex is unavailable.");
         try {
-          this.state.authentication = authenticationView(await this.modelRuntime.getAuthentication());
+          this.updateAuthentication(await this.modelRuntime.getAuthentication());
         } catch (error) {
           this.state.authentication = failedAuthentication(null, error);
+          this.applyModelAccessFailure(error);
         }
+        break;
+      }
+      case "savePendingQuestion": {
+        if (this.state.modelAccess.status === "available") {
+          throw new Error("Submit the Ask Bar question while model access is available.");
+        }
+        const session = this.requireActiveSession();
+        session.pendingQuestion = { id: crypto.randomUUID(), text: requiredText(action.text, "Pending Question") };
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "editPendingQuestion": {
+        const session = this.requireActiveSession();
+        if (!session.pendingQuestion) throw new Error("There is no Pending Question to edit.");
+        session.pendingQuestion.text = requiredText(action.text, "Pending Question");
+        session.activityOrder = this.nextActivityOrder();
+        this.state.resumeSessionId = session.id;
+        break;
+      }
+      case "discardPendingQuestion": {
+        const session = this.requireActiveSession();
+        if (!session.pendingQuestion) throw new Error("There is no Pending Question to discard.");
+        session.pendingQuestion = null;
+        break;
+      }
+      case "submitPendingQuestion": {
+        this.requireModelAccess();
+        const session = this.requireActiveSession();
+        if (!session.pendingQuestion) throw new Error("There is no Pending Question to submit.");
+        const question = { ...session.pendingQuestion };
+        const submission: SubmittedPendingQuestion = {
+          ...question,
+          teachingCard: emptyTeachingCard()
+        };
+        this.beginTeaching(session, question.text, submission);
+        session.pendingQuestion = null;
         break;
       }
       case "resumeSession": {
@@ -479,15 +620,31 @@ export class LearningApplication {
     await rename(temporaryPath, this.statePath);
   }
 
-  private beginTeaching(session: LearningSession): void {
-    if (!this.modelRuntime) throw new Error("Connect a Model Runtime before starting model-backed teaching.");
+  private beginTeaching(
+    session: LearningSession,
+    mathematics = session.mathematics,
+    submission: SubmittedPendingQuestion | null = null
+  ): void {
+    this.requireModelAccess();
+    if (this.modelWorks.has(session.id)) throw new Error("Model teaching is already active for this Learning Session.");
+    if (submission) {
+      if (session.currentTeachingInput.kind === "sessionIntake" && session.teachingCard.status !== "idle") {
+        session.teachingCardHistory.push(structuredClone(session.teachingCard));
+      }
+      if (!session.submittedPendingQuestions.some((candidate) => candidate.id === submission.id)) {
+        session.submittedPendingQuestions.push(submission);
+      }
+      session.currentTeachingInput = { kind: "pendingQuestion", submissionId: submission.id, text: submission.text };
+    } else {
+      session.currentTeachingInput = { kind: "sessionIntake", text: mathematics };
+    }
     const controller = new AbortController();
     session.proposal.status = "accepted";
-    session.teachingCard = { status: "streaming", content: "", error: null, retryable: false };
-    const runtime = this.modelRuntime;
+    replaceTeachingCard(session, { status: "streaming", content: "", error: null, retryable: false });
+    const runtime = this.modelRuntime!;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
-      mathematics: session.mathematics,
+      mathematics,
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
       initialTeachingDirection: session.proposal.initialTeachingDirection,
@@ -511,13 +668,13 @@ export class LearningApplication {
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
       const message = usefulRuntimeError(error);
-      session.teachingCard = {
+      replaceTeachingCard(session, {
         ...session.teachingCard,
         status: "failed",
         error: message,
         retryable: true
-      };
-      this.recordAuthenticationLoss(message);
+      });
+      this.recordModelAccessLoss(error);
     }).finally(() => {
       if (this.modelWorks.get(session.id)?.promise === promise) this.modelWorks.delete(session.id);
       this.queuePersistence();
@@ -529,10 +686,11 @@ export class LearningApplication {
   private async stopModelWork(session: LearningSession): Promise<boolean> {
     const work = this.modelWorks.get(session.id);
     if (!this.modelRuntime || !work) throw new Error("There is no active model work to stop.");
-    session.teachingCard = interruptedTeachingCard(session.teachingCard.content);
+    replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
     work.controller.abort();
     try {
       await this.modelRuntime.cancelTeaching(session.id);
+      if (this.modelWorks.get(session.id) === work) this.modelWorks.delete(session.id);
       return true;
     } catch {
       session.teachingCard.error = "Teaching is stopped locally, but Codex did not confirm interruption. Restart Codex before retrying.";
@@ -560,19 +718,45 @@ export class LearningApplication {
     return changed;
   }
 
-  private recordAuthenticationLoss(message: string): void {
-    const runtimeLost = /runtime became unavailable|runtime is unavailable/i.test(message);
-    if (runtimeLost) {
-      this.state.runtimeAvailable = false;
-    }
-    if (!runtimeLost && !/authentication|sign in|credential/i.test(message)) return;
-    this.state.authentication = {
-      status: "failed",
-      method: this.state.authentication.method,
-      accountLabel: null,
-      loginUrl: null,
-      error: message
+  private recordModelAccessLoss(error: unknown): void {
+    if (!(error instanceof ModelAccessError)) return;
+    const modelAccess: Extract<ModelAccessState, { status: "unavailable" }> = {
+      status: "unavailable",
+      cause: error.cause,
+      message: error.message
     };
+    this.state.modelAccess = modelAccess;
+    if (modelAccess.cause === "runtime") this.state.runtimeAvailable = false;
+    if (modelAccess.cause === "authentication" || modelAccess.cause === "runtime") {
+      this.state.authentication = {
+        status: "failed",
+        method: this.state.authentication.method,
+        accountLabel: null,
+        loginUrl: null,
+        error: error.message
+      };
+    }
+  }
+
+  private applyModelAccessFailure(error: unknown): void {
+    const modelAccess = unavailableModelAccess(error);
+    this.state.modelAccess = modelAccess;
+    if (modelAccess.cause === "runtime") this.state.runtimeAvailable = false;
+  }
+
+  private updateAuthentication(authentication: AuthenticationState): void {
+    this.state.authentication = authenticationView(authentication);
+    this.state.modelAccess = authentication.status === "signedIn"
+      ? { status: "available" }
+      : { status: "unavailable", cause: "authentication", message: authenticationMessage(authentication) };
+  }
+
+  private requireModelAccess(): void {
+    if (!this.modelRuntime || this.state.modelAccess.status === "unavailable") {
+      throw new Error(this.state.modelAccess.status === "unavailable"
+        ? this.state.modelAccess.message
+        : "Connect a Model Runtime before starting model-backed teaching.");
+    }
   }
 
   private emitState(state = this.getState()): void {
@@ -582,6 +766,14 @@ export class LearningApplication {
   private queuePersistence(): void {
     const state = this.getState();
     this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
+  }
+
+  private async publishAndPersist(): Promise<LearningApplicationState> {
+    const state = this.getState();
+    this.emitState(state);
+    this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
+    await this.persistence;
+    return state;
   }
 
   private requireActiveSession(): LearningSession {
@@ -639,6 +831,12 @@ function requiredName(value: string, subject: string): string {
   return name;
 }
 
+function requiredText(value: string, subject: string): string {
+  const text = value.trim();
+  if (!text) throw new Error(`${subject} text is required.`);
+  return text;
+}
+
 function usefulRuntimeError(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
@@ -664,10 +862,19 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
+    current.modelAccess ??= {
+      status: "unavailable",
+      cause: "runtime",
+      message: "Codex Runtime is unavailable. Restart Codex and try again."
+    };
     current.sessions = current.sessions.map((session) => ({
       ...session,
       proposal: session.proposal ?? defaultAcceptedProposal(),
       teachingCard: session.teachingCard ?? emptyTeachingCard(),
+      teachingCardHistory: session.teachingCardHistory ?? [],
+      submittedPendingQuestions: session.submittedPendingQuestions ?? [],
+      currentTeachingInput: session.currentTeachingInput ?? { kind: "sessionIntake", text: session.mathematics },
+      pendingQuestion: session.pendingQuestion ?? null,
       accessPolicy: session.accessPolicy ?? "focused"
     }));
     return current;
@@ -685,6 +892,10 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       activityOrder: 1,
       proposal: defaultAcceptedProposal(),
       teachingCard: emptyTeachingCard(),
+      teachingCardHistory: [],
+      submittedPendingQuestions: [],
+      currentTeachingInput: { kind: "sessionIntake", text: legacy.session.mathematics },
+      pendingQuestion: null,
       accessPolicy: "focused"
     };
     migrated.sessions.push(session);
@@ -721,6 +932,16 @@ function interruptedTeachingCard(content: string): LearningSession["teachingCard
     error: "Teaching stopped. You can retry without losing this Learning Session.",
     retryable: true
   };
+}
+
+function replaceTeachingCard(session: LearningSession, teachingCard: TeachingCardState): void {
+  session.teachingCard = teachingCard;
+  if (session.currentTeachingInput.kind !== "pendingQuestion") return;
+  const submissionId = session.currentTeachingInput.submissionId;
+  const submission = session.submittedPendingQuestions.find(
+    (candidate) => candidate.id === submissionId
+  );
+  if (submission) submission.teachingCard = teachingCard;
 }
 
 function emptyWorkspaceContext(): WorkspaceContext {
@@ -762,8 +983,28 @@ function initialState(): LearningApplicationState {
     activityOrder: 0,
     authentication: signedOutAuthentication(),
     intakeError: null,
-    runtimeAvailable: false
+    runtimeAvailable: false,
+    modelAccess: {
+      status: "unavailable",
+      cause: "runtime",
+      message: "Codex Runtime is unavailable. Restart Codex and try again."
+    }
   };
+}
+
+function unavailableModelAccess(error: unknown): Extract<ModelAccessState, { status: "unavailable" }> {
+  const message = usefulRuntimeError(error);
+  return {
+    status: "unavailable",
+    cause: error instanceof ModelAccessError ? error.cause : "runtime",
+    message
+  };
+}
+
+function authenticationMessage(authentication: Exclude<AuthenticationState, { status: "signedIn" }>): string {
+  if (authentication.status === "failed") return authentication.error;
+  if (authentication.status === "signingIn") return "Finish Codex authentication to restore model teaching.";
+  return "Codex authentication is required for model teaching.";
 }
 
 function authenticationView(authentication: AuthenticationState): LearningApplicationState["authentication"] {

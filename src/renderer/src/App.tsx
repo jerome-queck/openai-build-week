@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import type {
   LearningApplicationState,
   LearningSession,
+  SessionSearchResult,
   StudyMission,
   StudyWorkspace
 } from "../../shared/learning-application";
@@ -50,13 +51,39 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
             <p className="lede">Return to the exact focus you left behind, or begin a new durable Quick Study.</p>
           </header>
           <AuthenticationPanel state={state} onState={onState} />
+          <ModelAccessPanel state={state} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
           <Intake state={state} onState={onState} />
+          <SessionSearch onState={onState} />
           <WorkspaceEditor workspace={workspace} mission={mission} state={state} onState={onState} />
           <MissionHistory workspace={workspace} mission={mission} state={state} onState={onState} />
         </section>
       </div>
     </main>
+  );
+}
+
+function ModelAccessPanel({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+  if (state.modelAccess.status === "available") {
+    return (
+      <section className="model-access available" role="status" aria-labelledby="model-access-title">
+        <div><p className="eyebrow">Model access</p><h2 id="model-access-title">Model teaching available</h2></div>
+        <p>Codex-backed Teaching Cards and Pending Question submission are available.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="model-access unavailable" role="status" aria-labelledby="model-access-title">
+      <div>
+        <p className="eyebrow">Local capabilities remain available</p>
+        <h2 id="model-access-title">Local Working Mode</h2>
+        <p>{state.modelAccess.message}</p>
+        <small>You can open, resume, search, and edit local sessions. Model teaching is unavailable.</small>
+      </div>
+      <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
+        Check Codex access
+      </button>
+    </section>
   );
 }
 
@@ -288,12 +315,50 @@ function EmptyResume() {
   );
 }
 
+function SessionSearch({ onState }: { onState: StateHandler }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<SessionSearchResult[]>([]);
+  useEffect(() => {
+    let current = true;
+    void window.quickStudy.searchSessions(query).then((matches) => {
+      if (current) setResults(matches);
+    });
+    return () => { current = false; };
+  }, [query]);
+  return (
+    <section className="search-card" aria-labelledby="session-search-title">
+      <p className="eyebrow">Local session metadata</p>
+      <h2 id="session-search-title">Find a Learning Session</h2>
+      <label htmlFor="session-search">Search Learning Sessions</label>
+      <input id="session-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
+      {query.trim() && (
+        <ul className="search-results" aria-live="polite">
+          {results.map((result) => (
+            <li key={result.sessionId}>
+              <button
+                className="text-button"
+                aria-label={`Open search result ${result.learningGoal}`}
+                onClick={() => void window.quickStudy.submit({ type: "resumeSession", sessionId: result.sessionId }).then(onState)}
+              >
+                <strong>{result.learningGoal}</strong>
+                <small>{result.workspaceName} · {result.missionName} · {result.sessionTarget}</small>
+              </button>
+            </li>
+          ))}
+          {results.length === 0 && <li className="subtle">No matching Learning Sessions.</li>}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function Intake({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [mathematics, setMathematics] = useState("");
+  const modelAvailable = state.modelAccess.status === "available";
   const start = async (event: FormEvent) => {
     event.preventDefault();
     onState(await window.quickStudy.submit({
-      type: state.authentication.status === "signedIn" ? "submitSessionIntake" : "startQuickStudy",
+      type: modelAvailable ? "submitSessionIntake" : "startQuickStudy",
       mathematics
     }));
   };
@@ -311,8 +376,8 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
           placeholder="What would you like to understand?"
         />
         <div className="intake-actions">
-          <span>{state.authentication.status === "signedIn" ? "Focused Access · no workspace setup required" : "Local Working Mode · connect Codex for model teaching"}</span>
-          <button className="primary" disabled={!mathematics.trim()}>{state.authentication.status === "signedIn" ? "Propose Learning Session" : "Start local Learning Session"}</button>
+          <span>{modelAvailable ? "Focused Access · no workspace setup required" : "Local Working Mode · local study remains available"}</span>
+          <button className="primary" disabled={!mathematics.trim()}>{modelAvailable ? "Propose Learning Session" : "Start local Learning Session"}</button>
         </div>
         {state.intakeError && <p className="failure-message" role="alert">{state.intakeError}</p>}
       </form>
@@ -420,6 +485,10 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
     await saveProposal();
     onState(await window.quickStudy.submit({ type: "confirmSessionProposal" }));
   };
+  const saveLocalChanges = async () => {
+    await window.quickStudy.submit({ type: "editLearningGoal", value: goal });
+    onState(await window.quickStudy.submit({ type: "editSessionTarget", value: target }));
+  };
 
   return (
     <main className="shell">
@@ -436,17 +505,21 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
             <label htmlFor="target">Session Target</label>
             <textarea id="target" className="field" value={target} onChange={(event) => setTarget(event.target.value)} />
             <label htmlFor="direction">Initial teaching direction</label>
-            <textarea id="direction" className="field" value={direction} onChange={(event) => setDirection(event.target.value)} />
-            {session.proposal.status === "awaitingConfirmation" ? (
+            <textarea id="direction" className="field" value={direction} disabled={state.modelAccess.status === "unavailable"} onChange={(event) => setDirection(event.target.value)} />
+            {state.modelAccess.status === "available" && session.proposal.status === "awaitingConfirmation" ? (
               <>
                 <p className="confirmation-reason">{session.proposal.confirmationReason}</p>
                 <button className="primary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void acceptProposal()}>
                   Accept and start teaching
                 </button>
               </>
-            ) : (
+            ) : state.modelAccess.status === "available" ? (
               <button className="secondary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void saveProposal(true).then(onState)}>
                 Apply proposal changes
+              </button>
+            ) : (
+              <button className="secondary proposal-action" disabled={!goal.trim() || !target.trim()} onClick={() => void saveLocalChanges()}>
+                Save local session changes
               </button>
             )}
             <button className="secondary" onClick={() => void leave()}>Leave session</button>
@@ -458,7 +531,10 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
             </div>
             <article>{session.mathematics}</article>
             <p className="access-policy"><strong>Session Access Policy:</strong> Focused Access · only the mathematics pasted into this session</p>
-            <TeachingCard session={session} onState={onState} />
+            <ModelAccessPanel state={state} onState={onState} />
+            <SessionRecord session={session} />
+            <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
+            <AskBar session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
           </section>
         </div>
       </div>
@@ -466,10 +542,19 @@ function Workbench({ state, onState }: { state: LearningApplicationState; onStat
   );
 }
 
-function TeachingCard({ session, onState }: { session: LearningSession; onState: StateHandler }) {
+function TeachingCard({ session, modelAvailable, onState }: { session: LearningSession; modelAvailable: boolean; onState: StateHandler }) {
   const card = session.teachingCard;
-  if (session.proposal.status === "awaitingConfirmation") {
+  if (session.proposal.status === "awaitingConfirmation" && modelAvailable) {
     return <div className="next-step"><span>Session Confirmation</span><strong>Review the proposal before Codex begins.</strong></div>;
+  }
+  if (!modelAvailable && card.status === "idle") {
+    return (
+      <section className="teaching-card unavailable" aria-labelledby="teaching-card-title">
+        <p className="eyebrow">Model-dependent action</p>
+        <h2 id="teaching-card-title">Model teaching unavailable</h2>
+        <p className="subtle">No Teaching Card will be fabricated in Local Working Mode.</p>
+      </section>
+    );
   }
   return (
     <section className={`teaching-card ${card.status}`} aria-live="polite" aria-labelledby="teaching-card-title">
@@ -485,8 +570,81 @@ function TeachingCard({ session, onState }: { session: LearningSession; onState:
       {card.error && <p className="failure-message" role="alert">{card.error}</p>}
       <div className="teaching-actions">
         {card.status === "streaming" && <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "cancelModelWork" }).then(onState)}>Stop teaching</button>}
-        {card.retryable && <button className="primary" onClick={() => void window.quickStudy.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
+        {card.retryable && modelAvailable && <button className="primary" onClick={() => void window.quickStudy.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
       </div>
+    </section>
+  );
+}
+
+function SessionRecord({ session }: { session: LearningSession }) {
+  if (session.submittedPendingQuestions.length === 0 && session.teachingCardHistory.length === 0) return null;
+  return (
+    <section className="session-record" aria-labelledby="session-record-title">
+      <p className="eyebrow">Session Record</p>
+      <h2 id="session-record-title">Submitted questions and earlier teaching</h2>
+      {session.teachingCardHistory.map((card, index) => (
+        <article key={`teaching-${index}`}>
+          <h3>Earlier Teaching Card</h3>
+          <p>{card.content || card.error}</p>
+        </article>
+      ))}
+      {session.submittedPendingQuestions.map((submission) => (
+        <article key={submission.id}>
+          <h3>Submitted Pending Question</h3>
+          <p>{submission.text}</p>
+          <details>
+            <summary>Teaching Card · {teachingStatusLabel(submission.teachingCard.status)}</summary>
+            <p>{submission.teachingCard.content || submission.teachingCard.error || "Teaching has not produced content."}</p>
+          </details>
+        </article>
+      ))}
+    </section>
+  );
+}
+
+function AskBar({ session, modelAvailable, onState }: {
+  session: LearningSession;
+  modelAvailable: boolean;
+  onState: StateHandler;
+}) {
+  const pending = session.pendingQuestion;
+  const [text, setText] = useState(pending?.text ?? "");
+  useEffect(() => setText(pending?.text ?? ""), [pending?.id, pending?.text]);
+
+  const save = () => window.quickStudy.submit({
+    type: pending ? "editPendingQuestion" : "savePendingQuestion",
+    text
+  }).then(onState);
+  const submitPending = async () => {
+    if (text.trim() !== pending?.text) await window.quickStudy.submit({ type: "editPendingQuestion", text });
+    onState(await window.quickStudy.submit({ type: "submitPendingQuestion" }));
+  };
+  const ask = async (event: FormEvent) => {
+    event.preventDefault();
+    if (pending) {
+      if (modelAvailable) await submitPending();
+      else await save();
+      return;
+    }
+    await save();
+  };
+
+  if (!pending && modelAvailable) return null;
+
+  return (
+    <section className="ask-bar" aria-labelledby="ask-bar-title">
+      <p className="eyebrow">Ask Bar</p>
+      <h2 id="ask-bar-title">{pending ? "Pending Question" : "Ask from this session context"}</h2>
+      <form onSubmit={(event) => void ask(event)}>
+        <label htmlFor="ask-bar-question">{pending ? "Pending Question text" : "Ask Bar question"}</label>
+        <textarea id="ask-bar-question" value={text} onChange={(event) => setText(event.target.value)} />
+        <div className="ask-actions">
+          {pending && <button type="button" className="text-button" onClick={() => void window.quickStudy.submit({ type: "discardPendingQuestion" }).then(onState)}>Discard Pending Question</button>}
+          <button className="primary" disabled={!text.trim()}>
+            {pending ? (modelAvailable ? "Submit Pending Question" : "Save Pending Question changes") : "Save Pending Question"}
+          </button>
+        </div>
+      </form>
     </section>
   );
 }

@@ -1,4 +1,12 @@
 export type AuthenticationMethod = "chatgpt" | "apiKey";
+export type ModelAccessCause = "network" | "authentication" | "subscriptionCapacity" | "quota" | "runtime";
+
+export class ModelAccessError extends Error {
+  constructor(readonly cause: ModelAccessCause, message: string) {
+    super(message);
+    this.name = "ModelAccessError";
+  }
+}
 
 export type AuthenticationState =
   | { status: "signedOut" }
