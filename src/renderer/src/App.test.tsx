@@ -273,6 +273,113 @@ describe("anchored teaching workbench", () => {
     expect((screen.getByRole("combobox", { name: "Workbench Source Layer" }) as HTMLSelectElement).value).toBe("source-1");
     expect(screen.getByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeTruthy();
   });
+
+  it("opens keyboard-accessible Session Consolidation controls and requires an explicit Target Disposition", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    state.sessions[0].trailDraft.items = [{
+      id: "trail-1", kind: "reasoningStep", content: "Use compactness to choose finitely many neighbourhoods.",
+      required: true, origin: "learner", curationKey: null,
+      links: { sourceAnchorIds: [], teachingCardIds: [], learningArtifactIds: [], understandingEvidenceIds: [] }
+    }];
+    const consolidationState = structuredClone(state);
+    consolidationState.sessions[0].consolidationDraft = {
+      centralInsight: "Use compactness to make the separation finite.",
+      learningProgress: "",
+      unresolvedQuestions: [],
+      nextStep: "Reconstruct the proof.",
+      includedArtifactIds: ["artifact-1"],
+      targetDisposition: null
+    };
+    const api = quickStudyApi(state);
+    vi.mocked(api.submit).mockImplementation(async (action) =>
+      action.type === "beginSessionConsolidation" ? consolidationState : consolidationState
+    );
+    window.quickStudy = api;
+
+    render(<App />);
+    const begin = await screen.findByRole("button", { name: "Finish & consolidate" });
+    begin.focus();
+    await user.keyboard("{Enter}");
+    expect(api.submit).toHaveBeenCalledWith({ type: "beginSessionConsolidation" });
+
+    const review = await screen.findByRole("region", { name: "Session Consolidation" });
+    expect(review.textContent).toContain("Required Trail Item");
+    expect(screen.getByRole("button", { name: "Create Consolidated Session Outcome" }).hasAttribute("disabled")).toBe(true);
+    await user.type(screen.getByLabelText("Learning Progress"), "I can locate the finite-subcover step.");
+    await user.type(screen.getByLabelText("Unresolved questions"), "Can regularity replace Hausdorffness?");
+    await user.click(screen.getByRole("radio", { name: "Addressed" }));
+    await user.click(screen.getByRole("button", { name: "Create Consolidated Session Outcome" }));
+
+    expect(api.submit).toHaveBeenCalledWith(expect.objectContaining({
+      type: "reviseSessionConsolidation",
+      targetDisposition: "addressed",
+      includedArtifactIds: ["artifact-1"],
+      unresolvedQuestions: ["Can regularity replace Hausdorffness?"]
+    }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "consolidateSession" });
+  });
+
+  it("shows a compact Consolidated Session Outcome with expandable required detail and continuation", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    const session = state.sessions[0];
+    session.status = "consolidated";
+    session.trailDraft.items = [{
+      id: "trail-1", kind: "reasoningStep", content: "Use the finite subcover.", required: true,
+      origin: "learner", curationKey: null,
+      links: { sourceAnchorIds: [], teachingCardIds: [], learningArtifactIds: [], understandingEvidenceIds: [] }
+    }];
+    session.consolidatedOutcome = {
+      id: "outcome-1", targetDisposition: "unresolved", centralInsight: "Compactness makes the separation finite.",
+      learningProgress: "I can identify the compactness step.", unresolvedQuestions: ["Why is Hausdorffness necessary?"],
+      nextStep: "Compare with a non-Hausdorff example.", includedArtifactIds: ["artifact-1"],
+      trailItems: structuredClone(session.trailDraft.items)
+    };
+    state.screen = "dashboard";
+    state.activeSessionId = null;
+    state.resumeSessionId = null;
+    const api = quickStudyApi(state);
+    window.quickStudy = api;
+
+    render(<App />);
+    const outcome = await screen.findByRole("article", { name: "Consolidated Session Outcome Understand compactness" });
+    expect(outcome.textContent).toContain("Compactness makes the separation finite.");
+    expect(outcome.textContent).toContain("unresolved · not a mastery claim");
+    await user.click(screen.getByText("Expand complete outcome details"));
+    expect(outcome.textContent).toContain("Use the finite subcover. · Required Trail Item");
+    expect(outcome.textContent).toContain("Explain compact subset");
+    await user.click(screen.getByRole("button", { name: "Continue this work" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "continueSession", sessionId: "session-1" });
+  });
+
+  it("shows the prior outcome as linked context without copying its Session Record into a Continuation Session", async () => {
+    const state = workbenchState();
+    const continuation = state.sessions[0];
+    const historical = structuredClone(continuation);
+    historical.id = "historical-session";
+    historical.status = "consolidated";
+    historical.teachingCardHistory = [{ status: "completed", content: "Historical teaching only.", error: null, retryable: false }];
+    historical.consolidatedOutcome = {
+      id: "outcome-1", targetDisposition: "deferred", centralInsight: "Compactness makes pointwise choices finite.",
+      learningProgress: "I can locate the compactness step.", unresolvedQuestions: ["Which separation axiom is minimal?"],
+      nextStep: "Compare separation axioms.", includedArtifactIds: [], trailItems: []
+    };
+    continuation.id = "continuation-session";
+    continuation.continuationOf = { sessionId: historical.id, outcomeId: historical.consolidatedOutcome.id };
+    continuation.teachingCardHistory = [];
+    continuation.consolidatedOutcome = null;
+    state.sessions = [historical, continuation];
+    state.activeSessionId = continuation.id;
+    state.resumeSessionId = continuation.id;
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+    const context = await screen.findByRole("region", { name: "Continuation context" });
+    expect(context.textContent).toContain("Compactness makes pointwise choices finite.");
+    expect(context.textContent).toContain("Which separation axiom is minimal?");
+    expect(screen.queryByText("Historical teaching only.")).toBeNull();
+  });
 });
 
 function quickStudyApi(state: LearningApplicationState): typeof window.quickStudy {
@@ -372,6 +479,9 @@ function workbenchState(): LearningApplicationState {
         pinned: true
       }],
       trailDraft: { items: [] },
+      consolidationDraft: null,
+      consolidatedOutcome: null,
+      continuationOf: null,
       learningSlice: null
     }],
     sources: [{

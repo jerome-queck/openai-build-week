@@ -158,6 +158,7 @@ function questionSession(): LearningSession {
     questionCards: [], activeQuestionCardId: null, accessPolicy: "workspace", accessRequests: [], pendingFullAccessConfirmation: false,
     sourceAnchors: [], sourceAnchorRequests: [], activeSourceAnchorId: "anchor-1", anchoredTeachingCards: [], activeTeachingCardId: null,
     trailDraft: { items: [] },
+    consolidationDraft: null, consolidatedOutcome: null, continuationOf: null,
     conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null,
     learningArtifacts: [], learningSlice: null
   };

@@ -11,7 +11,8 @@ import type {
   SessionSearchResult,
   SourceSearchResult,
   StudyMission,
-  StudyWorkspace
+  StudyWorkspace,
+  TargetDisposition
 } from "../../shared/learning-application";
 import { sessionAccessPolicyLabel } from "../../shared/session-access";
 import { SourceLayer } from "./SourceLayer";
@@ -482,7 +483,9 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                           <ul className="session-nav-list">
                             {sessions.map((session) => (
                               <li key={session.id}>
-                                <button
+                                {session.status === "consolidated" ? (
+                                  <span className="consolidated-nav-item">{session.learningGoal}<small>Consolidated Session Outcome</small></span>
+                                ) : <button
                                   aria-label={session.prerequisiteBranch
                                     ? `Resume Prerequisite Branch ${session.prerequisiteBranch.prerequisite}, linked from ${
                                       state.sessions.find((candidate) => candidate.id === session.prerequisiteBranch?.returnPoint.originSessionId)?.learningGoal
@@ -496,7 +499,7 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                                 >
                                   {session.learningGoal}
                                   {session.prerequisiteBranch && <small>Prerequisite Branch · {session.prerequisiteBranch.prerequisite}</small>}
-                                </button>
+                                </button>}
                               </li>
                             ))}
                           </ul>
@@ -647,7 +650,9 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
               <button
                 className="text-button"
                 aria-label={`Open search result ${result.learningGoal}`}
-                onClick={() => void window.quickStudy.submit({ type: "resumeSession", sessionId: result.sessionId }).then(onState)}
+                onClick={() => void window.quickStudy.submit(result.status === "consolidated"
+                  ? { type: "navigateToMission", workspaceId: result.workspaceId, missionId: result.missionId }
+                  : { type: "resumeSession", sessionId: result.sessionId }).then(onState)}
               >
                 <strong>{result.learningGoal}</strong>
                 <small>{result.workspaceName} · {result.missionName} · {result.sessionTarget}</small>
@@ -770,11 +775,15 @@ function MissionHistory({ workspace, mission, state, onState }: {
                 }).then(onState).catch((cause: unknown) => setModelWorkError(
                   cause instanceof Error ? cause.message : "The model work could not be stopped."
                 ))}>{session.pendingConceptPeek ? "Stop Concept Peek" : "Stop"}</button>}
-                <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
-                  type: "resumeSession",
-                  sessionId: session.id
-                }).then(onState)}>Resume</button>
+                {session.status === "consolidated" ? (
+                  <button className="primary" onClick={() => void window.quickStudy.submit({
+                    type: "continueSession", sessionId: session.id
+                  }).then(onState)}>Continue this work</button>
+                ) : <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
+                    type: "resumeSession", sessionId: session.id
+                  }).then(onState)}>Resume</button>}
               </div>
+              {session.consolidatedOutcome && <ConsolidatedOutcome session={session} />}
             </li>
           ))}
         </ul>
@@ -821,6 +830,10 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
     await saveProposal();
     onState(await window.quickStudy.submit({ type: "leaveSession" }));
   };
+  const beginConsolidation = async () => {
+    await saveProposal();
+    onState(await window.quickStudy.submit({ type: "beginSessionConsolidation" }));
+  };
   const acceptProposal = async () => {
     await saveProposal();
     onState(await window.quickStudy.submit({ type: "confirmSessionProposal" }));
@@ -863,8 +876,13 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               </button>
             )}
             <button className="secondary" onClick={() => void leave()}>Leave session</button>
+            <button className="primary" disabled={Boolean(session.consolidationDraft)} onClick={() => void beginConsolidation()}>
+              {session.consolidationDraft ? "Consolidation review open" : "Finish & consolidate"}
+            </button>
           </aside>
           <section className="math-canvas">
+            <ContinuationContext state={state} session={session} />
+            {session.consolidationDraft && <SessionConsolidation session={session} onState={onState} />}
             <PrerequisiteNavigation
               state={state}
               session={session}
@@ -900,7 +918,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               }} />
             {workbenchError && <p className="failure-message" role="alert">{workbenchError}</p>}
             {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState} key={artifact.id} />)}
-            <TrailDraft session={session} onAction={async (action) => {
+            {!session.consolidationDraft && <TrailDraft session={session} onAction={async (action) => {
               onState(await window.quickStudy.submit(action));
             }} onActivateSourceAnchor={async (sourceAnchorId) => {
               setFocusAnchorId(sourceAnchorId);
@@ -912,7 +930,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               setFocusAnchorId(null);
               setInspectorCardId(card.id);
               onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
-            }} />
+            }} />}
             <SessionAccessPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
@@ -968,6 +986,127 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
         </div>
       </div>
     </main>
+  );
+}
+
+function ContinuationContext({ state, session }: { state: LearningApplicationState; session: LearningSession }) {
+  if (!session.continuationOf) return null;
+  const historical = state.sessions.find((candidate) => candidate.id === session.continuationOf?.sessionId);
+  const outcome = historical?.consolidatedOutcome;
+  if (!historical || !outcome || outcome.id !== session.continuationOf.outcomeId) return null;
+  return (
+    <section className="continuation-context" aria-label="Continuation context">
+      <p className="eyebrow">Linked Continuation Session</p>
+      <h2>Continue from the prior outcome</h2>
+      <p>{outcome.centralInsight}</p>
+      {outcome.unresolvedQuestions.length > 0 && <p><strong>Unresolved:</strong> {outcome.unresolvedQuestions.join("; ")}</p>}
+      <p><strong>Next step:</strong> {outcome.nextStep}</p>
+      <small>The prior Session Record remains a separate stable historical record.</small>
+    </section>
+  );
+}
+
+function SessionConsolidation({ session, onState }: { session: LearningSession; onState: StateHandler }) {
+  const draft = session.consolidationDraft!;
+  const [centralInsight, setCentralInsight] = useState(draft.centralInsight);
+  const [learningProgress, setLearningProgress] = useState(draft.learningProgress);
+  const [unresolvedQuestions, setUnresolvedQuestions] = useState(draft.unresolvedQuestions.join("\n"));
+  const [nextStep, setNextStep] = useState(draft.nextStep);
+  const [includedArtifactIds, setIncludedArtifactIds] = useState(draft.includedArtifactIds);
+  const [targetDisposition, setTargetDisposition] = useState<TargetDisposition | null>(draft.targetDisposition);
+  const [error, setError] = useState<string | null>(null);
+  const consolidate = async (event: FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    try {
+      await window.quickStudy.submit({
+        type: "reviseSessionConsolidation",
+        centralInsight,
+        learningProgress,
+        unresolvedQuestions: unresolvedQuestions.split("\n").map((question) => question.trim()).filter(Boolean),
+        nextStep,
+        includedArtifactIds,
+        targetDisposition
+      });
+      onState(await window.quickStudy.submit({ type: "consolidateSession" }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Session Consolidation could not be saved.");
+    }
+  };
+  return (
+    <section className="session-consolidation" aria-labelledby="session-consolidation-title">
+      <p className="eyebrow">Learner-controlled checkpoint</p>
+      <h2 id="session-consolidation-title">Session Consolidation</h2>
+      <p>Review and revise what this Learning Session should retain. Consolidated is a lifecycle state, not a claim of mastery.</p>
+      <TrailDraft session={session} onAction={async (action) => onState(await window.quickStudy.submit(action))}
+        onActivateSourceAnchor={async (sourceAnchorId) => onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }))}
+        onOpenTeachingCard={async (teachingCardId) => {
+          const card = session.anchoredTeachingCards.find((candidate) => candidate.id === teachingCardId);
+          if (!card) throw new Error("Choose a linked Teaching Card in this Learning Session.");
+          onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
+        }} />
+      <form onSubmit={(event) => void consolidate(event)}>
+        <label htmlFor="central-insight">Central insight</label>
+        <textarea id="central-insight" value={centralInsight} onChange={(event) => setCentralInsight(event.target.value)} />
+        <label htmlFor="learning-progress">Learning Progress</label>
+        <textarea id="learning-progress" value={learningProgress} onChange={(event) => setLearningProgress(event.target.value)} />
+        <label htmlFor="unresolved-questions">Unresolved questions</label>
+        <textarea id="unresolved-questions" value={unresolvedQuestions} onChange={(event) => setUnresolvedQuestions(event.target.value)} />
+        <label htmlFor="next-step">Next step</label>
+        <textarea id="next-step" value={nextStep} onChange={(event) => setNextStep(event.target.value)} />
+        <fieldset>
+          <legend>Included Learning Artifacts</legend>
+          {session.learningArtifacts.length === 0 ? <p>No Learning Artifacts are available to include.</p> : session.learningArtifacts.map((artifact) => (
+            <label key={artifact.id}><input type="checkbox" checked={includedArtifactIds.includes(artifact.id)} onChange={(event) => {
+              setIncludedArtifactIds((current) => event.target.checked
+                ? [...current, artifact.id]
+                : current.filter((artifactId) => artifactId !== artifact.id));
+            }} />{artifact.title}</label>
+          ))}
+        </fieldset>
+        <fieldset>
+          <legend>Session Target disposition</legend>
+          {(["addressed", "deferred", "unresolved"] as const).map((disposition) => (
+            <label key={disposition}><input type="radio" name="target-disposition" value={disposition}
+              checked={targetDisposition === disposition} onChange={() => setTargetDisposition(disposition)} />
+              {disposition[0].toUpperCase() + disposition.slice(1)}</label>
+          ))}
+          <p>Addressed means sufficient for now. None of these choices asserts mastery.</p>
+        </fieldset>
+        <button className="primary" disabled={!centralInsight.trim() || !nextStep.trim() || !targetDisposition}>
+          Create Consolidated Session Outcome
+        </button>
+        {error && <p className="failure-message" role="alert">{error}</p>}
+      </form>
+    </section>
+  );
+}
+
+function ConsolidatedOutcome({ session }: { session: LearningSession }) {
+  const outcome = session.consolidatedOutcome!;
+  const includedArtifacts = session.learningArtifacts.filter((artifact) => outcome.includedArtifactIds.includes(artifact.id));
+  const essentialReasoning = outcome.trailItems.filter((item) => item.kind === "reasoningStep").map((item) => item.content);
+  return (
+    <article className="consolidated-outcome" aria-label={`Consolidated Session Outcome ${session.learningGoal}`}>
+      <p className="eyebrow">Consolidated Session Outcome</p>
+      <h3>Trail Overview</h3>
+      <dl>
+        <div><dt>Learning Goal</dt><dd>{session.learningGoal}</dd></div>
+        <div><dt>Central insight</dt><dd>{outcome.centralInsight}</dd></div>
+        <div><dt>Essential reasoning path</dt><dd>{essentialReasoning.join(" → ") || "No reasoning steps retained."}</dd></div>
+        <div><dt>Learning Progress</dt><dd>{outcome.learningProgress || "No demonstrated Learning Progress retained."}</dd></div>
+        <div><dt>Unresolved points</dt><dd>{outcome.unresolvedQuestions.join("; ") || "None recorded."}</dd></div>
+        <div><dt>Next step</dt><dd>{outcome.nextStep}</dd></div>
+        <div><dt>Target Disposition</dt><dd>{outcome.targetDisposition} · not a mastery claim</dd></div>
+      </dl>
+      <details>
+        <summary>Expand complete outcome details</summary>
+        <h4>Learning Trail</h4>
+        <ul>{outcome.trailItems.map((item) => <li key={item.id}>{item.content}{item.required && <strong> · Required Trail Item</strong>}</li>)}</ul>
+        <h4>Included Learning Artifacts</h4>
+        {includedArtifacts.length ? <ul>{includedArtifacts.map((artifact) => <li key={artifact.id}>{artifact.title}</li>)}</ul> : <p>None included.</p>}
+      </details>
+    </article>
   );
 }
 
