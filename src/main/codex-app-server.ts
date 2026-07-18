@@ -103,6 +103,9 @@ class AppServerClient {
   }
 
   request(method: string, params?: unknown, timeoutMs = 10_000): Promise<unknown> {
+    if (this.failureError) {
+      return Promise.reject(new Error("Codex runtime became unavailable. Restart Codex and retry."));
+    }
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -138,7 +141,13 @@ class AppServerClient {
   }
 
   private send(message: ProtocolMessage): void {
-    this.transport.write(`${JSON.stringify(message)}\n`);
+    try {
+      this.transport.write(`${JSON.stringify(message)}\n`);
+    } catch {
+      const error = new Error("Codex runtime became unavailable. Restart Codex and retry.");
+      this.rejectPending(error);
+      throw error;
+    }
   }
 
   private receive(line: string): void {
@@ -264,20 +273,25 @@ export class CodexAppServerRuntime implements ModelRuntime {
   }
 
   async proposeSession(mathematics: string, onRuntimeEvent?: (event: ModelRuntimeEvent) => void): Promise<SessionProposal> {
-    const content = await this.runTurn(
-      [
-        "Interpret this mathematics intake for an adaptive learning session.",
-        "Return only the requested JSON. Make the proposal concise and editable.",
-        "Pause for confirmation only when ambiguity or likely cost makes a wrong start materially wasteful.",
-        "Mathematics intake:",
-        mathematics
-      ].join("\n\n"),
-      SESSION_PROPOSAL_SCHEMA,
-      undefined,
-      undefined,
-      onRuntimeEvent
-    );
-    return parseSessionProposal(content);
+    try {
+      const content = await this.runTurn(
+        [
+          "Interpret this mathematics intake for an adaptive learning session.",
+          "Return only the requested JSON. Make the proposal concise and editable.",
+          "Pause for confirmation only when ambiguity or likely cost makes a wrong start materially wasteful.",
+          "Mathematics intake:",
+          mathematics
+        ].join("\n\n"),
+        SESSION_PROPOSAL_SCHEMA,
+        undefined,
+        undefined,
+        onRuntimeEvent
+      );
+      return parseSessionProposal(content);
+    } catch (error) {
+      onRuntimeEvent?.({ type: "turnFailed", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
+      throw error;
+    }
   }
 
   async streamTeaching(request: TeachingRequest): Promise<void> {
@@ -304,6 +318,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
       );
     } catch (error) {
       resolveStart();
+      request.onRuntimeEvent?.({ type: "turnFailed", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
       throw error;
     } finally {
       this.teachingStartSignals.delete(request.sessionId);
@@ -453,7 +468,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         type: "turnFailed",
         threadId: turn.threadId,
         turnId: params.turn.id,
-        detail: "Codex teaching turn failed."
+        detail: params.turn.error?.message ?? "Codex teaching turn failed without protocol diagnostics."
       });
       turn.reject(curatedProtocolError(params.turn.error?.message ?? "Codex could not complete this turn."));
     }
@@ -487,7 +502,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         type: "turnFailed",
         threadId: turn.threadId,
         turnId,
-        detail: "Codex Runtime became unavailable."
+      detail: error.message
       });
       turn.reject(new Error("Codex runtime became unavailable. Restart Codex and retry this Teaching Card."));
       this.removeActiveTeachingTurn(turnId);
@@ -526,6 +541,10 @@ function curatedProtocolError(message: string): Error {
   }
   if (/interrupt/i.test(message)) return new Error("Codex teaching was interrupted.");
   return new Error("Codex could not complete this request. Retry when the runtime is available.");
+}
+
+function diagnosticMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 const SESSION_PROPOSAL_SCHEMA = {

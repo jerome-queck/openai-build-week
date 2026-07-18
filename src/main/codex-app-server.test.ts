@@ -293,6 +293,9 @@ describe("Codex app-server contract", () => {
     await failedTransport.waitForMessage("turn/start");
     failedTransport.fail(new Error("stdio closed unexpectedly"));
     await expect(teaching).rejects.toThrow("Codex runtime became unavailable");
+    await expect(failedRuntime.proposeSession("Try again while idle")).rejects.toThrow(
+      "Codex runtime became unavailable. Restart Codex and retry."
+    );
   });
 
   it("rejects an incompatible initialize response before sending initialized", async () => {

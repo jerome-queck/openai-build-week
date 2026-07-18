@@ -322,11 +322,13 @@ describe("Learning Application", () => {
       confirmationReason: null
     });
     runtime.proposalError = new Error("Codex returned a malformed Session Proposal. Retry to request a fresh proposal.");
-    const { application } = await launchWithRuntime(runtime);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
 
     const failed = await application.submit({ type: "submitSessionIntake", mathematics: "Explain the chain rule." });
     expect(failed.sessions).toHaveLength(0);
     expect(failed.intakeError).toBe("Codex returned a malformed Session Proposal. Retry to request a fresh proposal.");
+    const failedPersistence = await readFile(join(dataDirectory, "learning-application.json"), "utf8");
+    expect(failedPersistence).toContain("Codex returned a malformed Session Proposal");
 
     runtime.proposalError = null;
     const retried = await application.submit({ type: "submitSessionIntake", mathematics: "Explain the chain rule." });

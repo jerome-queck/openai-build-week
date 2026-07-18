@@ -292,6 +292,8 @@ export class LearningApplication {
         if (!this.modelRuntime) throw new Error("Connect a Model Runtime before starting model-backed teaching.");
         let proposal: SessionProposal;
         const pendingLog: Array<ModelRuntimeEvent & { sequence: number }> = [];
+        const proposalAttemptId = `proposal:${crypto.randomUUID()}`;
+        this.agentWorkLogs[proposalAttemptId] = pendingLog;
         try {
           proposal = await this.modelRuntime.proposeSession(mathematics, (event) => {
             pendingLog.push({ ...event, sequence: pendingLog.length + 1 });
@@ -299,6 +301,13 @@ export class LearningApplication {
           this.state.intakeError = null;
         } catch (error) {
           const message = usefulRuntimeError(error);
+          pendingLog.push({
+            type: "turnFailed",
+            threadId: "unavailable",
+            turnId: null,
+            detail: error instanceof Error ? error.message : String(error),
+            sequence: pendingLog.length + 1
+          });
           this.state.intakeError = message;
           this.recordAuthenticationLoss(message);
           break;
@@ -327,6 +336,7 @@ export class LearningApplication {
           accessPolicy: "focused"
         };
         this.agentWorkLogs[session.id] = pendingLog;
+        delete this.agentWorkLogs[proposalAttemptId];
         this.state.sessions.push(session);
         this.state.activeSessionId = session.id;
         this.state.resumeSessionId = session.id;
