@@ -424,7 +424,8 @@ describe("Learning Application", () => {
       context: { concept: "compactness", task: state.sessions[0].sessionTarget },
       status: "supported"
     });
-    expect(state.learnerModel.entries.at(-1)).toMatchObject({
+    const preferenceEntry = state.learnerModel.entries.at(-1)!;
+    expect(preferenceEntry).toMatchObject({
       kind: "interactionPreference",
       inference: "visual route supported",
       confidence: "medium",
@@ -441,6 +442,11 @@ describe("Learning Application", () => {
         taskDemands: [state.sessions[0].sessionTarget]
       }
     });
+    await application.submit({ type: "excludeLearnerModelInference", entryId: preferenceEntry.id });
+    await application.submit({ type: "submitQuestion", text: "Choose the next route without that preference." });
+    expect(runtime.teachingRequests.at(-1)?.adaptiveTeaching).toBeUndefined();
+    runtime.completeTeaching();
+    await application.waitForModelWork();
 
     state = await application.submit({
       type: "correctUnderstandingEvidence",

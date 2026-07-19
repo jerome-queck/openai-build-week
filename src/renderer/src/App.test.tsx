@@ -174,7 +174,10 @@ describe("anchored teaching workbench", () => {
     };
     state.learnerModel.entries = [{
       id: "ledger-1", kind: "understandingEvidence", inference: "secure understanding",
-      sourceEvidence: { sessionId: "source-session", evidenceIds: ["evidence-1"], summary: "The learner justified the finite choice." },
+      sourceEvidence: {
+        sessionId: "source-session", inferenceId: "evidence-1", evidenceIds: ["evidence-1"],
+        summary: "The learner justified the finite choice."
+      },
       mathematicalContext: context,
       scope: {
         workspaceId: "source-workspace", missionId: "source-mission", sessionId: "source-session",

@@ -302,6 +302,7 @@ export interface LearnerModelLedgerEntry {
   inference: string;
   sourceEvidence: {
     sessionId: string;
+    inferenceId: string;
     evidenceIds: string[];
     summary: string;
   };
@@ -7330,7 +7331,9 @@ function understandingEvidenceLedgerEntry(
     id: crypto.randomUUID(),
     kind: "understandingEvidence",
     inference: UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary,
-    sourceEvidence: { sessionId: session.id, evidenceIds: [evidence.id], summary: evidence.response },
+    sourceEvidence: {
+      sessionId: session.id, inferenceId: evidence.id, evidenceIds: [evidence.id], summary: evidence.response
+    },
     mathematicalContext: evidence.evidenceTransferContext
       ? structuredClone(evidence.evidenceTransferContext)
       : { concepts: [evidence.concept], mathematicalStructures: [], prerequisiteConcepts: [], taskDemands: [] },
@@ -7360,6 +7363,7 @@ function interactionPreferenceLedgerEntry(
     inference: `${preference.route} route ${preference.status}`,
     sourceEvidence: {
       sessionId: session.id,
+      inferenceId: preference.id,
       evidenceIds: [...preference.evidenceIds],
       summary: `The ${preference.route} Teaching Experiment was ${teachingExperimentOutcomeLabel(outcome)} for this context.`
     },
@@ -7441,9 +7445,23 @@ function adaptiveTeachingGuidance(
 ): { adaptiveTeaching: Pick<TeachingMove, "kind" | "route" | "reason"> } | Record<string, never> {
   const move = session.currentTeachingMove;
   if (move.evidenceIds.length > 0) {
-    const activeEvidenceIds = new Set(model.entries.filter((entry) => entry.status === "active")
+    const activeEvidenceIds = new Set(model.entries.filter(
+      (entry) => entry.kind === "understandingEvidence" && entry.status === "active"
+    )
       .flatMap((entry) => entry.sourceEvidence.evidenceIds));
     if (move.evidenceIds.some((evidenceId) => !activeEvidenceIds.has(evidenceId))) return {};
+  }
+  if (move.experimentId) {
+    const experiment = session.teachingExperiments.find((candidate) => candidate.id === move.experimentId);
+    if (!experiment) return {};
+    if (experiment.status === "completed") {
+      const preference = session.interactionPreferences.find(
+        (candidate) => candidate.experimentId === experiment.id
+      );
+      const preferenceActive = preference && model.entries.some((entry) => entry.kind === "interactionPreference"
+        && entry.status === "active" && entry.sourceEvidence.inferenceId === preference.id);
+      if (!preferenceActive) return {};
+    }
   }
   return { adaptiveTeaching: { kind: move.kind, route: move.route, reason: move.reason } };
 }
@@ -9010,7 +9028,9 @@ function migrateLegacyLearnerModel(sessions: LearningSession[]): LearnerModel {
         id: `legacy-understanding-evidence-${evidence.id}`,
         kind: "understandingEvidence",
         inference: UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary,
-        sourceEvidence: { sessionId: session.id, evidenceIds: [evidence.id], summary: evidence.response },
+        sourceEvidence: {
+          sessionId: session.id, inferenceId: evidence.id, evidenceIds: [evidence.id], summary: evidence.response
+        },
         mathematicalContext: evidence.evidenceTransferContext
           ? structuredClone(evidence.evidenceTransferContext)
           : { concepts: [evidence.concept], mathematicalStructures: [], prerequisiteConcepts: [], taskDemands: [] },
@@ -9032,6 +9052,7 @@ function migrateLegacyLearnerModel(sessions: LearningSession[]): LearnerModel {
         inference: `${preference.route} route ${preference.status}`,
         sourceEvidence: {
           sessionId: session.id,
+          inferenceId: preference.id,
           evidenceIds: [...preference.evidenceIds],
           summary: `Interaction Preference retained from Teaching Experiment ${preference.experimentId}.`
         },
@@ -9084,6 +9105,7 @@ function validLearnerModelLedgerEntry(value: unknown): value is LearnerModelLedg
     && (value.kind === "understandingEvidence" || value.kind === "interactionPreference")
     && typeof value.inference === "string" && Boolean(value.inference.trim())
     && isRecord(value.sourceEvidence) && typeof value.sourceEvidence.sessionId === "string"
+    && typeof value.sourceEvidence.inferenceId === "string" && Boolean(value.sourceEvidence.inferenceId)
     && Array.isArray(value.sourceEvidence.evidenceIds)
     && value.sourceEvidence.evidenceIds.every((id) => typeof id === "string")
     && (value.kind !== "understandingEvidence" || value.sourceEvidence.evidenceIds.length === 1)
