@@ -3083,6 +3083,9 @@ describe("Learning Application", () => {
     runtime.emitTeaching("For each exterior point, choose disjoint neighbourhoods from every point of the compact set.");
     runtime.completeTeaching();
     await application.waitForModelWork();
+    await application.submit({
+      type: "addTrailItem", kind: "evidence", content: "The learner noticed that the neighbourhoods must be disjoint."
+    });
     const working = await application.submit({ type: "requestSpecialistReview" });
 
     expect(runtime.specialistRequests).toHaveLength(1);
@@ -3094,7 +3097,7 @@ describe("Learning Application", () => {
         "Do not inspect other Learning Session history or local files.",
         "Current Teaching Card: For each exterior point, choose disjoint neighbourhoods from every point of the compact set."
       ],
-      learnerEvidence: [],
+      learnerEvidence: ["The learner noticed that the neighbourhoods must be disjoint."],
       expectedOutput: "One concise correction or confirmation integrated as a Teaching Card.",
       verificationNeeds: ["Identify any hidden mathematical assumption and explain whether the argument depends on it."]
     });
@@ -3237,10 +3240,14 @@ describe("Learning Application", () => {
       priorAgentWorkLogReferences: [firstReference]
     });
 
+    runtime.emitSpecialistPartial("The retry confirmed the assumption is Hausdorff separation.");
     runtime.failSpecialist(new Error("The retry also stopped early."));
     await application.waitForModelWork();
     const retried = application.getState().sessions[0].agentTasks[0];
-    expect(retried.integratedTeachingCard.content).toBe("The first attempt found a separation assumption.");
+    expect(retried.integratedTeachingCard.content).toBe(
+      "The first attempt found a separation assumption.\n\nRetry checkpoint:\n"
+      + "The retry confirmed the assumption is Hausdorff separation."
+    );
     expect(retried.priorAgentWorkLogReferences).toEqual([firstReference]);
     expect(retried.agentWorkLogReference).not.toEqual(firstReference);
   });

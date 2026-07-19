@@ -235,6 +235,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     onAccessRequest?: TeachingRequest["onAccessRequest"];
     onSpecialistCheckpoint?: SpecialistAgentRequest["onPartialResult"];
     specialistMaxOutputTokens?: number;
+    lastSpecialistCheckpoint: string;
     outputBytes: number;
     outputBudgetExceeded: boolean;
   }>();
@@ -392,7 +393,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           [
             "Act as one task-scoped mathematical review Specialist Agent.",
             `Keep the entire response within the ${request.budget.maxOutputTokens}-token ceiling. Identify a hidden assumption in the supplied evidence, or confirm concisely that none is needed for the stated step. Do not claim independent or formal verification.`,
-            "Call checkpoint_specialist_result after each useful self-contained conclusion and before returning the same final structured JSON. Only checkpoint content suitable for the learner-facing Teaching Card.",
+            "Call checkpoint_specialist_result after each useful self-contained conclusion and before returning the same final structured JSON. Every later checkpoint must include all earlier checkpoint content as a prefix. Only checkpoint content suitable for the learner-facing Teaching Card.",
             `Purpose: ${request.purpose}`,
             `Agent Brief: ${JSON.stringify(request.brief)}`,
             `Agent Budget: ${JSON.stringify(request.budget)}`
@@ -560,6 +561,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         onAccessRequest: teachingRequest?.onAccessRequest,
         onSpecialistCheckpoint: specialistRequest?.onPartialResult,
         specialistMaxOutputTokens: specialistRequest?.budget.maxOutputTokens,
+        lastSpecialistCheckpoint: "",
         outputBytes: 0,
         outputBudgetExceeded: false
       });
@@ -586,6 +588,14 @@ export class CodexAppServerRuntime implements ModelRuntime {
         throw new Error("This turn cannot checkpoint a Specialist Agent result.");
       }
       const checkpoint = parseSpecialistAgentResult(JSON.stringify(call.checkpoint), turn.specialistMaxOutputTokens);
+      if (turn.lastSpecialistCheckpoint && !checkpoint.content.startsWith(turn.lastSpecialistCheckpoint)) {
+        throw new Error("Specialist Agent checkpoints must retain all earlier useful conclusions.");
+      }
+      const checkpointBytes = Buffer.byteLength(JSON.stringify(checkpoint), "utf8");
+      if (!this.reserveSpecialistOutput(call.turnId, turn, checkpointBytes)) {
+        throw new Error("Specialist Agent output exceeded its token budget.");
+      }
+      turn.lastSpecialistCheckpoint = checkpoint.content;
       turn.onSpecialistCheckpoint(checkpoint.content);
       turn.onRuntimeEvent?.({
         type: "toolCalled",
@@ -628,6 +638,32 @@ export class CodexAppServerRuntime implements ModelRuntime {
     return this.turns.get(turnId);
   }
 
+  private reserveSpecialistOutput(turnId: string, turn: {
+    threadId: string;
+    specialistMaxOutputTokens?: number;
+    outputBytes: number;
+    outputBudgetExceeded: boolean;
+    onRuntimeEvent?: (event: ModelRuntimeEvent) => void;
+    reject(error: Error): void;
+  }, bytes: number): boolean {
+    if (turn.outputBudgetExceeded) return false;
+    if (!turn.specialistMaxOutputTokens || turn.outputBytes + bytes <= turn.specialistMaxOutputTokens) {
+      turn.outputBytes += bytes;
+      return true;
+    }
+    turn.outputBudgetExceeded = true;
+    turn.onRuntimeEvent?.({
+      type: "turnFailed",
+      workKind: "specialist",
+      threadId: turn.threadId,
+      turnId,
+      detail: "Specialist Agent output exceeded its conservative token ceiling."
+    });
+    void this.client.request("turn/interrupt", { threadId: turn.threadId, turnId }).catch(() => undefined);
+    turn.reject(new Error("Specialist Agent output exceeded its token budget. Retry to request a shorter review."));
+    return false;
+  }
+
   private receiveNotification(message: ProtocolMessage): void {
     if (message.method === "item/agentMessage/delta") {
       const params = message.params as { turnId: string; delta: string };
@@ -638,20 +674,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
       }
       if (turn.outputBudgetExceeded) return;
       const deltaBytes = Buffer.byteLength(params.delta, "utf8");
-      if (turn.specialistMaxOutputTokens && turn.outputBytes + deltaBytes > turn.specialistMaxOutputTokens) {
-        turn.outputBudgetExceeded = true;
-        turn.onRuntimeEvent?.({
-          type: "turnFailed",
-          workKind: "specialist",
-          threadId: turn.threadId,
-          turnId: params.turnId,
-          detail: "Specialist Agent output exceeded its conservative token ceiling."
-        });
-        void this.client.request("turn/interrupt", { threadId: turn.threadId, turnId: params.turnId }).catch(() => undefined);
-        turn.reject(new Error("Specialist Agent output exceeded its token budget. Retry to request a shorter review."));
-        return;
-      }
-      turn.outputBytes += deltaBytes;
+      if (!this.reserveSpecialistOutput(params.turnId, turn, deltaBytes)) return;
       turn.content += params.delta;
       turn.onDelta?.(params.delta);
       turn.onRuntimeEvent?.({

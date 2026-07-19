@@ -2957,7 +2957,9 @@ export class LearningApplication {
       },
       onPartialResult: (content) => {
         if (controller.signal.aborted || !content) return;
-        task.integratedTeachingCard.content = content;
+        task.integratedTeachingCard.content = retainedCheckpoint && !content.startsWith(retainedCheckpoint)
+          ? `${retainedCheckpoint}\n\nRetry checkpoint:\n${content}`
+          : content;
         this.emitState();
         this.queuePersistence();
       },
@@ -4698,7 +4700,8 @@ function createSpecialistReviewTask(session: LearningSession): AgentTask {
       learnerEvidence: session.trailDraft.items
         .filter((item) => item.origin === "learner" && item.kind === "evidence"
           && (target.sourceAnchor && item.links.sourceAnchorIds.includes(target.sourceAnchor.id)
-            || target.teachingCardId && item.links.teachingCardIds.includes(target.teachingCardId)))
+            || target.teachingCardId && item.links.teachingCardIds.includes(target.teachingCardId)
+            || !target.sourceAnchor && !target.teachingCardId && isSessionLevelTrailItem(item)))
         .map((item) => item.content),
       expectedOutput: "One concise correction or confirmation integrated as a Teaching Card.",
       verificationNeeds: [
@@ -4741,6 +4744,11 @@ function specialistReviewTarget(session: LearningSession): {
   }
   if (session.teachingCard.status !== "completed" || !session.teachingCard.content.trim()) return null;
   return { content: session.teachingCard.content, sourceAnchor: null, teachingCardId: null };
+}
+
+function isSessionLevelTrailItem(item: TrailItem): boolean {
+  return item.links.sourceAnchorIds.length === 0 && item.links.teachingCardIds.length === 0
+    && item.links.learningArtifactIds.length === 0 && item.links.understandingEvidenceIds.length === 0;
 }
 
 function emptySessionLifecycle(): Pick<LearningSession,

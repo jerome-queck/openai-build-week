@@ -464,10 +464,20 @@ describe("Codex app-server contract", () => {
         transport.request(701, "item/tool/call", {
           threadId: "partial-thread", turnId: "partial-turn", callId: "partial-checkpoint",
           namespace: null, tool: "checkpoint_specialist_result",
-          arguments: { title: "Partial review", content: "The step needs Hausdorff separation." }
+          arguments: { title: "Partial review", content: "The step needs separation." }
         });
       }
       if (message.id === 701 && message.result) {
+        transport.request(702, "item/tool/call", {
+          threadId: "partial-thread", turnId: "partial-turn", callId: "cumulative-checkpoint",
+          namespace: null, tool: "checkpoint_specialist_result",
+          arguments: {
+            title: "Partial review",
+            content: "The step needs separation. Hausdorff separation is sufficient."
+          }
+        });
+      }
+      if (message.id === 702 && message.result) {
         queueMicrotask(() => {
           transport.notify("turn/completed", {
             threadId: "partial-thread",
@@ -496,7 +506,10 @@ describe("Codex app-server contract", () => {
     });
 
     await expect(request).rejects.toThrow("Codex could not complete this request");
-    expect(partials).toEqual(["The step needs Hausdorff separation."]);
+    expect(partials).toEqual([
+      "The step needs separation.",
+      "The step needs separation. Hausdorff separation is sufficient."
+    ]);
   });
 
   it("interrupts Specialist Agent output at its conservative token ceiling", async () => {
@@ -510,9 +523,11 @@ describe("Codex app-server contract", () => {
       if (message.method === "thread/start") transport.respond(message.id, { thread: { id: "budget-thread" } });
       if (message.method === "turn/start") {
         transport.respond(message.id, { turn: { id: "budget-turn" } });
-        queueMicrotask(() => transport.notify("item/agentMessage/delta", {
-          threadId: "budget-thread", turnId: "budget-turn", itemId: "oversized", delta: "x".repeat(513)
-        }));
+        transport.request(703, "item/tool/call", {
+          threadId: "budget-thread", turnId: "budget-turn", callId: "oversized-checkpoint",
+          namespace: null, tool: "checkpoint_specialist_result",
+          arguments: { title: "x".repeat(513), content: "Useful conclusion." }
+        });
       }
       if (message.method === "turn/interrupt") transport.respond(message.id, {});
     });
