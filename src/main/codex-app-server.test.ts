@@ -649,16 +649,82 @@ describe("Codex app-server contract", () => {
       },
       signal: new AbortController().signal, onStatus: () => undefined, onPartialResult: () => undefined
     });
-    const reviews = [specialistRequest(), specialistRequest()];
+    const reviews = Promise.allSettled([specialistRequest(), specialistRequest()]);
     await vi.waitFor(() => expect(transport.messages.filter((message) => message.method === "turn/start")).toHaveLength(2));
 
     await runtime.cancelTeaching("parallel-session");
-    await Promise.allSettled(reviews);
+    await reviews;
 
     expect(transport.messages.filter((message) => message.method === "turn/interrupt").map((message) => message.params))
       .toEqual(expect.arrayContaining([
         { threadId: "parallel-thread-1", turnId: "parallel-turn-1" },
         { threadId: "parallel-thread-2", turnId: "parallel-turn-2" }
+      ]));
+  });
+
+  it("interrupts a concurrent Specialist Agent that finishes starting after cancellation begins", async () => {
+    let nextThread = 0;
+    let handledTurnStarts = 0;
+    let delayedTurnRequestId: number | null = null;
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") {
+        nextThread += 1;
+        transport.respond(message.id, { thread: { id: `startup-thread-${nextThread}` } });
+      }
+      if (message.method === "turn/start") {
+        handledTurnStarts += 1;
+        if (handledTurnStarts === 1) transport.respond(message.id, { turn: { id: "startup-turn-1" } });
+        else delayedTurnRequestId = message.id;
+      }
+      if (message.method === "turn/interrupt") {
+        transport.respond(message.id, {});
+        const params = message.params as { threadId: string; turnId: string };
+        queueMicrotask(() => transport.notify("turn/completed", {
+          threadId: params.threadId,
+          turn: { id: params.turnId, status: "interrupted", error: null }
+        }));
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    const controller = new AbortController();
+    const startedTurnIds: string[] = [];
+    const specialistRequest = () => runtime.runSpecialistAgent({
+      sessionId: "startup-session", purpose: "Independent bounded review",
+      brief: {
+        learningGoal: "Check the proof", sourceAnchors: [], constraints: ["Review independently."],
+        learnerEvidence: [], expectedOutput: "One concise card.", verificationNeeds: ["Identify assumptions."]
+      },
+      budget: {
+        agentCount: 2, concurrency: 2, model: "runtimeDefault", reasoningEffort: "medium",
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
+      },
+      signal: controller.signal, onStatus: () => undefined, onPartialResult: () => undefined,
+      onRuntimeEvent: (event) => {
+        if (event.type === "turnStarted" && event.turnId) startedTurnIds.push(event.turnId);
+      }
+    });
+    const reviews = Promise.allSettled([specialistRequest(), specialistRequest()]);
+    await vi.waitFor(() => {
+      expect(delayedTurnRequestId).not.toBeNull();
+      expect(startedTurnIds).toContain("startup-turn-1");
+    });
+
+    controller.abort();
+    const cancellation = runtime.cancelTeaching("startup-session");
+    transport.respond(delayedTurnRequestId!, { turn: { id: "startup-turn-2" } });
+    await cancellation;
+    await reviews;
+
+    expect(transport.messages.filter((message) => message.method === "turn/interrupt").map((message) => message.params))
+      .toEqual(expect.arrayContaining([
+        { threadId: "startup-thread-1", turnId: "startup-turn-1" },
+        { threadId: "startup-thread-2", turnId: "startup-turn-2" }
       ]));
   });
 

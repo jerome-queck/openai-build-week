@@ -889,6 +889,7 @@ export class LearningApplication {
       }
       try {
         application.state.runtimeCapabilities = validatedRuntimeCapabilities(await modelRuntime.getCapabilities());
+        clearUnsupportedRuntimeOverrides(application.state.sessions, application.state.runtimeCapabilities);
       } catch (error) {
         application.applyModelAccessFailure(new ModelAccessError(
           "runtime",
@@ -1277,6 +1278,7 @@ export class LearningApplication {
     }
     try {
       this.state.runtimeCapabilities = validatedRuntimeCapabilities(await modelRuntime.getCapabilities());
+      clearUnsupportedRuntimeOverrides(this.state.sessions, this.state.runtimeCapabilities);
     } catch (error) {
       this.applyModelAccessFailure(new ModelAccessError(
         "runtime",
@@ -6033,6 +6035,18 @@ function selectAgentBudget(
   };
 }
 
+function clearUnsupportedRuntimeOverrides(
+  sessions: LearningSession[],
+  capabilities: ModelRuntimeCapabilities
+): void {
+  for (const session of sessions) {
+    const override = session.runtimeOverride;
+    if (!override) continue;
+    const model = capabilities.models.find((candidate) => candidate.model === override.model);
+    if (!model?.supportedReasoningEfforts.includes(override.reasoningEffort)) session.runtimeOverride = null;
+  }
+}
+
 function selectTeachingRuntime(
   session: LearningSession,
   capabilities: ModelRuntimeCapabilities
@@ -6041,20 +6055,18 @@ function selectTeachingRuntime(
   const automaticEffort = ({ faster: "low", balanced: "medium", deeper: "high" } as const)[session.reasoningPreference];
   const defaultModel = capabilities.models.find((model) => model.isDefault);
   if (!defaultModel) throw new Error("Codex Runtime did not advertise one default model.");
-  if (defaultModel.supportedReasoningEfforts.includes(automaticEffort)) {
-    return { model: "runtimeDefault", reasoningEffort: automaticEffort };
+  const safeEfforts: ReasoningEffort[] = [
+    automaticEffort,
+    ...(["medium", "low", "high", "minimal", "none", "xhigh"] as const).filter((effort) => effort !== automaticEffort)
+  ];
+  for (const effort of safeEfforts) {
+    if (defaultModel.supportedReasoningEfforts.includes(effort)) {
+      return { model: "runtimeDefault", reasoningEffort: effort };
+    }
+    const supportingModel = capabilities.models.find((model) => model.supportedReasoningEfforts.includes(effort));
+    if (supportingModel) return { model: supportingModel.model, reasoningEffort: effort };
   }
-  const supportingModel = capabilities.models.find((model) => model.supportedReasoningEfforts.includes(automaticEffort));
-  if (supportingModel) return { model: supportingModel.model, reasoningEffort: automaticEffort };
-  const safeFallback = (["medium", "low", "high", "minimal", "none", "xhigh"] as const)
-    .find((effort) => defaultModel.supportedReasoningEfforts.includes(effort));
-  if (!safeFallback) {
-    throw new Error("The default Codex Runtime model advertises only maximum reasoning choices; choose an advanced Runtime Override explicitly.");
-  }
-  return {
-    model: "runtimeDefault",
-    reasoningEffort: safeFallback
-  };
+  throw new Error("Codex Runtime advertises only maximum reasoning choices; choose an advanced Runtime Override explicitly.");
 }
 
 function unavailableModelAccess(error: unknown): Extract<ModelAccessState, { status: "unavailable" }> {

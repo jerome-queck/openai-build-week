@@ -3200,6 +3200,37 @@ describe("Learning Application", () => {
       reasoningPreference: "balanced",
       runtimeOverride: { model: "codex-deep", reasoningEffort: "high" }
     });
+
+    const replacementRuntime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    replacementRuntime.capabilities.models.splice(0, replacementRuntime.capabilities.models.length, {
+      model: "codex-fast", displayName: "Codex Fast", isDefault: true, supportedReasoningEfforts: ["low", "medium"]
+    });
+    const restored = await relaunched.restoreModelRuntime(replacementRuntime);
+    expect(restored.sessions[0]).toMatchObject({ reasoningPreference: "balanced", runtimeOverride: null });
+  });
+
+  it("routes automatic teaching to a safe effort on another advertised model before requiring an override", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the claim", scope: "One inference",
+      initialTeachingDirection: "Start from the definition", requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    runtime.capabilities.models.splice(0, runtime.capabilities.models.length,
+      { model: "maximum-only", displayName: "Maximum Only", isDefault: true, supportedReasoningEfforts: ["max", "ultra"] },
+      { model: "safe-model", displayName: "Safe Model", isDefault: false, supportedReasoningEfforts: ["medium"] }
+    );
+    const { application } = await launchWithRuntime(runtime);
+
+    await application.submit({ type: "submitSessionIntake", mathematics: "Explain the claim." });
+
+    expect(runtime.teachingRequests.at(-1)?.runtimeSelection).toEqual({
+      model: "safe-model", reasoningEffort: "medium"
+    });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
   });
 
   it("keeps confirmed authentication distinct from a runtime capability discovery failure", async () => {

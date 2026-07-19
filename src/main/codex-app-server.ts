@@ -239,14 +239,17 @@ export class CodexAppServerRuntime implements ModelRuntime {
     specialistMaxTokens?: number;
     lastSpecialistCheckpoint: string;
     budgetExceeded: boolean;
+    abortSignal?: AbortSignal;
+    abortListener?: () => void;
   }>();
   private readonly earlyTurnNotifications = new Map<string, ProtocolMessage[]>();
   private readonly turnRegistrationWaiters = new Map<string, () => void>();
   private runtimeFailure: Error | null = null;
-  private readonly teachingStartSignals = new Map<string, {
+  private readonly teachingStartSignals = new Map<string, Set<{
     promise: Promise<void>;
     resolve(): void;
-  }>();
+    started: boolean;
+  }>>();
 
   private constructor(
     private readonly client: AppServerClient,
@@ -478,21 +481,24 @@ export class CodexAppServerRuntime implements ModelRuntime {
     const start = new Promise<void>((resolve) => {
       resolveStart = resolve;
     });
-    this.teachingStartSignals.set(sessionId, { promise: start, resolve: resolveStart });
+    const signal = { promise: start, resolve: resolveStart, started: false };
+    const sessionSignals = this.teachingStartSignals.get(sessionId) ?? new Set();
+    sessionSignals.add(signal);
+    this.teachingStartSignals.set(sessionId, sessionSignals);
     try {
       return await work();
     } catch (error) {
+      signal.started = true;
       resolveStart();
       throw error;
     } finally {
-      this.teachingStartSignals.delete(sessionId);
+      sessionSignals.delete(signal);
+      if (sessionSignals.size === 0) this.teachingStartSignals.delete(sessionId);
     }
   }
 
   async cancelTeaching(sessionId: string): Promise<void> {
-    if (!this.activeTeachingTurns.has(sessionId)) {
-      await this.teachingStartSignals.get(sessionId)?.promise;
-    }
+    await Promise.all([...(this.teachingStartSignals.get(sessionId) ?? [])].map((signal) => signal.promise));
     const active = [...(this.activeTeachingTurns.get(sessionId)?.values() ?? [])];
     await Promise.all(active.map((turn) => this.client.request("turn/interrupt", turn)));
   }
@@ -563,6 +569,13 @@ export class CodexAppServerRuntime implements ModelRuntime {
     if (this.runtimeFailure) {
       throw new ModelAccessError("runtime", `Codex runtime became unavailable. ${this.runtimeFailure.message}`);
     }
+    if (specialistRequest?.signal.aborted) {
+      await this.client.request("turn/interrupt", {
+        threadId: threadResponse.thread.id,
+        turnId: turnResponse.turn.id
+      }).catch(() => undefined);
+      throw new Error("Specialist Agent work was stopped.");
+    }
     onRuntimeEvent?.({
       type: "turnStarted",
       threadId: threadResponse.thread.id,
@@ -577,6 +590,12 @@ export class CodexAppServerRuntime implements ModelRuntime {
     });
 
     return new Promise<string>((resolve, reject) => {
+      const abortListener = specialistRequest ? () => {
+        void this.client.request("turn/interrupt", {
+          threadId: threadResponse.thread.id,
+          turnId: turnResponse.turn.id
+        }).catch(() => undefined);
+      } : undefined;
       this.turns.set(turnResponse.turn.id, {
         threadId: threadResponse.thread.id,
         content: "",
@@ -589,15 +608,27 @@ export class CodexAppServerRuntime implements ModelRuntime {
         onSpecialistCheckpoint: specialistRequest?.onPartialResult,
         specialistMaxTokens: specialistRequest?.budget.maxTokens,
         lastSpecialistCheckpoint: "",
-        budgetExceeded: false
+        budgetExceeded: false,
+        abortSignal: specialistRequest?.signal,
+        abortListener
       });
+      if (abortListener) {
+        specialistRequest!.signal.addEventListener("abort", abortListener, { once: true });
+        if (specialistRequest!.signal.aborted) abortListener();
+      }
       this.turnRegistrationWaiters.get(turnResponse.turn.id)?.();
       if (sessionId) {
         const active = this.activeTeachingTurns.get(sessionId) ?? new Map<string, { threadId: string; turnId: string }>();
         active.set(turnResponse.turn.id, { threadId: threadResponse.thread.id, turnId: turnResponse.turn.id });
         this.activeTeachingTurns.set(sessionId, active);
       }
-      if (sessionId) this.teachingStartSignals.get(sessionId)?.resolve();
+      if (sessionId) {
+        const signal = [...(this.teachingStartSignals.get(sessionId) ?? [])].find((candidate) => !candidate.started);
+        if (signal) {
+          signal.started = true;
+          signal.resolve();
+        }
+      }
       for (const notification of this.earlyTurnNotifications.get(turnResponse.turn.id) ?? []) {
         this.receiveNotification(notification);
       }
@@ -722,6 +753,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     }
     this.turns.delete(params.turn.id);
     clearTimeout(turn.timeout);
+    this.removeTurnAbortListener(turn);
     this.removeActiveTeachingTurn(params.turn.id);
     if (params.turn.status === "completed") {
       turn.onRuntimeEvent?.({
@@ -760,6 +792,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     const turn = this.turns.get(turnId);
     if (!turn) return;
     this.turns.delete(turnId);
+    this.removeTurnAbortListener(turn);
     this.removeActiveTeachingTurn(turnId);
     turn.onRuntimeEvent?.({
       type: "turnFailed",
@@ -774,6 +807,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
   private failActiveTurns(error: Error): void {
     for (const [turnId, turn] of this.turns) {
       clearTimeout(turn.timeout);
+      this.removeTurnAbortListener(turn);
       turn.onRuntimeEvent?.({
         type: "turnFailed",
         threadId: turn.threadId,
@@ -791,6 +825,13 @@ export class CodexAppServerRuntime implements ModelRuntime {
       active.delete(turnId);
       if (active.size === 0) this.activeTeachingTurns.delete(sessionId);
     }
+  }
+
+  private removeTurnAbortListener(turn: {
+    abortSignal?: AbortSignal;
+    abortListener?: () => void;
+  }): void {
+    if (turn.abortListener) turn.abortSignal?.removeEventListener("abort", turn.abortListener);
   }
 }
 
