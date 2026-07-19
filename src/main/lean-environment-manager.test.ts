@@ -118,6 +118,21 @@ describe("LeanEnvironmentManager", () => {
     expect(await manager.defaultInstallationNeeded()).toBe(false);
   });
 
+  it("runs a pre-deactivation removal interruption before traversing the installed payload", async () => {
+    const { registry, seedRoot } = await fixture();
+    const manager = new LeanEnvironmentManager(registry, seedRoot, async () => undefined, async () => {
+      throw new Error("Synthetic removal interruption before deactivation.");
+    });
+    await manager.install();
+    const executable = join(registry, bundledEnvironment.id, "bin", "lean");
+    await chmod(executable, 0o700);
+    await writeFile(executable, "tampered executable", "utf8");
+    await chmod(executable, 0o500);
+
+    await expect(manager.remove()).rejects.toThrow("Synthetic removal interruption before deactivation.");
+    await expect(readFile(executable, "utf8")).resolves.toBe("tampered executable");
+  });
+
   it("rejects a read-only installed tree whose content differs from the signed seed", async () => {
     const { registry, manager } = await fixture();
     await manager.install();

@@ -124,10 +124,10 @@ export class LeanEnvironmentManager implements VerifierEnvironmentManager {
 
   async remove(environmentId = this.activeEnvironmentId ?? BUNDLED_LEAN_ENVIRONMENT.id): Promise<{ removedLogicalBytes: number }> {
     const path = join(this.registryPath, environmentId);
+    await this.beforeRemove();
     if (!await this.installedIntegrityIsValid(environmentId)) {
       throw new Error("The installed Lean environment is missing or invalid; clean it up before retrying.");
     }
-    await this.beforeRemove();
     const removedLogicalBytes = await directorySize(path);
     const removalPath = join(this.registryPath, `.${environmentId}.removing-${randomUUID()}`);
     if (environmentId === BUNDLED_LEAN_ENVIRONMENT.id) {
