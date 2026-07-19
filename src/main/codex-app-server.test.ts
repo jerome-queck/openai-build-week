@@ -286,6 +286,48 @@ describe("Codex app-server contract", () => {
             workspaceId: "workspace-1", missionId: "mission-1", sessionTarget: "Choose a convergence test",
             summary: "The learner applied the alternating series test correctly.", lastUpdatedAt: "2026-07-20T00:00:00.000Z"
           }
+        }],
+        priorUnderstandingEvidence: [{
+          id: "prior-evidence-1", origin: "priorSession", learnerModelEntryId: "ledger-2",
+          sourceSessionId: "same-mission-session", sourceRecordId: "evidence-2",
+          inference: "uncertain about the zero-limit condition", confidence: "medium",
+          sourceContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteRelationships: [{
+              prerequisiteConcept: "absolute value", supportsConcept: "alternating series test", relationship: "requiredFor"
+            }], taskDemands: ["apply a convergence test"]
+          },
+          targetContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteRelationships: [{
+              prerequisiteConcept: "absolute value", supportsConcept: "alternating series test", relationship: "requiredFor"
+            }], taskDemands: ["apply a convergence test"]
+          },
+          provenance: {
+            workspaceId: "workspace-2", missionId: "mission-2", sessionTarget: "Check the hypotheses",
+            summary: "The learner omitted the zero-limit condition.", lastUpdatedAt: "2026-07-20T00:05:00.000Z"
+          }
+        }],
+        interactionPreferences: [{
+          id: "preference-1", origin: "interactionPreference", learnerModelEntryId: "ledger-3",
+          sourceSessionId: "preference-session", sourceRecordId: "preference-record-1",
+          inference: "visual route supported", confidence: "medium",
+          sourceContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteRelationships: [{
+              prerequisiteConcept: "absolute value", supportsConcept: "alternating series test", relationship: "requiredFor"
+            }], taskDemands: ["apply a convergence test"]
+          },
+          targetContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteRelationships: [{
+              prerequisiteConcept: "absolute value", supportsConcept: "alternating series test", relationship: "requiredFor"
+            }], taskDemands: ["apply a convergence test"]
+          },
+          provenance: {
+            workspaceId: "workspace-3", missionId: "mission-3", sessionTarget: "Compare series visually",
+            summary: "A diagram was helpful.", lastUpdatedAt: "2026-07-20T00:10:00.000Z"
+          }
         }]
       },
       learningSlice: {
@@ -310,7 +352,9 @@ describe("Codex app-server contract", () => {
     expect(JSON.stringify(slicedTurn?.params)).toContain("Adaptive next Teaching Move: demonstrate through a proofStructural route.");
     expect(JSON.stringify(slicedTurn?.params)).toContain("Why this move: Understanding Evidence indicates a specific gap");
     expect(JSON.stringify(slicedTurn?.params)).toContain("Evidence Transfer from source-session");
-    expect(JSON.stringify(slicedTurn?.params)).toContain("provenance distinct from current-session evidence");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Prior-session Understanding Evidence from same-mission-session");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Interaction Preference from preference-session");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("fixed learning style");
 
     await runtime.streamTeaching({
       sessionId: "learning-session-full",

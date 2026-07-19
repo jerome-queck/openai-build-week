@@ -234,6 +234,24 @@ describe("Learning Application", () => {
     });
     const sameMissionSession = state.sessions.find((session) => session.id === state.activeSessionId)!;
     expect(sameMissionSession.evidenceTransfers).toEqual([]);
+    expect(sameMissionSession.priorUnderstandingEvidence).toHaveLength(1);
+    expect(sameMissionSession.interactionPreferenceReuses).toHaveLength(1);
+    expect(runtime.teachingRequests.at(-1)?.learnerModelGuidance).toBeUndefined();
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    state = await application.submit({ type: "setSessionLearnerModelIgnored", ignored: false });
+    await application.submit({ type: "submitQuestion", text: "Use qualified evidence from this mission." });
+    expect(runtime.teachingRequests.at(-1)?.learnerModelGuidance).toEqual({
+      evidenceTransfers: [],
+      priorUnderstandingEvidence: [expect.objectContaining({
+        learnerModelEntryId: state.learnerModel.entries[0].id,
+        origin: "priorSession"
+      })],
+      interactionPreferences: [expect.objectContaining({
+        learnerModelEntryId: transferredPreferenceEntryId,
+        origin: "interactionPreference"
+      })]
+    });
     runtime.completeTeaching();
     await application.waitForModelWork();
 
@@ -249,7 +267,9 @@ describe("Learning Application", () => {
       location: { workspaceId: targetWorkspaceId, missionId: targetMissionId }
     });
     const target = state.sessions.find((session) => session.id === state.activeSessionId)!;
-    expect(target.evidenceTransfers).toHaveLength(2);
+    expect(target.evidenceTransfers).toHaveLength(1);
+    expect(target.priorUnderstandingEvidence).toEqual([]);
+    expect(target.interactionPreferenceReuses).toHaveLength(1);
     expect(target.evidenceTransfers[0]).toMatchObject({
       origin: "transferred",
       learnerModelEntryId: state.learnerModel.entries[0].id,
@@ -269,13 +289,15 @@ describe("Learning Application", () => {
     state = await application.submit({ type: "setSessionLearnerModelIgnored", ignored: false });
     await application.submit({ type: "submitQuestion", text: "Now use qualified prior evidence." });
     expect(runtime.teachingRequests.at(-1)?.learnerModelGuidance).toEqual({
-      evidenceTransfers: expect.arrayContaining([expect.objectContaining({
+      evidenceTransfers: [expect.objectContaining({
         learnerModelEntryId: state.learnerModel.entries[0].id,
         origin: "transferred"
-      }), expect.objectContaining({
+      })],
+      priorUnderstandingEvidence: [],
+      interactionPreferences: [expect.objectContaining({
         learnerModelEntryId: transferredPreferenceEntryId,
-        origin: "transferred"
-      })])
+        origin: "interactionPreference"
+      })]
     });
     runtime.completeTeaching();
     await application.waitForModelWork();
@@ -319,6 +341,12 @@ describe("Learning Application", () => {
     expect(relaunched.getState().learnerModel.adaptiveReuseEnabled).toBe(false);
     expect(restoredTarget.ignoreLearnerModel).toBe(true);
     expect(restoredTarget.evidenceTransfers).toEqual(state.sessions.find((session) => session.id === targetSessionId)!.evidenceTransfers);
+    expect(restoredTarget.priorUnderstandingEvidence).toEqual(
+      state.sessions.find((session) => session.id === targetSessionId)!.priorUnderstandingEvidence
+    );
+    expect(restoredTarget.interactionPreferenceReuses).toEqual(
+      state.sessions.find((session) => session.id === targetSessionId)!.interactionPreferenceReuses
+    );
     expect(relaunched.getState().learnerModel.entries[0].status).toBe("excluded");
 
     await relaunched.submit({ type: "resumeSession", sessionId: targetSessionId });

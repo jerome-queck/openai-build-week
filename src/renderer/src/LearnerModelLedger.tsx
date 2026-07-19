@@ -41,9 +41,9 @@ export function LearnerModelLedger({ state, session, onState }: {
       <label className="confirmation-preference">
         <input type="checkbox" checked={state.learnerModel.adaptiveReuseEnabled}
           onChange={(event) => void submit({ type: "setAdaptiveReusePreference", enabled: event.target.checked })} />
-        Allow qualified evidence reuse across Learning Sessions
+        Allow qualified Learner Model reuse across Learning Sessions
       </label>
-      <small>Evidence Transfer requires matched concepts, mathematical structures, prerequisite relationships, and task demands.</small>
+      <small>Evidence Transfer is reserved for matched Understanding Evidence from another Study Mission or Study Workspace. Prior-session evidence and Interaction Preferences remain separately identified.</small>
       {session && <label className="confirmation-preference">
         <input type="checkbox" checked={session.ignoreLearnerModel}
           onChange={(event) => void submit({ type: "setSessionLearnerModelIgnored", ignored: event.target.checked })} />
@@ -58,6 +58,30 @@ export function LearnerModelLedger({ state, session, onState }: {
             <p>Transferred from {transfer.sourceSessionId} · {transfer.provenance.sessionTarget}</p>
             <p>{transfer.provenance.summary}</p>
             <p className="subtle">Provenance-matched; not evidence observed in this Learning Session.</p>
+          </li>)}
+        </ul>
+      </section>}
+
+      {session && session.priorUnderstandingEvidence.length > 0 && <section aria-label="Prior Understanding Evidence for this Learning Session">
+        <h3>Prior Understanding Evidence</h3>
+        <ul className="learner-model-list">
+          {session.priorUnderstandingEvidence.map((evidence) => <li key={evidence.id}>
+            <strong>{evidence.inference}</strong> · {confidenceLabel(evidence.confidence)}
+            <p>Observed in prior Session {evidence.sourceSessionId} · {evidence.provenance.sessionTarget}</p>
+            <p>{evidence.provenance.summary}</p>
+            <p className="subtle">Reused within this Study Mission; not Evidence Transfer and not evidence observed in this Learning Session.</p>
+          </li>)}
+        </ul>
+      </section>}
+
+      {session && session.interactionPreferenceReuses.length > 0 && <section aria-label="Reused Interaction Preferences for this Learning Session">
+        <h3>Reused Interaction Preferences</h3>
+        <ul className="learner-model-list">
+          {session.interactionPreferenceReuses.map((preference) => <li key={preference.id}>
+            <strong>{preference.inference}</strong> · {confidenceLabel(preference.confidence)}
+            <p>Inferred from Session {preference.sourceSessionId} · {preference.provenance.sessionTarget}</p>
+            <p>{preference.provenance.summary}</p>
+            <p className="subtle">A revisable teaching tendency; not Understanding Evidence or a fixed learning style.</p>
           </li>)}
         </ul>
       </section>}

@@ -861,7 +861,7 @@ function teachingSessionContext(request: TeachingRequest): string {
         `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
         `Why this move: ${request.adaptiveTeaching.reason}`
       ] : []),
-      evidenceTransferGuidance(request)
+      learnerModelGuidance(request)
     ].join("\n");
   }
   const base = [
@@ -872,7 +872,7 @@ function teachingSessionContext(request: TeachingRequest): string {
       `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
       `Why this move: ${request.adaptiveTeaching.reason}`
     ] : []),
-    evidenceTransferGuidance(request)
+    learnerModelGuidance(request)
   ];
   if (!request.learningSlice) return base.join("\n");
   return [
@@ -886,18 +886,37 @@ function teachingSessionContext(request: TeachingRequest): string {
   ].join("\n");
 }
 
-function evidenceTransferGuidance(request: TeachingRequest): string {
+function learnerModelGuidance(request: TeachingRequest): string {
   const transfers = request.learnerModelGuidance?.evidenceTransfers ?? [];
-  if (transfers.length === 0) return "Learner Model guidance: none authorized for this Teaching Card.";
+  const priorEvidence = request.learnerModelGuidance?.priorUnderstandingEvidence ?? [];
+  const preferences = request.learnerModelGuidance?.interactionPreferences ?? [];
+  if (transfers.length + priorEvidence.length + preferences.length === 0) {
+    return "Learner Model guidance: none authorized for this Teaching Card.";
+  }
   return [
-    "Qualified Evidence Transfer guidance (keep this provenance distinct from evidence observed in the current Learning Session):",
+    "Qualified Learner Model guidance (keep every source distinct from evidence observed in the current Learning Session):",
+    ...(transfers.length > 0 ? ["Evidence Transfers from another Study Mission or Study Workspace:"] : []),
     ...transfers.map((transfer) => [
       `Evidence Transfer from ${transfer.sourceSessionId}: ${transfer.inference} (${transfer.confidence} confidence).`,
       `Source provenance: ${JSON.stringify(transfer.provenance)}`,
       `Qualified source context: ${JSON.stringify(transfer.sourceContext)}`,
       `Matched target context: ${JSON.stringify(transfer.targetContext)}`
     ].join("\n")),
-    "Use this only as a contextual teaching hypothesis. Do not describe it as global mastery or as current-session evidence; keep provenance distinct from current-session evidence."
+    ...(priorEvidence.length > 0 ? ["Prior Understanding Evidence from this Study Mission:"] : []),
+    ...priorEvidence.map((evidence) => [
+      `Prior-session Understanding Evidence from ${evidence.sourceSessionId}: ${evidence.inference} (${evidence.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(evidence.provenance)}`,
+      `Qualified source context: ${JSON.stringify(evidence.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(evidence.targetContext)}`
+    ].join("\n")),
+    ...(preferences.length > 0 ? ["Reused Interaction Preferences:"] : []),
+    ...preferences.map((preference) => [
+      `Interaction Preference from ${preference.sourceSessionId}: ${preference.inference} (${preference.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(preference.provenance)}`,
+      `Qualified source context: ${JSON.stringify(preference.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(preference.targetContext)}`
+    ].join("\n")),
+    "Use this only as contextual teaching guidance. Do not describe Understanding Evidence as global mastery or current-session evidence, and do not turn an Interaction Preference into a fixed learning style."
   ].join("\n");
 }
 
