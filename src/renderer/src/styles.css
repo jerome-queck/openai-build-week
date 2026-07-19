@@ -283,6 +283,9 @@ input, select { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px so
 .next-teaching-move p { margin: 5px 0; }
 .interaction-preferences { margin: 0; padding-left: 20px; }
 .understanding-evidence-list { display: grid; gap: 10px; }
+.learner-model-ledger { display: grid; gap: 12px; }
+.learner-model-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.learner-model-list > li { border: 1px solid #d8d4c8; border-radius: 12px; padding: 12px; }
 .teaching-section { margin-top: 20px; }
 .teaching-section h3 { margin: 0 0 8px; color: #385950; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 .teaching-section .teaching-content { margin-top: 0; }

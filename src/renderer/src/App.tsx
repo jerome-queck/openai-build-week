@@ -25,6 +25,7 @@ import { TrailDraft } from "./TrailDraft";
 import { AnnotationInspector } from "./AnnotationInspector";
 import { ReanchoringReview } from "./ReanchoringReview";
 import { AdaptiveTeaching } from "./AdaptiveTeaching";
+import { LearnerModelLedger } from "./LearnerModelLedger";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -83,6 +84,7 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
           <AuthenticationPanel state={state} onState={onState} />
           <ModelAccessPanel state={state} onState={onState} />
           <ApplicationSettings state={state} onState={onState} />
+          <LearnerModelLedger state={state} session={null} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
           <Intake state={state} onState={onState} />
           <SessionSearch onState={onState} />
@@ -1209,6 +1211,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <SessionRecord session={session} />
             <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
             <AdaptiveTeaching session={session} onState={onState} />
+            <LearnerModelLedger state={state} session={session} onState={onState} />
             <AskBar
               session={session}
               modelAvailable={state.modelAccess.status === "available"}

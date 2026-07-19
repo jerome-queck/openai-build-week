@@ -7,6 +7,7 @@ import {
   type LearningSession,
   type LearnerAction,
   type TeachingRoute,
+  type LearnerModelConfidence,
   type UnderstandingCheckKind,
   type UnderstandingInterpretation
 } from "../../shared/learning-application";
@@ -40,8 +41,12 @@ export function AdaptiveTeaching({ session, onState }: {
   const [route, setRoute] = useState<TeachingRoute>("proofStructural");
   const [concept, setConcept] = useState(session.learningGoal);
   const [prompt, setPrompt] = useState("");
+  const [mathematicalStructures, setMathematicalStructures] = useState("");
+  const [prerequisiteConcepts, setPrerequisiteConcepts] = useState("");
+  const [taskDemands, setTaskDemands] = useState("");
   const [response, setResponse] = useState("");
   const [interpretation, setInterpretation] = useState<UnderstandingInterpretation>("specificGap");
+  const [confidence, setConfidence] = useState<LearnerModelConfidence>("medium");
   const [experimentRoute, setExperimentRoute] = useState<TeachingRoute>("visual");
   const [experimentReason, setExperimentReason] = useState("");
   const [correctionDrafts, setCorrectionDrafts] = useState<Record<string, string>>({});
@@ -55,8 +60,12 @@ export function AdaptiveTeaching({ session, onState }: {
     setRoute("proofStructural");
     setConcept(session.learningGoal);
     setPrompt("");
+    setMathematicalStructures("");
+    setPrerequisiteConcepts("");
+    setTaskDemands("");
     setResponse("");
     setInterpretation("specificGap");
+    setConfidence("medium");
     setExperimentRoute("visual");
     setExperimentReason("");
     setCorrectionDrafts({});
@@ -73,12 +82,21 @@ export function AdaptiveTeaching({ session, onState }: {
   };
   const offer = (event: FormEvent) => {
     event.preventDefault();
-    void submit({ type: "offerUnderstandingCheck", kind, prompt, concept, representation: route });
+    const transferable = mathematicalStructures.trim() && prerequisiteConcepts.trim() && taskDemands.trim();
+    void submit({
+      type: "offerUnderstandingCheck", kind, prompt, concept, representation: route,
+      ...(transferable ? { evidenceTransferContext: {
+        concepts: [concept.trim()],
+        mathematicalStructures: commaSeparatedTerms(mathematicalStructures),
+        prerequisiteConcepts: commaSeparatedTerms(prerequisiteConcepts),
+        taskDemands: commaSeparatedTerms(taskDemands)
+      } } : {})
+    });
   };
   const answer = (event: FormEvent) => {
     event.preventDefault();
     if (!offered) return;
-    void submit({ type: "recordUnderstandingEvidence", checkId: offered.id, response, interpretation });
+    void submit({ type: "recordUnderstandingEvidence", checkId: offered.id, response, interpretation, confidence });
   };
   const beginExperiment = (event: FormEvent) => {
     event.preventDefault();
@@ -109,6 +127,11 @@ export function AdaptiveTeaching({ session, onState }: {
           <select id="understanding-interpretation" value={interpretation} onChange={(event) => setInterpretation(event.target.value as UnderstandingInterpretation)}>
             {Object.entries(INTERPRETATION_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}
           </select>
+          <label htmlFor="understanding-confidence">Inference confidence</label>
+          <select id="understanding-confidence" value={confidence}
+            onChange={(event) => setConfidence(event.target.value as LearnerModelConfidence)}>
+            <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+          </select>
           <div className="adaptive-actions">
             <button className="primary" disabled={!response.trim()}>Save Understanding Evidence</button>
             <button type="button" className="secondary" onClick={() => void submit({ type: "skipUnderstandingCheck", checkId: offered.id })}>Skip without penalty</button>
@@ -128,6 +151,16 @@ export function AdaptiveTeaching({ session, onState }: {
           </select>
           <label htmlFor="understanding-check-prompt">Brief prompt</label>
           <textarea id="understanding-check-prompt" className="field" value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+          <p className="subtle">Optional Evidence Transfer context must include every field; partial context stays local to this Learning Session.</p>
+          <label htmlFor="understanding-check-structures">Mathematical structures</label>
+          <input id="understanding-check-structures" value={mathematicalStructures}
+            onChange={(event) => setMathematicalStructures(event.target.value)} placeholder="compact Hausdorff subspace" />
+          <label htmlFor="understanding-check-prerequisites">Prerequisite relationships</label>
+          <input id="understanding-check-prerequisites" value={prerequisiteConcepts}
+            onChange={(event) => setPrerequisiteConcepts(event.target.value)} placeholder="Hausdorff separation" />
+          <label htmlFor="understanding-check-demands">Task demands</label>
+          <input id="understanding-check-demands" value={taskDemands}
+            onChange={(event) => setTaskDemands(event.target.value)} placeholder="apply a finite-subcover argument" />
           <button className="secondary" disabled={!concept.trim() || !prompt.trim()}>Offer Understanding Check</button>
         </form>
       ) : (
@@ -191,4 +224,8 @@ export function AdaptiveTeaching({ session, onState }: {
       {error && <p className="failure-message" role="alert">{error}</p>}
     </section>
   );
+}
+
+function commaSeparatedTerms(value: string): string[] {
+  return value.split(",").map((term) => term.trim()).filter(Boolean);
 }

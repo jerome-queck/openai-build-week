@@ -152,7 +152,13 @@ describe("Codex app-server contract", () => {
               requiresConfirmation: false,
               confirmationReason: null,
               materialScope: "focused",
-              argumentRoadmap: null
+              argumentRoadmap: null,
+              evidenceTransferContext: {
+                concepts: ["alternating series test"],
+                mathematicalStructures: ["real series"],
+                prerequisiteConcepts: ["absolute value"],
+                taskDemands: ["apply a convergence test"]
+              }
             })
           });
         } else {
@@ -184,14 +190,20 @@ describe("Codex app-server contract", () => {
       requiresConfirmation: false,
       confirmationReason: null,
       materialScope: "focused",
-      argumentRoadmap: null
+      argumentRoadmap: null,
+      evidenceTransferContext: {
+        concepts: ["alternating series test"],
+        mathematicalStructures: ["real series"],
+        prerequisiteConcepts: ["absolute value"],
+        taskDemands: ["apply a convergence test"]
+      }
     });
     const proposalTurn = transport.messages.find((message) => message.method === "turn/start");
     expect(proposalTurn).toMatchObject({
       params: {
         outputSchema: {
-          required: expect.arrayContaining(["argumentRoadmap"]),
-          properties: { argumentRoadmap: expect.any(Object) }
+          required: expect.arrayContaining(["argumentRoadmap", "evidenceTransferContext"]),
+          properties: { argumentRoadmap: expect.any(Object), evidenceTransferContext: expect.any(Object) }
         }
       }
     });
@@ -245,6 +257,29 @@ describe("Codex app-server contract", () => {
         route: "proofStructural",
         reason: "Understanding Evidence indicates a specific gap in the finite-subcover step."
       },
+      learnerModelGuidance: {
+        evidenceTransfers: [{
+          id: "transfer-1",
+          origin: "transferred",
+          learnerModelEntryId: "ledger-1",
+          sourceSessionId: "source-session",
+          sourceEvidenceId: "evidence-1",
+          inference: "secure understanding",
+          confidence: "high",
+          sourceContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteConcepts: ["absolute value"], taskDemands: ["apply a convergence test"]
+          },
+          targetContext: {
+            concepts: ["alternating series test"], mathematicalStructures: ["real series"],
+            prerequisiteConcepts: ["absolute value"], taskDemands: ["apply a convergence test"]
+          },
+          provenance: {
+            workspaceId: "workspace-1", missionId: "mission-1", sessionTarget: "Choose a convergence test",
+            summary: "The learner applied the alternating series test correctly.", lastUpdatedAt: "2026-07-20T00:00:00.000Z"
+          }
+        }]
+      },
       learningSlice: {
         roadmapTitle: "Convergence test route",
         stageTitle: "Alternating series test",
@@ -266,6 +301,8 @@ describe("Codex app-server contract", () => {
     expect(JSON.stringify(slicedTurn?.params)).toContain("Future Learning Sessions, not part of this Teaching Card: Error estimate; Application");
     expect(JSON.stringify(slicedTurn?.params)).toContain("Adaptive next Teaching Move: demonstrate through a proofStructural route.");
     expect(JSON.stringify(slicedTurn?.params)).toContain("Why this move: Understanding Evidence indicates a specific gap");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Evidence Transfer from source-session");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("provenance distinct from current-session evidence");
 
     await runtime.streamTeaching({
       sessionId: "learning-session-full",

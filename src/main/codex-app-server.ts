@@ -339,6 +339,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           "Interpret this mathematics intake for an adaptive learning session.",
           "Return only the requested JSON. Make the proposal concise and editable.",
           "Pause for confirmation only when ambiguity or likely cost makes a wrong start materially wasteful.",
+          "Return a structured Evidence Transfer context with concept, mathematical structure, prerequisite concept, and task-demand labels. Use precise reusable mathematical labels rather than broad subject names.",
           "Classify materialScope as focused or longOrMultiStage by mathematical coherence, not arbitrary length. If it is longOrMultiStage, return a compact Argument Roadmap with major claims, stages, dependencies, and an exact verbatim sourceExcerpt for each stage. Propose one coherent stage as the current Learning Slice, including only its immediate prerequisites. Do not expand or teach every step. For focused material, return argumentRoadmap as null.",
           "Mathematics intake:",
           mathematics
@@ -859,7 +860,8 @@ function teachingSessionContext(request: TeachingRequest): string {
       ...(request.adaptiveTeaching ? [
         `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
         `Why this move: ${request.adaptiveTeaching.reason}`
-      ] : [])
+      ] : []),
+      evidenceTransferGuidance(request)
     ].join("\n");
   }
   const base = [
@@ -869,7 +871,8 @@ function teachingSessionContext(request: TeachingRequest): string {
     ...(request.adaptiveTeaching ? [
       `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
       `Why this move: ${request.adaptiveTeaching.reason}`
-    ] : [])
+    ] : []),
+    evidenceTransferGuidance(request)
   ];
   if (!request.learningSlice) return base.join("\n");
   return [
@@ -880,6 +883,21 @@ function teachingSessionContext(request: TeachingRequest): string {
     `Immediate prerequisites only: ${request.learningSlice.immediatePrerequisites.join("; ") || "none"}`,
     `Future Learning Sessions, not part of this Teaching Card: ${request.learningSlice.remainingStageTitles.join("; ")}`,
     "Teach only the chosen Learning Slice and its immediate prerequisites. Do not expand the remaining roadmap or replace it with one exhaustive explanation or artifact."
+  ].join("\n");
+}
+
+function evidenceTransferGuidance(request: TeachingRequest): string {
+  const transfers = request.learnerModelGuidance?.evidenceTransfers ?? [];
+  if (transfers.length === 0) return "Learner Model guidance: none authorized for this Teaching Card.";
+  return [
+    "Qualified Evidence Transfer guidance (keep this provenance distinct from evidence observed in the current Learning Session):",
+    ...transfers.map((transfer) => [
+      `Evidence Transfer from ${transfer.sourceSessionId}: ${transfer.inference} (${transfer.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(transfer.provenance)}`,
+      `Qualified source context: ${JSON.stringify(transfer.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(transfer.targetContext)}`
+    ].join("\n")),
+    "Use this only as a contextual teaching hypothesis. Do not describe it as global mastery or as current-session evidence; keep provenance distinct from current-session evidence."
   ].join("\n");
 }
 
@@ -1094,7 +1112,8 @@ const SESSION_PROPOSAL_SCHEMA = {
     "requiresConfirmation",
     "confirmationReason",
     "materialScope",
-    "argumentRoadmap"
+    "argumentRoadmap",
+    "evidenceTransferContext"
   ],
   properties: {
     learningGoal: { type: "string" },
@@ -1129,6 +1148,17 @@ const SESSION_PROPOSAL_SCHEMA = {
             }
           }
         }
+      }
+    },
+    evidenceTransferContext: {
+      type: "object",
+      additionalProperties: false,
+      required: ["concepts", "mathematicalStructures", "prerequisiteConcepts", "taskDemands"],
+      properties: {
+        concepts: { type: "array", minItems: 1, items: { type: "string" } },
+        mathematicalStructures: { type: "array", minItems: 1, items: { type: "string" } },
+        prerequisiteConcepts: { type: "array", minItems: 1, items: { type: "string" } },
+        taskDemands: { type: "array", minItems: 1, items: { type: "string" } }
       }
     }
   }
@@ -1193,10 +1223,18 @@ function parseSessionProposal(content: string): SessionProposal {
     || (proposal.materialScope === "focused" && proposal.argumentRoadmap !== null)
     || (proposal.materialScope === "longOrMultiStage" && proposal.argumentRoadmap === null)
     || !validArgumentRoadmapProposal(proposal.argumentRoadmap)
+    || !validEvidenceTransferContext(proposal.evidenceTransferContext)
   ) {
     throw new Error("Codex returned a malformed Session Proposal. Retry to request a fresh proposal.");
   }
   return proposal as unknown as SessionProposal;
+}
+
+function validEvidenceTransferContext(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return [value.concepts, value.mathematicalStructures, value.prerequisiteConcepts, value.taskDemands]
+    .every((terms) => Array.isArray(terms) && terms.length > 0
+      && terms.every((term) => typeof term === "string" && Boolean(term.trim())));
 }
 
 function parseArtifactSynthesis(content: string): ArtifactSynthesisResult {

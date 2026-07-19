@@ -91,6 +91,7 @@ function trailSession(): LearningSession {
     teachingMoves: [{ id: "move-1", kind: "explain", route: "proofStructural", reason: "Use open covers", evidenceIds: [], experimentId: null }],
     currentTeachingMove: { id: "move-1", kind: "explain", route: "proofStructural", reason: "Use open covers", evidenceIds: [], experimentId: null },
     understandingChecks: [], understandingEvidence: [], teachingExperiments: [], interactionPreferences: [],
+    evidenceTransferContext: null, evidenceTransfers: [], ignoreLearnerModel: false,
     teachingCard: { status: "completed", content: "Overview", error: null, retryable: false }, teachingCardHistory: [],
     submittedPendingQuestions: [], currentTeachingInput: { kind: "sessionIntake", text: "Every compact subset is closed." },
     pendingQuestion: null, askBarContext: { items: [], includedIds: [], customized: false }, questionCards: [], activeQuestionCardId: null,

@@ -1,4 +1,4 @@
-import type { CorroborationPass, QuestionContextItem, SessionAccessScope, SourceAnchorSelection, TeachingMove } from "./learning-application";
+import type { CorroborationPass, EvidenceTransfer, EvidenceTransferContext, QuestionContextItem, SessionAccessScope, SourceAnchorSelection, TeachingMove } from "./learning-application";
 
 export type AuthenticationMethod = "chatgpt" | "apiKey";
 export type ModelAccessCause = "network" | "authentication" | "subscriptionCapacity" | "quota" | "runtime";
@@ -29,6 +29,7 @@ export interface SessionProposal {
   confirmationReason: string | null;
   materialScope?: "focused" | "longOrMultiStage";
   argumentRoadmap?: ArgumentRoadmapProposal | null;
+  evidenceTransferContext?: EvidenceTransferContext | null;
 }
 
 export interface ArgumentRoadmapProposal {
@@ -77,6 +78,7 @@ export interface TeachingRequest {
   scope: string;
   initialTeachingDirection: string;
   adaptiveTeaching?: Pick<TeachingMove, "kind" | "route" | "reason">;
+  learnerModelGuidance?: { evidenceTransfers: EvidenceTransfer[] };
   corroboration: TeachingCorroborationContext | null;
   learningSlice?: {
     roadmapTitle: string;
