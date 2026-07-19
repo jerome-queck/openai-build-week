@@ -4599,6 +4599,35 @@ describe("Learning Application", () => {
     });
   });
 
+  it("keeps a reported erratum disputed when the provider omits correction evidence", async () => {
+    const research = new DeterministicExternalResearch();
+    research.result = {
+      title: "Incomplete errata report",
+      summary: "The provider reports errata but omits the correction evidence.",
+      sources: [{ title: "Authoritative theorem reference", url: "https://example.test/orbit-stabilizer" }],
+      corroboration: {
+        relevantResult: "Orbit-stabilizer theorem",
+        errataCheck: "found",
+        proposedApproachDeparture: false,
+        evidence: [authoritativeEvidence()]
+      }
+    };
+    const { application } = await launchWithExternalResearch(research);
+
+    await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Prove the orbit-stabilizer theorem for a finite group acting on a set."
+    });
+    await application.waitForModelWork();
+
+    expect(application.getState().sessions[0].corroborationPass).toMatchObject({
+      status: "disputed",
+      errataCheck: "found",
+      independentSupport: "conflicting",
+      sourceDiscrepancies: [{ summary: expect.stringContaining("without attaching") }]
+    });
+  });
+
   it("does not treat agreement among derivative sources as sufficient corroboration", async () => {
     const pass = await corroborateWithEvidence([
       authoritativeEvidence({ sourceTitle: "Derivative notes A", authority: "derivative", relevance: "related" }),
@@ -4654,21 +4683,6 @@ describe("Learning Application", () => {
       confirmationReason: null
     }, true);
     const research = new DeterministicExternalResearch();
-    research.result = {
-      title: "Arithmetic reference",
-      summary: "The calculation was checked.",
-      sources: [{ title: "Authoritative arithmetic reference", url: "https://example.test/arithmetic" }],
-      corroboration: {
-        relevantResult: "2 + 2 = 4",
-        errataCheck: "noneFound",
-        proposedApproachDeparture: false,
-        evidence: [authoritativeEvidence({
-          sourceTitle: "Authoritative arithmetic reference",
-          sourceUrl: "https://example.test/arithmetic",
-          proofApproaches: ["Direct calculation"]
-        })]
-      }
-    };
     const { application } = await launchWithRuntimeAndExternalResearch(runtime, research);
     await application.submit({ type: "submitSessionIntake", mathematics: "Compute 2 + 2." });
     runtime.completeTeaching();
@@ -4692,7 +4706,7 @@ describe("Learning Application", () => {
     research.gate = new Promise<void>((resolve) => { releaseResearch = resolve; });
 
     const question = application.submit({ type: "submitQuestion", text: "Prove that sqrt 2 is irrational." });
-    await vi.waitFor(() => expect(research.requests).toHaveLength(2));
+    await vi.waitFor(() => expect(research.requests).toHaveLength(1));
     expect(runtime.teachingRequests).toHaveLength(1);
     expect(application.getState().sessions[0].corroborationPass).toMatchObject({
       status: "running",
@@ -4714,7 +4728,6 @@ describe("Learning Application", () => {
     expect(application.getState().sessions[0]).toMatchObject({
       corroborationPass: { currentUse: { conclusion: "Prove the orbit-stabilizer theorem." } },
       corroborationPassHistory: [
-        { currentUse: { conclusion: "Compute 2 + 2." }, status: "completed" },
         { currentUse: { conclusion: "Prove that sqrt 2 is irrational." }, status: "completed" }
       ]
     });

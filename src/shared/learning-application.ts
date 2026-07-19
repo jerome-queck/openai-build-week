@@ -3411,8 +3411,7 @@ export class LearningApplication {
     const corroborationPass = await this.beginAutomaticCorroboration(
       session,
       corroborationMathematics,
-      focus ? [focus.sourceId] : [],
-      true
+      focus ? [focus.sourceId] : []
     );
     const sourceContext = await this.buildTeachingSourceContext(session, undefined, questionContext);
     const log = this.agentWorkLogs[session.id] ??= [];
@@ -3758,10 +3757,9 @@ export class LearningApplication {
   private async beginAutomaticCorroboration(
     session: LearningSession,
     mathematics = session.mathematics,
-    informedSourceIds: string[] = [],
-    requirePass = false
+    informedSourceIds: string[] = []
   ): Promise<CorroborationPass | null> {
-    const query = automaticCorroborationQuery(mathematics, requirePass);
+    const query = automaticCorroborationQuery(mathematics);
     if (!query) return null;
     const existing = [session.corroborationPass, ...session.corroborationPassHistory]
       .find((pass) => pass?.currentUse.conclusion === mathematics) ?? null;
@@ -4451,12 +4449,12 @@ function usefulResearchError(error: unknown): string {
   return `${detail} No access was elevated and no retry was attempted.`;
 }
 
-function automaticCorroborationQuery(mathematics: string, requirePass = false): DerivedResearchQuery | null {
+function automaticCorroborationQuery(mathematics: string): DerivedResearchQuery | null {
   const namedTheorem = mathematics.match(
     /(?:prove|disprove|show|verify|study|understand|explain|establish|demonstrate|justify|derive|give\s+(?:me\s+)?a\s+proof\s+of|proof\s+of)\s+(?:the\s+)?([a-z][a-z'’\-]*(?:\s+[a-z][a-z'’\-]*){0,4}\s+theorems?)\b/i
   )?.[1];
-  const substantive = /\b(prove|disprove|proof|show\s+that|establish|demonstrate|justify|derive|why\s+(?:is|are|does)|theorems?|lemma|proposition|corollary|counterexample)\b/i.test(mathematics);
-  if (!substantive && !requirePass) return null;
+  const substantive = /\b(prove|disprove|proof|argument|establish|demonstrate|justify|derive|deduce|counterexample|theorems?|lemma|proposition|corollary|implies?|equivalent|necessary|sufficient)\b|\b(?:show|verify|check|confirm)\s+(?:me\s+)?(?:that|whether)\b|\bwhy\s+(?:is|are|does)\b|\bhow\s+(?:can|do|does|would)\b[^.!?]*\b(?:show|prove|establish|derive)\b/i.test(mathematics);
+  if (!substantive) return null;
   const assumptions = Array.from(mathematics.matchAll(
     /\b(?:finite|abelian)\s+(?:group|ring|field)\b|\b(?:compact|hausdorff)\s+(?:space|subset)\b|\bcontinuous\s+(?:function|map)\b/gi
   )).map(([assumption]) => assumption.toLocaleLowerCase())
@@ -4479,9 +4477,7 @@ function automaticCorroborationQuery(mathematics: string, requirePass = false): 
   return buildDerivedResearchQuery({
     theoremNames: [],
     assumptions,
-    keywords: assumptions.length === 0 && keywords.length === 0
-      ? [substantive ? "mathematical proof" : "mathematical claim"]
-      : keywords
+    keywords: assumptions.length === 0 && keywords.length === 0 ? ["mathematical proof"] : keywords
   });
 }
 
@@ -4555,15 +4551,19 @@ function completeCorroborationPass(pass: CorroborationPass, research: ResearchAc
     ? "found"
     : pass.errataCheck === "noneFound" || corroboration.errataCheck === "noneFound" ? "noneFound" : "unchecked";
   pass.independentSupport = conflicts.length > 0 ? "conflicting" : matchingSupport ? "sufficient" : anySupport ? "weakOnly" : "missing";
+  const materialConflict = conflicts.length > 0 || pass.errataCheck === "found";
+  if (materialConflict) pass.independentSupport = "conflicting";
   const establishedApproaches = strong.flatMap((item) => item.proofApproaches);
   pass.proofApproachResearch = pass.pedagogicalBaselinePresent
     ? "notRequired"
     : establishedApproaches.length > 0 ? "established" : "incomplete";
-  if (conflicts.length > 0) {
+  if (materialConflict) {
     const discrepancy = pass.sourceDiscrepancies[0] ?? {
       id: crypto.randomUUID(),
       relevantResult: pass.relevantResult,
-      summary: "Authoritative evidence materially disagrees with the current use or reports a correction.",
+      summary: conflicts.length > 0
+        ? "Authoritative evidence materially disagrees with the current use or reports a correction."
+        : "External research reports known errata without attaching corresponding correction evidence.",
       competingEvidence: []
     };
     discrepancy.competingEvidence = structuredClone(pass.evidence);
@@ -4573,7 +4573,7 @@ function completeCorroborationPass(pass: CorroborationPass, research: ResearchAc
     ...(!matchingSupport && conflicts.length === 0 ? [anySupport
       ? "Available agreement comes only from weak, related, derivative, or unknown-authority evidence."
       : "Independent evidence is missing."] : []),
-    ...(conflicts.length > 0 ? ["Authoritative evidence is disputed or conflicting."] : []),
+    ...(materialConflict ? ["Authoritative evidence is disputed or conflicting."] : []),
     ...(!pass.pedagogicalBaselinePresent && establishedApproaches.length === 0
       ? ["No Pedagogical Baseline or established proof approach is available."] : []),
     ...(corroboration.proposedApproachDeparture ? ["The proposed teaching route substantially departs from established approaches."] : [])
@@ -4583,7 +4583,7 @@ function completeCorroborationPass(pass: CorroborationPass, research: ResearchAc
     performed: pass.deeperResearch.performed,
     reason: deeperReasons.join(" ") || null
   };
-  pass.status = conflicts.length > 0
+  pass.status = materialConflict
     ? "disputed"
     : matchingSupport && pass.errataCheck !== "unchecked"
       && pass.proofApproachResearch !== "incomplete" ? "completed" : "incomplete";
