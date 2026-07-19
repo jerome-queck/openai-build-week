@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   TEACHING_ROUTES,
   UNDERSTANDING_CHECK_KINDS,
+  canOfferUnderstandingCheck,
   type LearningApplicationState,
   type LearningSession,
   type LearnerAction,
@@ -47,9 +48,7 @@ export function AdaptiveTeaching({ session, onState }: {
   const [error, setError] = useState<string | null>(null);
   const offered = session.understandingChecks.find((check) => check.status === "offered") ?? null;
   const activeExperiment = session.teachingExperiments.find((experiment) => experiment.status === "active") ?? null;
-  const canOfferCheck = (session.teachingCard.status === "completed" && Boolean(session.teachingCard.content.trim()))
-    || session.anchoredTeachingCards.some((card) => card.currentRevision.status === "completed" && Boolean(card.currentRevision.content.trim()))
-    || session.questionCards.some((card) => card.currentRevision.status === "completed" && Boolean(card.currentRevision.content.trim()));
+  const canOfferCheck = canOfferUnderstandingCheck(session);
 
   useEffect(() => {
     setKind("explain");

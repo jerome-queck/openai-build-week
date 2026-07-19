@@ -184,6 +184,8 @@ describe("Learning Application", () => {
       kind: "slowDown",
       reason: expect.stringContaining("corrected")
     });
+    expect(state.sessions[0].trailDraft.items.find((item) => item.links.understandingEvidenceIds.length > 0)?.content)
+      .toBe("Understanding Evidence for compactness: excessive pace.");
   });
 
   async function launchWithRuntime(runtime: ModelRuntime) {

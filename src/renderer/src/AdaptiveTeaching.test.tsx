@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { LearningApplicationState, LearningSession } from "../../shared/learning-application";
@@ -16,6 +16,16 @@ describe("AdaptiveTeaching", () => {
 
     expect((screen.getByRole("textbox", { name: "Why try it?" }) as HTMLInputElement).value).toBe("");
     expect((screen.getByRole("textbox", { name: "Concept" }) as HTMLInputElement).value).toBe("Understand connectedness");
+  });
+
+  it("uses the domain eligibility rule before offering an Understanding Check", () => {
+    const session = adaptiveSession("session-1", "Understand compactness");
+    session.teachingCard = { status: "idle", content: "", error: null, retryable: false };
+
+    const view = render(<AdaptiveTeaching session={session} onState={vi.fn()} />);
+
+    expect(screen.getByText("Complete a substantive Teaching Card before offering an Understanding Check.")).toBeTruthy();
+    expect(within(view.container).queryByRole("button", { name: "Offer Understanding Check" })).toBeNull();
   });
 });
 

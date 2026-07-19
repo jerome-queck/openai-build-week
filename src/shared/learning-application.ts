@@ -2359,7 +2359,7 @@ export class LearningApplication {
       }
       case "offerUnderstandingCheck": {
         const session = this.requireActiveSession();
-        if (!hasSubstantiveTeaching(session)) {
+        if (!canOfferUnderstandingCheck(session)) {
           throw new Error("Complete a substantive Teaching Card before offering an Understanding Check.");
         }
         if (!isUnderstandingCheckKind(action.kind)) throw new Error("Choose a reasoning-focused Understanding Check.");
@@ -2411,11 +2411,7 @@ export class LearningApplication {
         check.status = "answered";
         session.understandingEvidence.push(evidence);
         setAdaptiveTeachingMove(session, evidence, "Understanding Evidence indicates");
-        upsertSuggestedTrailItem(session, `understanding-evidence:${evidence.id}`, "evidence", understandingEvidenceSummary(evidence), {
-          ...emptyTrailItemLinks(),
-          sourceAnchorIds: evidence.sourceContext.sourceAnchorId ? [evidence.sourceContext.sourceAnchorId] : [],
-          understandingEvidenceIds: [evidence.id]
-        });
+        upsertUnderstandingEvidenceTrailItem(session, evidence);
         break;
       }
       case "startTeachingExperiment": {
@@ -2478,6 +2474,7 @@ export class LearningApplication {
         evidence.interpretation = requireUnderstandingInterpretation(action.interpretation);
         evidence.learnerCorrection = requiredText(action.correction, "Understanding Evidence correction");
         setAdaptiveTeachingMove(session, evidence, "The learner corrected this Understanding Evidence; it now indicates");
+        upsertUnderstandingEvidenceTrailItem(session, evidence);
         break;
       }
       case "resolveReanchoring": {
@@ -7184,12 +7181,20 @@ function understandingEvidenceSummary(evidence: UnderstandingEvidence): string {
   return `Understanding Evidence for ${evidence.concept}: ${UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary}.`;
 }
 
-function hasSubstantiveTeaching(session: LearningSession): boolean {
+export function canOfferUnderstandingCheck(session: LearningSession): boolean {
   return (session.teachingCard.status === "completed" && Boolean(session.teachingCard.content.trim()))
     || session.anchoredTeachingCards.some((card) => card.currentRevision.status === "completed"
       && Boolean(card.currentRevision.content.trim()))
     || session.questionCards.some((card) => card.currentRevision.status === "completed"
       && Boolean(card.currentRevision.content.trim()));
+}
+
+function upsertUnderstandingEvidenceTrailItem(session: LearningSession, evidence: UnderstandingEvidence): void {
+  upsertSuggestedTrailItem(session, `understanding-evidence:${evidence.id}`, "evidence", understandingEvidenceSummary(evidence), {
+    ...emptyTrailItemLinks(),
+    sourceAnchorIds: evidence.sourceContext.sourceAnchorId ? [evidence.sourceContext.sourceAnchorId] : [],
+    understandingEvidenceIds: [evidence.id]
+  });
 }
 
 function isUnderstandingCheckKind(value: unknown): value is UnderstandingCheckKind {
