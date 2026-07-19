@@ -1079,6 +1079,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
             }} />}
             <SessionAccessPanel state={state} session={session} onState={onState} />
+            <CorroborationPassPanel session={session} />
             <ExternalResearchPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
@@ -1969,6 +1970,82 @@ function accessPolicyDescription(policy: LearningSession["accessPolicy"]): strin
   }[policy];
 }
 
+function CorroborationPassPanel({ session }: { session: LearningSession }) {
+  const pass = session.corroborationPass;
+  if (!pass) return null;
+  return (
+    <section className={`corroboration-pass ${pass.status}`} aria-labelledby="corroboration-pass-title">
+      <div className="access-heading">
+        <div>
+          <p className="eyebrow">Mathematical trust</p>
+          <h2 id="corroboration-pass-title">Corroboration Pass</h2>
+        </div>
+        <span className="saved" role="status">{corroborationStatusLabel(pass.status)}</span>
+      </div>
+      <p>{pass.message}</p>
+      <dl>
+        <div><dt>Relevant result</dt><dd>{pass.relevantResult}</dd></div>
+        <div><dt>Current assumptions</dt><dd>{pass.currentUse.assumptions.join("; ") || "Not yet identified"}</dd></div>
+        <div><dt>Current conclusion</dt><dd>{pass.currentUse.conclusion}</dd></div>
+        <div><dt>Pedagogical Baseline</dt><dd>{pass.pedagogicalBaselinePresent ? "Supplied material" : "None supplied"}</dd></div>
+        <div><dt>Assumptions</dt><dd>{corroborationComparisonLabel(pass.assumptionComparison)}</dd></div>
+        <div><dt>Conclusion</dt><dd>{corroborationComparisonLabel(pass.conclusionComparison)}</dd></div>
+        <div><dt>Known errata</dt><dd>{corroborationErrataLabel(pass.errataCheck)}</dd></div>
+        <div><dt>Independent support</dt><dd>{corroborationSupportLabel(pass.independentSupport)}</dd></div>
+        <div><dt>Established proof approaches</dt><dd>{pass.proofApproachResearch === "established"
+          ? "Researched" : pass.proofApproachResearch === "notRequired" ? "Pedagogical Baseline available" : "Incomplete"}</dd></div>
+        <div><dt>Deeper research</dt><dd>{pass.deeperResearch.performed
+          ? `Performed · ${pass.deeperResearch.reason ?? "No remaining escalation condition"}`
+          : pass.deeperResearch.required ? `Required · ${pass.deeperResearch.reason}` : "Not triggered"}</dd></div>
+      </dl>
+      {pass.evidence.length > 0 && <section aria-label="Weighted corroboration evidence">
+        <h3>Weighted evidence</h3>
+        <ul>{pass.evidence.map((evidence, index) => <li key={`${evidence.sourceUrl}:${index}`}>
+          <strong>{evidence.sourceTitle}</strong>
+          <span>Authority {evidence.authority} · Relevance {evidence.relevance}</span>
+          <span>{evidence.detail}</span>
+          <code>{evidence.sourceUrl}</code>
+        </li>)}</ul>
+      </section>}
+      {pass.sourceDiscrepancies.map((discrepancy) => <section key={discrepancy.id}
+        className="source-discrepancy" role="alert" aria-label="Source Discrepancy">
+        <p className="eyebrow">Source Discrepancy</p>
+        <h3>{discrepancy.relevantResult}</h3>
+        <p>{discrepancy.summary}</p>
+        <ul>{discrepancy.competingEvidence.map((evidence, index) => <li key={`${evidence.sourceUrl}:${index}`}>
+          <strong>{evidence.sourceTitle}</strong>: {evidence.detail}
+        </li>)}</ul>
+      </section>)}
+      {session.corroborationPassHistory.length > 0 && <details>
+        <summary>Previous Corroboration Passes ({session.corroborationPassHistory.length})</summary>
+        <ul>{session.corroborationPassHistory.map((previous) => <li key={previous.id}>
+          <strong>{previous.relevantResult}</strong> · {corroborationStatusLabel(previous.status)}
+          <span>{previous.message}</span>
+          {previous.sourceDiscrepancies.map((discrepancy) => <span key={discrepancy.id}>
+            Source Discrepancy: {discrepancy.summary}
+          </span>)}
+        </li>)}</ul>
+      </details>}
+    </section>
+  );
+}
+
+function corroborationStatusLabel(status: NonNullable<LearningSession["corroborationPass"]>["status"]): string {
+  return { running: "Checking evidence", completed: "Corroborated", incomplete: "Incomplete", disputed: "Disputed" }[status];
+}
+
+function corroborationComparisonLabel(comparison: NonNullable<LearningSession["corroborationPass"]>["assumptionComparison"]): string {
+  return { matches: "matches", mismatch: "mismatch", unchecked: "not independently checked" }[comparison];
+}
+
+function corroborationErrataLabel(check: NonNullable<LearningSession["corroborationPass"]>["errataCheck"]): string {
+  return { noneFound: "none found", found: "found", unchecked: "not checked" }[check];
+}
+
+function corroborationSupportLabel(support: NonNullable<LearningSession["corroborationPass"]>["independentSupport"]): string {
+  return { sufficient: "sufficient", weakOnly: "weak sources only", conflicting: "conflicting", missing: "missing" }[support];
+}
+
 function ExternalResearchPanel({ state, session, onState }: {
   state: LearningApplicationState;
   session: LearningSession;
@@ -2045,7 +2122,7 @@ function ExternalResearchPanel({ state, session, onState }: {
           ? "Granted"
           : session.researchEgressPermission.status === "revoked" ? "Revoked" : "Not granted"}
       </p>
-      <small>A minimized automatic Corroboration Pass starts when the intake names a theorem. Research Egress Permission applies only to raw Source Excerpts; revoking it stops active excerpt research and never retries silently.</small>
+      <small>A minimized automatic Corroboration Pass starts before substantive proof teaching, including later proof-focused Teaching and Question Cards. Research Egress Permission applies only to raw Source Excerpts; revoking it stops active excerpt research and never retries silently.</small>
       <small>Only inspectable excerpts under the active policy are eligible. Whole-file transmission always needs a separate explicit confirmation and is not available from this control.</small>
       {researchHistory.length > 0 && (
         <section aria-label="External research history">
@@ -2056,6 +2133,7 @@ function ExternalResearchPanel({ state, session, onState }: {
               <strong>{research.query.text}</strong>
               <dl>
                 <div><dt>Query origin</dt><dd>{research.queryOrigin === "automaticCorroboration" ? "Automatic Source Corroboration" : "Learner-authored terms"}</dd></div>
+                <div><dt>Research depth</dt><dd>{research.researchDepth === "deep" ? "Deeper research" : "Lightweight pass"}</dd></div>
                 <div><dt>Local sources informing query</dt><dd>{research.informedBySourceIds.length}</dd></div>
                 <div><dt>Destination used</dt><dd><code>{research.destination}</code></dd></div>
                 <div><dt>Source Excerpts sent</dt><dd>{research.excerpts.length}</dd></div>

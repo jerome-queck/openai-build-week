@@ -19,6 +19,7 @@ export interface ResearchExcerpt {
 export interface ExternalResearchRequest {
   query: DerivedResearchQuery;
   queryOrigin: "learnerAuthored" | "automaticCorroboration";
+  researchDepth: "lightweight" | "deep";
   informedBySourceIds: string[];
   destination: string;
   excerpts: ResearchExcerpt[];
@@ -29,6 +30,26 @@ export interface ExternalResearchResult {
   title: string;
   summary: string;
   sources: Array<{ title: string; url: string }>;
+  corroboration?: CorroborationResearchResult;
+}
+
+export interface CorroborationResearchResult {
+  relevantResult: string;
+  errataCheck: "noneFound" | "found" | "unavailable";
+  proposedApproachDeparture: boolean;
+  evidence: CorroborationResearchEvidence[];
+}
+
+export interface CorroborationResearchEvidence {
+  sourceTitle: string;
+  sourceUrl: string;
+  authority: "primary" | "authoritative" | "derivative" | "unknown";
+  relevance: "direct" | "related" | "weak";
+  relation: "supports" | "conflicts" | "erratum" | "unassessed";
+  assumptions: "matches" | "mismatch" | "notAssessed";
+  conclusion: "matches" | "mismatch" | "notAssessed";
+  proofApproaches: string[];
+  detail: string;
 }
 
 export interface ExternalResearch {
@@ -50,7 +71,54 @@ export function validatedExternalResearchResult(value: unknown): ExternalResearc
     if (url.protocol !== "https:") throw malformed;
     return { title: source.title.trim(), url: url.href };
   });
-  return { title: result.title.trim(), summary: result.summary.trim(), sources };
+  return {
+    title: result.title.trim(),
+    summary: result.summary.trim(),
+    sources,
+    ...(result.corroboration === undefined ? {} : { corroboration: validatedCorroborationResearchResult(result.corroboration) })
+  };
+}
+
+export function validatedCorroborationResearchResult(value: unknown): CorroborationResearchResult {
+  const malformed = new Error("The external research service returned malformed corroboration evidence. No claim was treated as settled.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed;
+  const result = value as Partial<CorroborationResearchResult>;
+  if (typeof result.relevantResult !== "string" || !result.relevantResult.trim()
+    || !["noneFound", "found", "unavailable"].includes(String(result.errataCheck))
+    || typeof result.proposedApproachDeparture !== "boolean" || !Array.isArray(result.evidence)) throw malformed;
+  const evidence = result.evidence.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw malformed;
+    const candidate = item as Partial<CorroborationResearchEvidence>;
+    if (typeof candidate.sourceTitle !== "string" || !candidate.sourceTitle.trim()
+      || typeof candidate.sourceUrl !== "string" || typeof candidate.detail !== "string" || !candidate.detail.trim()
+      || !["primary", "authoritative", "derivative", "unknown"].includes(String(candidate.authority))
+      || !["direct", "related", "weak"].includes(String(candidate.relevance))
+      || !["supports", "conflicts", "erratum", "unassessed"].includes(String(candidate.relation))
+      || !["matches", "mismatch", "notAssessed"].includes(String(candidate.assumptions))
+      || !["matches", "mismatch", "notAssessed"].includes(String(candidate.conclusion))
+      || !Array.isArray(candidate.proofApproaches)
+      || candidate.proofApproaches.some((approach) => typeof approach !== "string" || !approach.trim())) throw malformed;
+    let sourceUrl: URL;
+    try { sourceUrl = new URL(candidate.sourceUrl); } catch { throw malformed; }
+    if (sourceUrl.protocol !== "https:") throw malformed;
+    return {
+      sourceTitle: candidate.sourceTitle.trim(),
+      sourceUrl: sourceUrl.href,
+      authority: candidate.authority!,
+      relevance: candidate.relevance!,
+      relation: candidate.relation!,
+      assumptions: candidate.assumptions!,
+      conclusion: candidate.conclusion!,
+      proofApproaches: candidate.proofApproaches.map((approach) => approach.trim()),
+      detail: candidate.detail.trim()
+    } as CorroborationResearchEvidence;
+  });
+  return {
+    relevantResult: result.relevantResult.trim(),
+    errataCheck: result.errataCheck!,
+    proposedApproachDeparture: result.proposedApproachDeparture,
+    evidence
+  };
 }
 
 export function buildDerivedResearchQuery(input: DerivedResearchQueryInput): DerivedResearchQuery {

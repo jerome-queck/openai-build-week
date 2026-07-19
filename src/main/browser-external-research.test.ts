@@ -10,6 +10,7 @@ describe("Browser External Research", () => {
     const result = await research.research({
       query: buildDerivedResearchQuery({ theoremNames: ["Orbit-stabilizer theorem"], assumptions: [], keywords: [] }),
       queryOrigin: "learnerAuthored",
+      researchDepth: "lightweight",
       informedBySourceIds: [],
       destination,
       excerpts: [],
@@ -27,11 +28,38 @@ describe("Browser External Research", () => {
     const query = buildDerivedResearchQuery({ theoremNames: ["Cauchy's theorem"], assumptions: [], keywords: [] });
     for (const destination of ["https://example.com/search", "http://duckduckgo.com/?q=cauchy"]) {
       await expect(research.research({
-        query, queryOrigin: "learnerAuthored", informedBySourceIds: [], destination, excerpts: [],
+        query, queryOrigin: "learnerAuthored", researchDepth: "lightweight", informedBySourceIds: [], destination, excerpts: [],
         signal: new AbortController().signal
       }))
         .rejects.toThrow("destination is not allowed");
     }
+  });
+
+  it("marks an automatic corroboration browser handoff as an unassessed evidence lead", async () => {
+    const research = new BrowserExternalResearch(vi.fn().mockResolvedValue(undefined));
+    const destination = "https://duckduckgo.com/?q=orbit-stabilizer";
+    const result = await research.research({
+      query: buildDerivedResearchQuery({ theoremNames: ["Orbit-stabilizer theorem"], assumptions: [], keywords: [] }),
+      queryOrigin: "automaticCorroboration",
+      researchDepth: "lightweight",
+      informedBySourceIds: [],
+      destination,
+      excerpts: [],
+      signal: new AbortController().signal
+    });
+
+    expect(result.corroboration).toMatchObject({
+      relevantResult: "Orbit-stabilizer theorem",
+      errataCheck: "unavailable",
+      evidence: [{
+        sourceUrl: destination,
+        authority: "unknown",
+        relevance: "weak",
+        relation: "unassessed",
+        assumptions: "notAssessed",
+        conclusion: "notAssessed"
+      }]
+    });
   });
 
   it("observes cancellation while the browser handoff is pending", async () => {
@@ -40,6 +68,7 @@ describe("Browser External Research", () => {
     const pending = research.research({
       query: buildDerivedResearchQuery({ theoremNames: ["Sylow theorems"], assumptions: [], keywords: [] }),
       queryOrigin: "learnerAuthored",
+      researchDepth: "lightweight",
       informedBySourceIds: [],
       destination: "https://duckduckgo.com/?q=sylow",
       excerpts: [], signal: controller.signal

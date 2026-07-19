@@ -93,6 +93,8 @@ function trailSession(): LearningSession {
     pendingQuestion: null, askBarContext: { items: [], includedIds: [], customized: false }, questionCards: [], activeQuestionCardId: null,
     accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false,
     researchEgressPermission: { status: "notGranted" }, researchActions: [],
+    corroborationPass: null,
+    corroborationPassHistory: [],
     sourceAnchors: [{
       id: "anchor-1", sourceId: "source-1",
       sourceRevisionId: null,

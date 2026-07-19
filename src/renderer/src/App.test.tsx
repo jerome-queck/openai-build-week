@@ -22,6 +22,7 @@ describe("anchored teaching workbench", () => {
         theoremNames: ["Heine-Borel theorem"], assumptions: [], keywords: ["compact subset"]
       },
       queryOrigin: "learnerAuthored",
+      researchDepth: "lightweight",
       informedBySourceIds: [],
       destination: "https://duckduckgo.com/?q=Heine-Borel+theorem%3B+compact+subset",
       excerpts: [], status: "completed", error: null,
@@ -79,6 +80,53 @@ describe("anchored teaching workbench", () => {
     });
     await user.click(within(panel).getByRole("checkbox", { name: "Allow Source Excerpt Egress for this Learning Session" }));
     expect(api.submit).toHaveBeenCalledWith({ type: "setResearchEgressPermission", enabled: false });
+  });
+
+  it("shows weighted Corroboration evidence and preserves a visible Source Discrepancy", async () => {
+    const state = workbenchState();
+    const supporting = {
+      sourceTitle: "Authoritative supporting reference", sourceUrl: "https://example.test/support",
+      authority: "authoritative" as const, relevance: "direct" as const, relation: "supports" as const,
+      assumptions: "matches" as const, conclusion: "matches" as const,
+      proofApproaches: ["Finite-subcover argument"], detail: "The assumptions and conclusion match."
+    };
+    const conflicting = {
+      sourceTitle: "Primary erratum", sourceUrl: "https://example.test/erratum",
+      authority: "primary" as const, relevance: "direct" as const, relation: "erratum" as const,
+      assumptions: "mismatch" as const, conclusion: "mismatch" as const,
+      proofApproaches: [], detail: "The published erratum adds a missing hypothesis."
+    };
+    state.sessions[0].corroborationPass = {
+      id: "pass-1", researchActionId: "research-1", status: "disputed",
+      relevantResult: "Closed subset theorem",
+      currentUse: { assumptions: ["compact subset"], conclusion: "Every compact subset is closed." },
+      pedagogicalBaselinePresent: true,
+      assumptionComparison: "mismatch", conclusionComparison: "mismatch", errataCheck: "found",
+      independentSupport: "conflicting", proofApproachResearch: "notRequired",
+      deeperResearch: { required: true, performed: true, reason: "Authoritative evidence is disputed or conflicting." },
+      evidence: [supporting, conflicting],
+      sourceDiscrepancies: [{
+        id: "discrepancy-1", relevantResult: "Closed subset theorem",
+        summary: "Authoritative evidence materially disagrees with the current use.",
+        competingEvidence: [supporting, conflicting]
+      }],
+      message: "A Source Discrepancy preserves material disagreement. The affected claim is not presented as settled."
+    };
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+    const pass = await screen.findByRole("region", { name: "Corroboration Pass" });
+    expect(pass.textContent).toContain("Closed subset theorem");
+    expect(within(pass).getByText("Assumptions")).toBeTruthy();
+    expect(within(pass).getAllByText("mismatch")).toHaveLength(2);
+    expect(within(pass).getByText("Known errata")).toBeTruthy();
+    expect(within(pass).getByText("found")).toBeTruthy();
+    expect(pass.textContent).toContain("Authoritative supporting reference");
+    expect(pass.textContent).toContain("Authority authoritative · Relevance direct");
+    const discrepancy = within(pass).getByRole("alert", { name: "Source Discrepancy" });
+    expect(discrepancy.textContent).toContain("Primary erratum");
+    expect(discrepancy.textContent).toContain("Authoritative supporting reference");
+    expect(pass.textContent).toContain("not presented as settled");
   });
 
   it("restores a closed Contextual Inspector only through its Anchor Marker and returns focus on close", async () => {
@@ -881,6 +929,8 @@ function workbenchState(): LearningApplicationState {
       pendingFullAccessConfirmation: false,
       researchEgressPermission: { status: "notGranted" },
       researchActions: [],
+      corroborationPass: null,
+      corroborationPassHistory: [],
       sourceAnchors: [anchor],
       sourceAnchorRequests: [{ id: "request-1", sourceAnchorId: "anchor-1", action: "explain" }],
       annotations: [],

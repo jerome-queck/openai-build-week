@@ -454,6 +454,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           [
             "Create one learner-facing Teaching Card, not a chat transcript.",
             teachingSessionContext(request),
+            corroborationContext(request),
             `Session Access Policy: ${sessionAccessPolicyLabel(request.accessScope.policy)}. Use only the context supplied within this authorized scope. Source modification and deletion are prohibited.`,
             authorizedSourceContext(request),
             questionContext(request),
@@ -869,6 +870,21 @@ function teachingSessionContext(request: TeachingRequest): string {
     `Immediate prerequisites only: ${request.learningSlice.immediatePrerequisites.join("; ") || "none"}`,
     `Future Learning Sessions, not part of this Teaching Card: ${request.learningSlice.remainingStageTitles.join("; ")}`,
     "Teach only the chosen Learning Slice and its immediate prerequisites. Do not expand the remaining roadmap or replace it with one exhaustive explanation or artifact."
+  ].join("\n");
+}
+
+function corroborationContext(request: TeachingRequest): string {
+  if (!request.corroboration) {
+    return "Corroboration Pass: not required for this task. Do not imply that independent verification occurred.";
+  }
+  const pass = request.corroboration;
+  return [
+    `Corroboration Pass for ${pass.relevantResult}: ${pass.status}.`,
+    `Assumptions: ${pass.assumptionComparison}. Conclusion: ${pass.conclusionComparison}. Known errata: ${pass.errataCheck}. Independent support: ${pass.independentSupport}.`,
+    pass.message,
+    pass.status === "completed"
+      ? "Teach from the corroborated statement without overstating the evidence as formal verification."
+      : "Preserve the uncertainty or disagreement explicitly in the Teaching Card. Do not silently correct competing evidence or present the affected claim as settled."
   ].join("\n");
 }
 

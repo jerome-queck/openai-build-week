@@ -17,12 +17,31 @@ export class BrowserExternalResearch implements ExternalResearch {
         ), { once: true });
       })
     ]);
-    return {
+    const result: ExternalResearchResult = {
       title: "Research opened in browser",
       summary: request.excerpts.length > 0
         ? `Opened the inspectable destination with ${request.excerpts.length} authorized Source Excerpt${request.excerpts.length === 1 ? "" : "s"}.`
         : "Opened the inspectable destination using only the Derived Research Query.",
       sources: [{ title: "Inspect external research destination", url: destination.href }]
     };
+    if (request.queryOrigin === "automaticCorroboration") {
+      result.corroboration = {
+        relevantResult: request.query.theoremNames[0] ?? request.query.text,
+        errataCheck: "unavailable",
+        proposedApproachDeparture: false,
+        evidence: [{
+          sourceTitle: "Inspect external research destination",
+          sourceUrl: destination.href,
+          authority: "unknown",
+          relevance: "weak",
+          relation: "unassessed",
+          assumptions: "notAssessed",
+          conclusion: "notAssessed",
+          proofApproaches: [],
+          detail: "The browser handoff exposes a research lead; its statement, errata, and support remain unassessed until authoritative evidence is returned."
+        }]
+      };
+    }
+    return result;
   }
 }

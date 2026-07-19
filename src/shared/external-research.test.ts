@@ -23,6 +23,18 @@ describe("External Research contract", () => {
       summary: "Two suitable references were found.",
       sources: [{ title: "Unsafe redirect", url: "file:///Users/learner/notes.pdf" }]
     })).toThrow("external research service returned a malformed result");
+    expect(() => validatedExternalResearchResult({
+      title: "References", summary: "Evidence returned.",
+      sources: [{ title: "Reference", url: "https://example.test/reference" }],
+      corroboration: {
+        relevantResult: "A theorem", errataCheck: "noneFound", proposedApproachDeparture: false,
+        evidence: [{
+          sourceTitle: "Local file", sourceUrl: "file:///Users/learner/private.pdf",
+          authority: "authoritative", relevance: "direct", relation: "supports",
+          assumptions: "matches", conclusion: "matches", proofApproaches: [], detail: "Matches."
+        }]
+      }
+    })).toThrow("malformed corroboration evidence");
   });
 
   it("has no contract fields for private local context", () => {
