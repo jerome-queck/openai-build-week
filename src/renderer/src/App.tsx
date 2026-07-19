@@ -25,6 +25,7 @@ import { TrailDraft } from "./TrailDraft";
 import { AnnotationInspector } from "./AnnotationInspector";
 import { ReanchoringReview } from "./ReanchoringReview";
 import { AdaptiveTeaching } from "./AdaptiveTeaching";
+import { LearnerModelLedger } from "./LearnerModelLedger";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -83,6 +84,7 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
           <AuthenticationPanel state={state} onState={onState} />
           <ModelAccessPanel state={state} onState={onState} />
           <ApplicationSettings state={state} onState={onState} />
+          <LearnerModelLedger state={state} session={null} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
           <Intake state={state} onState={onState} />
           <SessionSearch onState={onState} />
@@ -891,6 +893,7 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
 
 function Intake({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [mathematics, setMathematics] = useState("");
+  const [ignoreLearnerModel, setIgnoreLearnerModel] = useState(false);
   const modelAvailable = state.modelAccess.status === "available";
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
@@ -903,6 +906,7 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
     onState(await window.quickStudy.submit({
       type: modelAvailable ? "submitSessionIntake" : "startQuickStudy",
       mathematics,
+      ignoreLearnerModel,
       ...(location ? { location } : {})
     }));
   };
@@ -919,6 +923,11 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
           onChange={(event) => setMathematics(event.target.value)}
           placeholder="What would you like to understand?"
         />
+        <label className="confirmation-preference">
+          <input type="checkbox" checked={ignoreLearnerModel}
+            onChange={(event) => setIgnoreLearnerModel(event.target.checked)} />
+          Ignore the Learner Model for this new Learning Session
+        </label>
         <div className="intake-actions">
           <span>{modelAvailable ? `${initialAccess} · ${location ? `${workspace.name} · ${mission!.name}` : "no workspace setup required"}` : `Local Working Mode · ${initialAccess}`}</span>
           <button className="primary" disabled={!mathematics.trim()}>{modelAvailable ? "Propose Learning Session" : "Start local Learning Session"}</button>
@@ -1209,6 +1218,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <SessionRecord session={session} />
             <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
             <AdaptiveTeaching session={session} onState={onState} />
+            <LearnerModelLedger state={state} session={session} onState={onState} />
             <AskBar
               session={session}
               modelAvailable={state.modelAccess.status === "available"}

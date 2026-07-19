@@ -37,6 +37,8 @@ function adaptiveSession(id: string, learningGoal: string): LearningSession {
     returnContext: { label: "Source", nextAction: "Continue" },
     proposal: { scope: "Explain the proof", initialTeachingDirection: "Begin with definitions", status: "accepted", confirmationReason: null },
     teachingMoves: [move], currentTeachingMove: move, understandingChecks: [], understandingEvidence: [], teachingExperiments: [], interactionPreferences: [],
+    evidenceTransferContext: null, evidenceTransfers: [], priorUnderstandingEvidence: [],
+    interactionPreferenceReuses: [], ignoreLearnerModel: false,
     teachingCard: { status: "completed", content: "Use compactness after separating an exterior point.", error: null, retryable: false },
     teachingCardHistory: [], submittedPendingQuestions: [], currentTeachingInput: { kind: "sessionIntake", text: "Every compact subset is closed." },
     pendingQuestion: null, askBarContext: { items: [], includedIds: [], customized: false }, questionCards: [], activeQuestionCardId: null,

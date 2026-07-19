@@ -1,4 +1,14 @@
-import type { CorroborationPass, QuestionContextItem, SessionAccessScope, SourceAnchorSelection, TeachingMove } from "./learning-application";
+import type {
+  CorroborationPass,
+  EvidenceTransfer,
+  EvidenceTransferContext,
+  InteractionPreferenceReuse,
+  PriorUnderstandingEvidence,
+  QuestionContextItem,
+  SessionAccessScope,
+  SourceAnchorSelection,
+  TeachingMove
+} from "./learning-application";
 
 export type AuthenticationMethod = "chatgpt" | "apiKey";
 export type ModelAccessCause = "network" | "authentication" | "subscriptionCapacity" | "quota" | "runtime";
@@ -29,6 +39,7 @@ export interface SessionProposal {
   confirmationReason: string | null;
   materialScope?: "focused" | "longOrMultiStage";
   argumentRoadmap?: ArgumentRoadmapProposal | null;
+  evidenceTransferContext?: EvidenceTransferContext | null;
 }
 
 export interface ArgumentRoadmapProposal {
@@ -77,6 +88,11 @@ export interface TeachingRequest {
   scope: string;
   initialTeachingDirection: string;
   adaptiveTeaching?: Pick<TeachingMove, "kind" | "route" | "reason">;
+  learnerModelGuidance?: {
+    evidenceTransfers: EvidenceTransfer[];
+    priorUnderstandingEvidence: PriorUnderstandingEvidence[];
+    interactionPreferences: InteractionPreferenceReuse[];
+  };
   corroboration: TeachingCorroborationContext | null;
   learningSlice?: {
     roadmapTitle: string;
@@ -216,4 +232,26 @@ export interface ModelRuntime {
   streamTeaching(request: TeachingRequest): Promise<void>;
   cancelTeaching(sessionId: string): Promise<void>;
   shutdown(): Promise<void>;
+}
+
+export function isEvidenceTransferContext(value: unknown): value is EvidenceTransferContext {
+  if (!value || typeof value !== "object") return false;
+  const context = value as Record<string, unknown>;
+  return [context.concepts, context.mathematicalStructures, context.taskDemands]
+    .every((terms) => Array.isArray(terms)
+      && terms.every((term) => typeof term === "string" && Boolean(term.trim())))
+    && Array.isArray(context.prerequisiteRelationships)
+    && context.prerequisiteRelationships.every((relationship) => {
+      if (!relationship || typeof relationship !== "object") return false;
+      const candidate = relationship as Record<string, unknown>;
+      return typeof candidate.prerequisiteConcept === "string" && Boolean(candidate.prerequisiteConcept.trim())
+        && typeof candidate.supportsConcept === "string" && Boolean(candidate.supportsConcept.trim())
+        && candidate.relationship === "requiredFor";
+    });
+}
+
+export function isCompleteEvidenceTransferContext(value: unknown): value is EvidenceTransferContext {
+  return isEvidenceTransferContext(value) && value.concepts.length > 0
+    && value.mathematicalStructures.length > 0 && value.prerequisiteRelationships.length > 0
+    && value.taskDemands.length > 0;
 }

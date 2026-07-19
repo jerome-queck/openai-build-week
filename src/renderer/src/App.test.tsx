@@ -165,6 +165,90 @@ describe("anchored teaching workbench", () => {
     expect(api.submit).toHaveBeenCalledWith({ type: "setResearchEgressPermission", enabled: false });
   });
 
+  it("shows the Learner Model Ledger, qualified transfer provenance, and direct governance controls", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    const context = {
+      concepts: ["finite subcover"], mathematicalStructures: ["compact Hausdorff subspace"],
+      prerequisiteRelationships: [{
+        prerequisiteConcept: "Hausdorff separation", supportsConcept: "finite subcover", relationship: "requiredFor" as const
+      }], taskDemands: ["apply a finite-subcover argument"]
+    };
+    state.learnerModel.entries = [{
+      id: "ledger-1", kind: "understandingEvidence", inference: "secure understanding",
+      sourceEvidence: {
+        sessionId: "source-session", sourceRecordId: "evidence-1", evidenceIds: ["evidence-1"],
+        summary: "The learner justified the finite choice."
+      },
+      mathematicalContext: context,
+      scope: {
+        workspaceId: "source-workspace", missionId: "source-mission", sessionId: "source-session",
+        sessionTarget: "Prove the closed-subset theorem"
+      },
+      confidence: "high", status: "active", correction: null,
+      governanceHistory: [],
+      createdAt: "2026-07-20T00:00:00.000Z", lastUpdatedAt: "2026-07-20T00:00:00.000Z"
+    }];
+    state.sessions[0].evidenceTransferContext = context;
+    state.sessions[0].evidenceTransfers = [{
+      id: "transfer-1", origin: "transferred", learnerModelEntryId: "ledger-1",
+      sourceSessionId: "source-session", sourceRecordId: "evidence-1", inference: "secure understanding",
+      confidence: "high", sourceContext: context, targetContext: context,
+      provenance: {
+        workspaceId: "source-workspace", missionId: "source-mission", sessionTarget: "Prove the closed-subset theorem",
+        summary: "The learner justified the finite choice.", lastUpdatedAt: "2026-07-20T00:00:00.000Z"
+      }
+    }];
+    state.sessions[0].priorUnderstandingEvidence = [{
+      id: "prior-1", origin: "priorSession", learnerModelEntryId: "ledger-1",
+      sourceSessionId: "same-mission-session", sourceRecordId: "evidence-1", inference: "secure understanding",
+      confidence: "high", sourceContext: context, targetContext: context,
+      provenance: {
+        workspaceId: "quick-study-workspace", missionId: "quick-study-unfiled-mission",
+        sessionTarget: "Prove a related result", summary: "The learner justified the finite choice.",
+        lastUpdatedAt: "2026-07-20T00:00:00.000Z"
+      }
+    }];
+    state.sessions[0].interactionPreferenceReuses = [{
+      id: "preference-reuse-1", origin: "interactionPreference", learnerModelEntryId: "ledger-preference-1",
+      sourceSessionId: "preference-session", sourceRecordId: "preference-1", inference: "visual route supported",
+      confidence: "medium", sourceContext: context, targetContext: context,
+      provenance: {
+        workspaceId: "source-workspace", missionId: "source-mission", sessionTarget: "Compare proof routes",
+        summary: "A diagram was helpful.", lastUpdatedAt: "2026-07-20T00:00:00.000Z"
+      }
+    }];
+    const api = quickStudyApi(state);
+    window.quickStudy = api;
+
+    render(<App />);
+    const ledger = await screen.findByRole("region", { name: "Learner Model Ledger" });
+    expect(ledger.textContent).toContain("secure understanding");
+    expect(ledger.textContent).toContain("The learner justified the finite choice.");
+    expect(ledger.textContent).toContain("compact Hausdorff subspace");
+    expect(ledger.textContent).toContain("High confidence");
+    expect(ledger.textContent).toContain("Transferred from source-session");
+    expect(ledger.textContent).toContain("Provenance-matched; not evidence observed in this Learning Session");
+    expect(ledger.textContent).toContain("Observed in prior Session same-mission-session");
+    expect(ledger.textContent).toContain("Reused within this Study Mission; not Evidence Transfer");
+    expect(ledger.textContent).toContain("visual route supported");
+    expect(ledger.textContent).toContain("not Understanding Evidence or a fixed learning style");
+
+    await user.click(within(ledger).getByRole("checkbox", { name: "Allow qualified Learner Model reuse across Learning Sessions" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "setAdaptiveReusePreference", enabled: false });
+    await user.click(within(ledger).getByRole("checkbox", { name: "Ignore the Learner Model for this Learning Session" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "setSessionLearnerModelIgnored", ignored: true });
+    await user.type(within(ledger).getByRole("textbox", { name: "Correction for secure understanding" }), "This inference was too strong.");
+    await user.click(within(ledger).getByRole("button", { name: "Save correction for secure understanding" }));
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "correctLearnerModelInference", entryId: "ledger-1", correction: "This inference was too strong."
+    });
+    await user.click(within(ledger).getByRole("button", { name: "Exclude secure understanding from adaptation" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "excludeLearnerModelInference", entryId: "ledger-1" });
+    await user.click(within(ledger).getByRole("button", { name: "Delete secure understanding from the Learner Model" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "deleteLearnerModelInference", entryId: "ledger-1" });
+  });
+
   it("shows weighted Corroboration evidence and preserves a visible Source Discrepancy", async () => {
     const state = workbenchState();
     const supporting = {
@@ -1062,6 +1146,8 @@ function workbenchState(): LearningApplicationState {
       teachingMoves: [{ id: "move-1", kind: "explain", route: "proofStructural", reason: "Start from definitions", evidenceIds: [], experimentId: null }],
       currentTeachingMove: { id: "move-1", kind: "explain", route: "proofStructural", reason: "Start from definitions", evidenceIds: [], experimentId: null },
       understandingChecks: [], understandingEvidence: [], teachingExperiments: [], interactionPreferences: [],
+      evidenceTransferContext: null, evidenceTransfers: [], priorUnderstandingEvidence: [],
+      interactionPreferenceReuses: [], ignoreLearnerModel: false,
       teachingCard: { status: "completed", content: "Session overview", error: null, retryable: false },
       teachingCardHistory: [],
       submittedPendingQuestions: [],
@@ -1185,6 +1271,7 @@ function workbenchState(): LearningApplicationState {
     modelAccess: { status: "unavailable", cause: "runtime", message: "Unavailable" },
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true },
-    sourceExcerptEgressPreference: { enabled: false }
+    sourceExcerptEgressPreference: { enabled: false },
+    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null }
   };
 }

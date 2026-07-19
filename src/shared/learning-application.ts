@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
   ModelAccessError,
+  isCompleteEvidenceTransferContext,
+  isEvidenceTransferContext,
   type ArtifactSynthesisResult,
   type AgentBrief,
   type AgentBudget,
@@ -268,6 +270,7 @@ export interface UnderstandingCheck {
   concept: string;
   representation: TeachingRoute;
   sourceContext: { sourceAnchorId: string | null; sourceIds: string[] };
+  evidenceTransferContext?: EvidenceTransferContext | null;
   teachingMoveId: string;
   status: "offered" | "answered" | "skipped";
 }
@@ -280,9 +283,89 @@ export interface UnderstandingEvidence {
   task: string;
   representation: TeachingRoute;
   sourceContext: UnderstandingCheck["sourceContext"];
+  evidenceTransferContext?: EvidenceTransferContext | null;
   elicitingTeachingMoveId: string;
   interpretation: UnderstandingInterpretation;
   learnerCorrection: string | null;
+}
+
+export type LearnerModelConfidence = "low" | "medium" | "high";
+
+export interface EvidenceTransferContext {
+  concepts: string[];
+  mathematicalStructures: string[];
+  prerequisiteRelationships: Array<{
+    prerequisiteConcept: string;
+    supportsConcept: string;
+    relationship: "requiredFor";
+  }>;
+  taskDemands: string[];
+}
+
+export interface LearnerModelLedgerEntry {
+  id: string;
+  kind: "understandingEvidence" | "interactionPreference";
+  inference: string;
+  sourceEvidence: {
+    sessionId: string;
+    sourceRecordId: string;
+    evidenceIds: string[];
+    summary: string;
+  };
+  mathematicalContext: EvidenceTransferContext;
+  scope: {
+    workspaceId: string;
+    missionId: string;
+    sessionId: string;
+    sessionTarget: string;
+  };
+  confidence: LearnerModelConfidence;
+  status: "active" | "corrected" | "excluded";
+  correction: string | null;
+  governanceHistory: Array<{
+    id: string;
+    action: "corrected" | "excluded";
+    note: string | null;
+    at: string;
+  }>;
+  createdAt: string;
+  lastUpdatedAt: string;
+}
+
+export interface LearnerModel {
+  entries: LearnerModelLedgerEntry[];
+  adaptiveReuseEnabled: boolean;
+  lastResetAt: string | null;
+}
+
+interface LearnerModelReuseRecord {
+  id: string;
+  learnerModelEntryId: string;
+  sourceSessionId: string;
+  sourceRecordId: string;
+  inference: string;
+  confidence: LearnerModelConfidence;
+  sourceContext: EvidenceTransferContext;
+  targetContext: EvidenceTransferContext;
+  provenance: {
+    workspaceId: string;
+    missionId: string;
+    sessionTarget: string;
+    summary: string;
+    lastUpdatedAt: string;
+  };
+}
+
+export interface EvidenceTransfer extends LearnerModelReuseRecord {
+  origin: "transferred";
+}
+
+export interface PriorUnderstandingEvidence extends LearnerModelReuseRecord {
+  origin: "priorSession";
+}
+
+export interface InteractionPreferenceReuse extends LearnerModelReuseRecord {
+  origin: "interactionPreference";
 }
 
 export interface TeachingExperiment {
@@ -894,6 +977,11 @@ export interface LearningSession {
   understandingEvidence: UnderstandingEvidence[];
   teachingExperiments: TeachingExperiment[];
   interactionPreferences: InteractionPreference[];
+  evidenceTransferContext: EvidenceTransferContext | null;
+  evidenceTransfers: EvidenceTransfer[];
+  priorUnderstandingEvidence: PriorUnderstandingEvidence[];
+  interactionPreferenceReuses: InteractionPreferenceReuse[];
+  ignoreLearnerModel: boolean;
   teachingCard: TeachingCardState;
   teachingCardHistory: TeachingCardState[];
   submittedPendingQuestions: SubmittedPendingQuestion[];
@@ -973,6 +1061,7 @@ export interface LearningApplicationState {
   sourceExcerptEgressPreference: {
     enabled: boolean;
   };
+  learnerModel: LearnerModel;
 }
 
 export interface VerifierEnvironmentState {
@@ -994,8 +1083,8 @@ export interface RegisteredVerifierEnvironment {
 }
 
 export type LearnerAction =
-  | { type: "startQuickStudy"; mathematics: string; location?: StudyLocation }
-  | { type: "submitSessionIntake"; mathematics: string; location?: StudyLocation }
+  | { type: "startQuickStudy"; mathematics: string; location?: StudyLocation; ignoreLearnerModel?: boolean }
+  | { type: "submitSessionIntake"; mathematics: string; location?: StudyLocation; ignoreLearnerModel?: boolean }
   | { type: "confirmSessionProposal" }
   | { type: "cancelModelWork" }
   | { type: "cancelSessionModelWork"; sessionId: string }
@@ -1012,6 +1101,7 @@ export type LearnerAction =
       concept: string;
       representation: TeachingRoute;
       sourceAnchorId?: string;
+      evidenceTransferContext?: EvidenceTransferContext;
     }
   | { type: "skipUnderstandingCheck"; checkId: string }
   | {
@@ -1019,6 +1109,7 @@ export type LearnerAction =
       checkId: string;
       response: string;
       interpretation: UnderstandingInterpretation;
+      confidence?: LearnerModelConfidence;
     }
   | { type: "startTeachingExperiment"; route: TeachingRoute; reason: string }
   | {
@@ -1094,6 +1185,12 @@ export type LearnerAction =
   | { type: "setFullAccessConfirmation"; enabled: boolean }
   | { type: "setPersonalNoteSynthesis"; enabled: boolean }
   | { type: "setSourceExcerptEgressPreference"; enabled: boolean }
+  | { type: "correctLearnerModelInference"; entryId: string; correction: string }
+  | { type: "excludeLearnerModelInference"; entryId: string }
+  | { type: "deleteLearnerModelInference"; entryId: string }
+  | { type: "resetLearnerModel" }
+  | { type: "setAdaptiveReusePreference"; enabled: boolean }
+  | { type: "setSessionLearnerModelIgnored"; ignored: boolean }
   | { type: "removeVerifierEnvironment" }
   | { type: "installVerifierEnvironment" }
   | { type: "activateVerifierEnvironment"; environmentId: string }
@@ -2379,6 +2476,8 @@ export class LearningApplication {
           concept: requiredName(action.concept, "Understanding Check concept"),
           representation,
           sourceContext: { sourceAnchorId: sourceAnchorId ?? null, sourceIds },
+          evidenceTransferContext: action.evidenceTransferContext
+            ? validatedEvidenceTransferContext(action.evidenceTransferContext) : null,
           teachingMoveId: session.currentTeachingMove.id,
           status: "offered"
         });
@@ -2404,12 +2503,19 @@ export class LearningApplication {
           task: session.sessionTarget,
           representation: check.representation,
           sourceContext: structuredClone(check.sourceContext),
+          evidenceTransferContext: check.evidenceTransferContext
+            ? structuredClone(check.evidenceTransferContext) : null,
           elicitingTeachingMoveId: check.teachingMoveId,
           interpretation,
           learnerCorrection: null
         };
         check.status = "answered";
         session.understandingEvidence.push(evidence);
+        this.state.learnerModel.entries.push(understandingEvidenceLedgerEntry(
+          session,
+          evidence,
+          requireLearnerModelConfidence(action.confidence ?? "medium")
+        ));
         setAdaptiveTeachingMove(session, evidence, "Understanding Evidence indicates");
         upsertUnderstandingEvidenceTrailItem(session, evidence);
         break;
@@ -2450,14 +2556,16 @@ export class LearningApplication {
         if (!isTeachingExperimentOutcome(action.outcome)) throw new Error("Choose the Teaching Experiment outcome.");
         experiment.status = "completed";
         experiment.outcome = action.outcome;
-        session.interactionPreferences.push({
+        const preference: InteractionPreference = {
           id: crypto.randomUUID(),
           route: experiment.route,
           context: structuredClone(experiment.context),
           status: interactionPreferenceStatus(action.outcome),
           evidenceIds: [...experiment.evidenceIds],
           experimentId: experiment.id
-        });
+        };
+        session.interactionPreferences.push(preference);
+        this.state.learnerModel.entries.push(interactionPreferenceLedgerEntry(session, preference, action.outcome));
         appendTeachingMove(session, {
           kind: teachingMoveKindForRoute(experiment.route),
           route: experiment.route,
@@ -2473,8 +2581,47 @@ export class LearningApplication {
         if (!evidence) throw new Error("Choose Understanding Evidence from the active Learning Session.");
         evidence.interpretation = requireUnderstandingInterpretation(action.interpretation);
         evidence.learnerCorrection = requiredText(action.correction, "Understanding Evidence correction");
+        for (const entry of this.state.learnerModel.entries.filter(
+          (candidate) => candidate.sourceEvidence.evidenceIds.includes(evidence.id)
+        )) {
+          const timestamp = new Date().toISOString();
+          entry.status = "corrected";
+          entry.correction = evidence.learnerCorrection;
+          entry.lastUpdatedAt = timestamp;
+          entry.governanceHistory.push({
+            id: crypto.randomUUID(), action: "corrected", note: evidence.learnerCorrection, at: timestamp
+          });
+        }
         setAdaptiveTeachingMove(session, evidence, "The learner corrected this Understanding Evidence; it now indicates");
         upsertUnderstandingEvidenceTrailItem(session, evidence);
+        break;
+      }
+      case "correctLearnerModelInference": {
+        const entry = requireLearnerModelEntry(this.state.learnerModel, action.entryId);
+        const timestamp = new Date().toISOString();
+        entry.status = "corrected";
+        entry.correction = requiredText(action.correction, "Learner Model correction");
+        entry.lastUpdatedAt = timestamp;
+        entry.governanceHistory.push({ id: crypto.randomUUID(), action: "corrected", note: entry.correction, at: timestamp });
+        break;
+      }
+      case "excludeLearnerModelInference": {
+        const entry = requireLearnerModelEntry(this.state.learnerModel, action.entryId);
+        const timestamp = new Date().toISOString();
+        entry.status = "excluded";
+        entry.lastUpdatedAt = timestamp;
+        entry.governanceHistory.push({ id: crypto.randomUUID(), action: "excluded", note: null, at: timestamp });
+        break;
+      }
+      case "deleteLearnerModelInference": {
+        requireLearnerModelEntry(this.state.learnerModel, action.entryId);
+        this.state.learnerModel.entries = this.state.learnerModel.entries
+          .filter((entry) => entry.id !== action.entryId);
+        break;
+      }
+      case "resetLearnerModel": {
+        this.state.learnerModel.entries = [];
+        this.state.learnerModel.lastResetAt = new Date().toISOString();
         break;
       }
       case "resolveReanchoring": {
@@ -3104,6 +3251,7 @@ export class LearningApplication {
           proposal: defaultAcceptedProposal(),
           accessPolicy: location.accessPolicy
         });
+        session.ignoreLearnerModel = action.ignoreLearnerModel ?? false;
         refreshAskBarContext(this.state, session);
         this.state.sessions.push(session);
         this.state.activeSessionId = session.id;
@@ -3159,6 +3307,7 @@ export class LearningApplication {
             managedAsset,
             location
           );
+          this.attachQualifiedLearnerModelGuidance(selectedSession, proposal.evidenceTransferContext ?? null);
           this.agentWorkLogs[selectedSession.id] = pendingLog;
           delete this.agentWorkLogs[proposalAttemptId];
           this.state.activeSessionId = selectedSession.id;
@@ -3190,6 +3339,8 @@ export class LearningApplication {
           },
           accessPolicy: location.accessPolicy
         });
+        session.ignoreLearnerModel = action.ignoreLearnerModel ?? false;
+        this.attachQualifiedLearnerModelGuidance(session, proposal.evidenceTransferContext ?? null);
         refreshAskBarContext(this.state, session);
         this.agentWorkLogs[session.id] = pendingLog;
         delete this.agentWorkLogs[proposalAttemptId];
@@ -3456,6 +3607,14 @@ export class LearningApplication {
       }
       case "setSourceExcerptEgressPreference": {
         this.state.sourceExcerptEgressPreference.enabled = action.enabled;
+        break;
+      }
+      case "setAdaptiveReusePreference": {
+        this.state.learnerModel.adaptiveReuseEnabled = action.enabled;
+        break;
+      }
+      case "setSessionLearnerModelIgnored": {
+        this.requireActiveSession().ignoreLearnerModel = action.ignored;
         break;
       }
       case "removeVerifierEnvironment": {
@@ -4358,6 +4517,19 @@ export class LearningApplication {
     });
   }
 
+  private attachQualifiedLearnerModelGuidance(
+    session: LearningSession,
+    targetContext: EvidenceTransferContext | null
+  ): void {
+    const validated = targetContext ? validatedEvidenceTransferContext(targetContext) : null;
+    session.evidenceTransferContext = validated;
+    session.evidenceTransfers = validated ? eligibleEvidenceTransfers(this.state.learnerModel, session, validated) : [];
+    session.priorUnderstandingEvidence = validated
+      ? eligiblePriorUnderstandingEvidence(this.state.learnerModel, session, validated) : [];
+    session.interactionPreferenceReuses = validated
+      ? eligibleInteractionPreferenceReuses(this.state.learnerModel, session, validated) : [];
+  }
+
   private async runModelTeaching(
     session: LearningSession,
     mathematics: string,
@@ -4391,11 +4563,8 @@ export class LearningApplication {
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
       initialTeachingDirection: session.proposal.initialTeachingDirection,
-      adaptiveTeaching: {
-        kind: session.currentTeachingMove.kind,
-        route: session.currentTeachingMove.route,
-        reason: session.currentTeachingMove.reason
-      },
+      ...adaptiveTeachingGuidance(this.state.learnerModel, session),
+      ...learnerModelGuidance(this.state.learnerModel, session),
       corroboration: teachingCorroborationContext(corroborationPass),
       ...(roadmap && stage && session.learningSlice ? {
         learningSlice: {
@@ -6063,6 +6232,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
   if (!value || typeof value !== "object") throw new Error("Stored Learning Application state is invalid.");
   const stored = value as Record<string, unknown>;
   if (Array.isArray(stored.sessions)) {
+    const needsLegacyLearnerModel = stored.learnerModel === undefined;
     const current = value as LearningApplicationState;
     current.workspaces = current.workspaces.map((workspace) => ({
       ...workspace,
@@ -6089,6 +6259,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.accessConfirmationPreference = migrateAccessConfirmationPreference(stored.accessConfirmationPreference);
     current.personalNoteSynthesisPreference = migratePersonalNoteSynthesisPreference(stored.personalNoteSynthesisPreference);
     current.sourceExcerptEgressPreference = migrateSourceExcerptEgressPreference(stored.sourceExcerptEgressPreference);
+    current.learnerModel = migrateLearnerModel(stored.learnerModel);
     current.argumentRoadmaps = migrateArgumentRoadmaps(stored.argumentRoadmaps);
     current.sessions = current.sessions.map((session) => ({
       ...session,
@@ -6100,6 +6271,12 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       understandingEvidence: migrateUnderstandingEvidence(session.understandingEvidence),
       teachingExperiments: migrateTeachingExperiments(session.teachingExperiments),
       interactionPreferences: migrateInteractionPreferences(session.interactionPreferences),
+      evidenceTransferContext: session.evidenceTransferContext === undefined || session.evidenceTransferContext === null
+        ? null : validatedStoredEvidenceTransferContext(session.evidenceTransferContext),
+      evidenceTransfers: migrateEvidenceTransfers(session.evidenceTransfers),
+      priorUnderstandingEvidence: migratePriorUnderstandingEvidence(session.priorUnderstandingEvidence),
+      interactionPreferenceReuses: migrateInteractionPreferenceReuses(session.interactionPreferenceReuses),
+      ignoreLearnerModel: typeof session.ignoreLearnerModel === "boolean" ? session.ignoreLearnerModel : false,
       teachingCard: session.teachingCard ?? emptyTeachingCard(),
       teachingCardHistory: session.teachingCardHistory ?? [],
       submittedPendingQuestions: session.submittedPendingQuestions ?? [],
@@ -6138,11 +6315,13 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       runtimeOverride: migrateRuntimeOverride(session.runtimeOverride),
       verifierEnvironmentPinId: typeof session.verifierEnvironmentPinId === "string" ? session.verifierEnvironmentPinId : null
     }));
+    if (needsLegacyLearnerModel) current.learnerModel = migrateLegacyLearnerModel(current.sessions);
     addLegacyUnresolvedReanchoringDecisions(current);
     attachManagedSourcesToLegacySessions(current);
     for (const session of current.sessions) {
       validateSessionSourceAnchorReferences(current, session);
       validateAdaptiveTeachingReferences(session);
+      validateLearnerModelReuseReferences(current, session);
       validateQuestionCardReferences(current, session);
       validateAgentTaskReferences(session);
       refreshAskBarContext(current, session);
@@ -6172,6 +6351,11 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       understandingEvidence: [],
       teachingExperiments: [],
       interactionPreferences: [],
+      evidenceTransferContext: null,
+      evidenceTransfers: [],
+      priorUnderstandingEvidence: [],
+      interactionPreferenceReuses: [],
+      ignoreLearnerModel: false,
       teachingCard: emptyTeachingCard(),
       teachingCardHistory: [],
       submittedPendingQuestions: [],
@@ -7108,6 +7292,11 @@ function createLearningSession(details: NewLearningSession): LearningSession {
     understandingEvidence: [],
     teachingExperiments: [],
     interactionPreferences: [],
+    evidenceTransferContext: null,
+    evidenceTransfers: [],
+    priorUnderstandingEvidence: [],
+    interactionPreferenceReuses: [],
+    ignoreLearnerModel: false,
     teachingCard: emptyTeachingCard(),
     teachingCardHistory: [],
     submittedPendingQuestions: [],
@@ -7175,6 +7364,252 @@ function setAdaptiveTeachingMove(
     evidenceIds: [evidence.id],
     experimentId: null
   });
+}
+
+function understandingEvidenceLedgerEntry(
+  session: LearningSession,
+  evidence: UnderstandingEvidence,
+  confidence: LearnerModelConfidence
+): LearnerModelLedgerEntry {
+  const timestamp = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    kind: "understandingEvidence",
+    inference: UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary,
+    sourceEvidence: {
+      sessionId: session.id, sourceRecordId: evidence.id, evidenceIds: [evidence.id], summary: evidence.response
+    },
+    mathematicalContext: evidence.evidenceTransferContext
+      ? structuredClone(evidence.evidenceTransferContext)
+      : { concepts: [evidence.concept], mathematicalStructures: [], prerequisiteRelationships: [], taskDemands: [] },
+    scope: {
+      workspaceId: session.workspaceId,
+      missionId: session.missionId,
+      sessionId: session.id,
+      sessionTarget: session.sessionTarget
+    },
+    confidence,
+    status: "active",
+    correction: null,
+    governanceHistory: [],
+    createdAt: timestamp,
+    lastUpdatedAt: timestamp
+  };
+}
+
+function interactionPreferenceLedgerEntry(
+  session: LearningSession,
+  preference: InteractionPreference,
+  outcome: Exclude<TeachingExperiment["outcome"], null>
+): LearnerModelLedgerEntry {
+  const timestamp = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    kind: "interactionPreference",
+    inference: `${preference.route} route ${preference.status}`,
+    sourceEvidence: {
+      sessionId: session.id,
+      sourceRecordId: preference.id,
+      evidenceIds: [...preference.evidenceIds],
+      summary: `The ${preference.route} Teaching Experiment was ${teachingExperimentOutcomeLabel(outcome)} for this context.`
+    },
+    mathematicalContext: structuredClone(session.understandingEvidence.find(
+      (evidence) => preference.evidenceIds.includes(evidence.id) && evidence.evidenceTransferContext
+    )?.evidenceTransferContext ?? {
+      concepts: [preference.context.concept], mathematicalStructures: [],
+      prerequisiteRelationships: [], taskDemands: [preference.context.task]
+    }),
+    scope: {
+      workspaceId: session.workspaceId,
+      missionId: session.missionId,
+      sessionId: session.id,
+      sessionTarget: session.sessionTarget
+    },
+    confidence: "medium",
+    status: "active",
+    correction: null,
+    governanceHistory: [],
+    createdAt: timestamp,
+    lastUpdatedAt: timestamp
+  };
+}
+
+function eligibleEvidenceTransfers(
+  model: LearnerModel,
+  targetSession: LearningSession,
+  targetContext: EvidenceTransferContext
+): EvidenceTransfer[] {
+  return model.entries.filter((entry) => entry.kind === "understandingEvidence"
+    && learnerModelEntryMayGuide(model, entry)
+    && (entry.scope.workspaceId !== targetSession.workspaceId || entry.scope.missionId !== targetSession.missionId)
+    && isCompleteEvidenceTransferContext(entry.mathematicalContext)
+    && evidenceTransferContextsMatch(entry.mathematicalContext, targetContext))
+    .map((entry) => ({ ...learnerModelReuseRecord(entry, targetContext), origin: "transferred" }));
+}
+
+function eligiblePriorUnderstandingEvidence(
+  model: LearnerModel,
+  targetSession: LearningSession,
+  targetContext: EvidenceTransferContext
+): PriorUnderstandingEvidence[] {
+  return model.entries.filter((entry) => entry.kind === "understandingEvidence"
+    && learnerModelEntryMayGuide(model, entry)
+    && entry.scope.sessionId !== targetSession.id
+    && entry.scope.workspaceId === targetSession.workspaceId
+    && entry.scope.missionId === targetSession.missionId
+    && isCompleteEvidenceTransferContext(entry.mathematicalContext)
+    && evidenceTransferContextsMatch(entry.mathematicalContext, targetContext))
+    .map((entry) => ({ ...learnerModelReuseRecord(entry, targetContext), origin: "priorSession" }));
+}
+
+function eligibleInteractionPreferenceReuses(
+  model: LearnerModel,
+  targetSession: LearningSession,
+  targetContext: EvidenceTransferContext
+): InteractionPreferenceReuse[] {
+  return model.entries.filter((entry) => entry.kind === "interactionPreference"
+    && learnerModelEntryMayGuide(model, entry)
+    && entry.scope.sessionId !== targetSession.id
+    && isCompleteEvidenceTransferContext(entry.mathematicalContext)
+    && evidenceTransferContextsMatch(entry.mathematicalContext, targetContext))
+    .map((entry) => ({ ...learnerModelReuseRecord(entry, targetContext), origin: "interactionPreference" }));
+}
+
+function learnerModelReuseRecord(
+  entry: LearnerModelLedgerEntry,
+  targetContext: EvidenceTransferContext
+): LearnerModelReuseRecord {
+  return {
+    id: crypto.randomUUID(),
+    learnerModelEntryId: entry.id,
+    sourceSessionId: entry.sourceEvidence.sessionId,
+    sourceRecordId: entry.sourceEvidence.sourceRecordId,
+    inference: entry.inference,
+    confidence: entry.confidence,
+    sourceContext: structuredClone(entry.mathematicalContext),
+    targetContext: structuredClone(targetContext),
+    provenance: {
+      workspaceId: entry.scope.workspaceId,
+      missionId: entry.scope.missionId,
+      sessionTarget: entry.scope.sessionTarget,
+      summary: entry.sourceEvidence.summary,
+      lastUpdatedAt: entry.lastUpdatedAt
+    }
+  };
+}
+
+function evidenceTransferContextsMatch(source: EvidenceTransferContext, target: EvidenceTransferContext): boolean {
+  const scalarFields: Array<"concepts" | "mathematicalStructures" | "taskDemands"> = [
+    "concepts", "mathematicalStructures", "taskDemands"
+  ];
+  const scalarMatch = scalarFields.every((field) => {
+    const sourceTerms = new Set(source[field].map(normalizeTransferTerm));
+    return target[field].some((term) => sourceTerms.has(normalizeTransferTerm(term)));
+  });
+  const sourceRelationships = new Set(source.prerequisiteRelationships.map(normalizePrerequisiteRelationship));
+  return scalarMatch && target.prerequisiteRelationships.some(
+    (relationship) => sourceRelationships.has(normalizePrerequisiteRelationship(relationship))
+  );
+}
+
+function normalizePrerequisiteRelationship(
+  relationship: EvidenceTransferContext["prerequisiteRelationships"][number]
+): string {
+  return [relationship.prerequisiteConcept, relationship.relationship, relationship.supportsConcept]
+    .map(normalizeTransferTerm).join("::");
+}
+
+function normalizeTransferTerm(value: string): string {
+  return value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+}
+
+function learnerModelGuidance(
+  model: LearnerModel,
+  session: LearningSession
+): { learnerModelGuidance: {
+  evidenceTransfers: EvidenceTransfer[];
+  priorUnderstandingEvidence: PriorUnderstandingEvidence[];
+  interactionPreferences: InteractionPreferenceReuse[];
+} } | Record<string, never> {
+  if (!model.adaptiveReuseEnabled || session.ignoreLearnerModel) return {};
+  const activeEntryIds = new Set(model.entries.filter((entry) => learnerModelEntryMayGuide(model, entry))
+    .map((entry) => entry.id));
+  const evidenceTransfers = session.evidenceTransfers.filter((transfer) => activeEntryIds.has(transfer.learnerModelEntryId));
+  const priorUnderstandingEvidence = session.priorUnderstandingEvidence
+    .filter((evidence) => activeEntryIds.has(evidence.learnerModelEntryId));
+  const interactionPreferences = session.interactionPreferenceReuses
+    .filter((preference) => activeEntryIds.has(preference.learnerModelEntryId));
+  return evidenceTransfers.length + priorUnderstandingEvidence.length + interactionPreferences.length > 0
+    ? { learnerModelGuidance: structuredClone({ evidenceTransfers, priorUnderstandingEvidence, interactionPreferences }) }
+    : {};
+}
+
+function learnerModelEntryMayGuide(model: LearnerModel, entry: LearnerModelLedgerEntry): boolean {
+  if (entry.status !== "active") return false;
+  if (entry.kind === "understandingEvidence") return true;
+  return entry.sourceEvidence.evidenceIds.every((evidenceId) => model.entries.some(
+    (candidate) => candidate.kind === "understandingEvidence" && candidate.status === "active"
+      && candidate.sourceEvidence.evidenceIds.includes(evidenceId)
+  ));
+}
+
+function adaptiveTeachingGuidance(
+  model: LearnerModel,
+  session: LearningSession
+): { adaptiveTeaching: Pick<TeachingMove, "kind" | "route" | "reason"> } | Record<string, never> {
+  const move = session.currentTeachingMove;
+  if (move.evidenceIds.length > 0) {
+    const activeEvidenceIds = new Set(model.entries.filter(
+      (entry) => entry.kind === "understandingEvidence" && entry.status === "active"
+    )
+      .flatMap((entry) => entry.sourceEvidence.evidenceIds));
+    if (move.evidenceIds.some((evidenceId) => !activeEvidenceIds.has(evidenceId))) return {};
+  }
+  if (move.experimentId) {
+    const experiment = session.teachingExperiments.find((candidate) => candidate.id === move.experimentId);
+    if (!experiment) return {};
+    if (experiment.status === "completed") {
+      const preference = session.interactionPreferences.find(
+        (candidate) => candidate.experimentId === experiment.id
+      );
+      const preferenceActive = preference && model.entries.some((entry) => entry.kind === "interactionPreference"
+        && entry.status === "active" && entry.sourceEvidence.sourceRecordId === preference.id);
+      if (!preferenceActive) return {};
+    }
+  }
+  return { adaptiveTeaching: { kind: move.kind, route: move.route, reason: move.reason } };
+}
+
+function requireLearnerModelEntry(model: LearnerModel, entryId: string): LearnerModelLedgerEntry {
+  const entry = model.entries.find((candidate) => candidate.id === entryId);
+  if (!entry) throw new Error("Choose an inference in the Learner Model Ledger.");
+  return entry;
+}
+
+function requireLearnerModelConfidence(value: unknown): LearnerModelConfidence {
+  if (value === "low" || value === "medium" || value === "high") return value;
+  throw new Error("Choose low, medium, or high Learner Model confidence.");
+}
+
+function validatedEvidenceTransferContext(value: unknown): EvidenceTransferContext {
+  if (!isCompleteEvidenceTransferContext(value)) throw new Error("Evidence Transfer context is invalid.");
+  return {
+    concepts: requiredContextTerms(value.concepts, "concept"),
+    mathematicalStructures: requiredContextTerms(value.mathematicalStructures, "mathematical structure"),
+    prerequisiteRelationships: value.prerequisiteRelationships.map((relationship) => ({
+      prerequisiteConcept: relationship.prerequisiteConcept.trim(),
+      supportsConcept: relationship.supportsConcept.trim(),
+      relationship: "requiredFor"
+    })),
+    taskDemands: requiredContextTerms(value.taskDemands, "task demand")
+  };
+}
+
+function requiredContextTerms(value: unknown, subject: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) {
+    throw new Error(`Provide at least one ${subject} for Evidence Transfer.`);
+  }
+  return [...new Set(value.map((item) => (item as string).trim()))];
 }
 
 function understandingEvidenceSummary(evidence: UnderstandingEvidence): string {
@@ -8519,7 +8954,8 @@ function initialState(): LearningApplicationState {
     },
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true },
-    sourceExcerptEgressPreference: { enabled: false }
+    sourceExcerptEgressPreference: { enabled: false },
+    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null }
   };
 }
 
@@ -8652,11 +9088,17 @@ function migrateUnderstandingChecks(value: unknown): UnderstandingCheck[] {
     && isRecord(check.sourceContext)
     && (check.sourceContext.sourceAnchorId === null || typeof check.sourceContext.sourceAnchorId === "string")
     && Array.isArray(check.sourceContext.sourceIds) && check.sourceContext.sourceIds.every((id) => typeof id === "string")
+    && (check.evidenceTransferContext === undefined || check.evidenceTransferContext === null
+      || isEvidenceTransferContext(check.evidenceTransferContext))
     && typeof check.teachingMoveId === "string"
     && ["offered", "answered", "skipped"].includes(String(check.status)))) {
     throw new Error("Stored Understanding Checks are invalid.");
   }
-  return structuredClone(value) as UnderstandingCheck[];
+  return value.map((check) => ({
+    ...structuredClone(check),
+    evidenceTransferContext: check.evidenceTransferContext
+      ? structuredClone(check.evidenceTransferContext) : null
+  })) as UnderstandingCheck[];
 }
 
 function migrateUnderstandingEvidence(value: unknown): UnderstandingEvidence[] {
@@ -8670,12 +9112,172 @@ function migrateUnderstandingEvidence(value: unknown): UnderstandingEvidence[] {
     && isRecord(evidence.sourceContext)
     && (evidence.sourceContext.sourceAnchorId === null || typeof evidence.sourceContext.sourceAnchorId === "string")
     && Array.isArray(evidence.sourceContext.sourceIds) && evidence.sourceContext.sourceIds.every((id) => typeof id === "string")
+    && (evidence.evidenceTransferContext === undefined || evidence.evidenceTransferContext === null
+      || isEvidenceTransferContext(evidence.evidenceTransferContext))
     && typeof evidence.elicitingTeachingMoveId === "string"
     && ["specificGap", "secureUnderstanding", "excessivePace"].includes(String(evidence.interpretation))
     && (evidence.learnerCorrection === null || typeof evidence.learnerCorrection === "string"))) {
     throw new Error("Stored Understanding Evidence is invalid.");
   }
-  return structuredClone(value) as UnderstandingEvidence[];
+  return value.map((evidence) => ({
+    ...structuredClone(evidence),
+    evidenceTransferContext: evidence.evidenceTransferContext
+      ? structuredClone(evidence.evidenceTransferContext) : null
+  })) as UnderstandingEvidence[];
+}
+
+function migrateLearnerModel(value: unknown): LearnerModel {
+  if (value === undefined) return { entries: [], adaptiveReuseEnabled: true, lastResetAt: null };
+  if (!isRecord(value) || typeof value.adaptiveReuseEnabled !== "boolean"
+    || !(value.lastResetAt === null || validIsoTimestamp(value.lastResetAt))
+    || !Array.isArray(value.entries) || !value.entries.every(validLearnerModelLedgerEntry)
+    || new Set(value.entries.map((entry) => (entry as LearnerModelLedgerEntry).id)).size !== value.entries.length) {
+    throw new Error("Stored Learner Model Ledger is invalid.");
+  }
+  return structuredClone(value) as unknown as LearnerModel;
+}
+
+function migrateLegacyLearnerModel(sessions: LearningSession[]): LearnerModel {
+  const timestamp = new Date(0).toISOString();
+  const entries: LearnerModelLedgerEntry[] = [];
+  for (const session of sessions) {
+    for (const evidence of session.understandingEvidence) {
+      entries.push({
+        id: `legacy-understanding-evidence-${evidence.id}`,
+        kind: "understandingEvidence",
+        inference: UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary,
+        sourceEvidence: {
+          sessionId: session.id, sourceRecordId: evidence.id, evidenceIds: [evidence.id], summary: evidence.response
+        },
+        mathematicalContext: evidence.evidenceTransferContext
+          ? structuredClone(evidence.evidenceTransferContext)
+          : { concepts: [evidence.concept], mathematicalStructures: [], prerequisiteRelationships: [], taskDemands: [] },
+        scope: {
+          workspaceId: session.workspaceId, missionId: session.missionId,
+          sessionId: session.id, sessionTarget: session.sessionTarget
+        },
+        confidence: "low",
+        status: evidence.learnerCorrection ? "corrected" : "active",
+        correction: evidence.learnerCorrection,
+        governanceHistory: evidence.learnerCorrection ? [{
+          id: `legacy-governance-${evidence.id}`, action: "corrected", note: evidence.learnerCorrection, at: timestamp
+        }] : [],
+        createdAt: timestamp,
+        lastUpdatedAt: timestamp
+      });
+    }
+    for (const preference of session.interactionPreferences) {
+      entries.push({
+        id: `legacy-interaction-preference-${preference.id}`,
+        kind: "interactionPreference",
+        inference: `${preference.route} route ${preference.status}`,
+        sourceEvidence: {
+          sessionId: session.id,
+          sourceRecordId: preference.id,
+          evidenceIds: [...preference.evidenceIds],
+          summary: `Interaction Preference retained from Teaching Experiment ${preference.experimentId}.`
+        },
+        mathematicalContext: {
+          concepts: [preference.context.concept], mathematicalStructures: [], prerequisiteRelationships: [],
+          taskDemands: [preference.context.task]
+        },
+        scope: {
+          workspaceId: session.workspaceId, missionId: session.missionId,
+          sessionId: session.id, sessionTarget: session.sessionTarget
+        },
+        confidence: "low",
+        status: "active",
+        correction: null,
+        governanceHistory: [],
+        createdAt: timestamp,
+        lastUpdatedAt: timestamp
+      });
+    }
+  }
+  return { entries, adaptiveReuseEnabled: true, lastResetAt: null };
+}
+
+function migrateEvidenceTransfers(value: unknown): EvidenceTransfer[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(validEvidenceTransfer)
+    || new Set(value.map((transfer) => (transfer as EvidenceTransfer).id)).size !== value.length) {
+    throw new Error("Stored Evidence Transfers are invalid.");
+  }
+  return structuredClone(value);
+}
+
+function validEvidenceTransfer(value: unknown): value is EvidenceTransfer {
+  return validLearnerModelReuseRecord(value, "transferred");
+}
+
+function migratePriorUnderstandingEvidence(value: unknown): PriorUnderstandingEvidence[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((entry) => validLearnerModelReuseRecord(entry, "priorSession"))
+    || new Set(value.map((entry) => (entry as PriorUnderstandingEvidence).id)).size !== value.length) {
+    throw new Error("Stored prior-session Understanding Evidence is invalid.");
+  }
+  return structuredClone(value);
+}
+
+function migrateInteractionPreferenceReuses(value: unknown): InteractionPreferenceReuse[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((entry) => validLearnerModelReuseRecord(entry, "interactionPreference"))
+    || new Set(value.map((entry) => (entry as InteractionPreferenceReuse).id)).size !== value.length) {
+    throw new Error("Stored reused Interaction Preferences are invalid.");
+  }
+  return structuredClone(value);
+}
+
+function validLearnerModelReuseRecord<Origin extends EvidenceTransfer["origin"]
+  | PriorUnderstandingEvidence["origin"] | InteractionPreferenceReuse["origin"]>(
+  value: unknown,
+  origin: Origin
+): value is LearnerModelReuseRecord & { origin: Origin } {
+  return isRecord(value) && typeof value.id === "string" && value.origin === origin
+    && typeof value.learnerModelEntryId === "string" && typeof value.sourceSessionId === "string"
+    && typeof value.sourceRecordId === "string" && typeof value.inference === "string"
+    && ["low", "medium", "high"].includes(String(value.confidence))
+    && isCompleteEvidenceTransferContext(value.sourceContext) && isCompleteEvidenceTransferContext(value.targetContext)
+    && isRecord(value.provenance) && typeof value.provenance.workspaceId === "string"
+    && typeof value.provenance.missionId === "string" && typeof value.provenance.sessionTarget === "string"
+    && typeof value.provenance.summary === "string" && validIsoTimestamp(value.provenance.lastUpdatedAt);
+}
+
+function validatedStoredEvidenceTransferContext(value: unknown): EvidenceTransferContext {
+  if (!isCompleteEvidenceTransferContext(value)) throw new Error("Stored Evidence Transfer context is invalid.");
+  return structuredClone(value);
+}
+
+function validLearnerModelLedgerEntry(value: unknown): value is LearnerModelLedgerEntry {
+  return isRecord(value) && typeof value.id === "string" && Boolean(value.id)
+    && (value.kind === "understandingEvidence" || value.kind === "interactionPreference")
+    && typeof value.inference === "string" && Boolean(value.inference.trim())
+    && isRecord(value.sourceEvidence) && typeof value.sourceEvidence.sessionId === "string"
+    && typeof value.sourceEvidence.sourceRecordId === "string" && Boolean(value.sourceEvidence.sourceRecordId)
+    && Array.isArray(value.sourceEvidence.evidenceIds)
+    && value.sourceEvidence.evidenceIds.every((id) => typeof id === "string")
+    && (value.kind !== "understandingEvidence" || value.sourceEvidence.evidenceIds.length === 1)
+    && typeof value.sourceEvidence.summary === "string" && Boolean(value.sourceEvidence.summary.trim())
+    && isEvidenceTransferContext(value.mathematicalContext)
+    && value.mathematicalContext.concepts.length > 0
+    && isRecord(value.scope) && typeof value.scope.workspaceId === "string"
+    && typeof value.scope.missionId === "string" && typeof value.scope.sessionId === "string"
+    && typeof value.scope.sessionTarget === "string"
+    && ["low", "medium", "high"].includes(String(value.confidence))
+    && ["active", "corrected", "excluded"].includes(String(value.status))
+    && (value.correction === null || typeof value.correction === "string")
+    && Array.isArray(value.governanceHistory) && value.governanceHistory.every(validLearnerModelGovernanceEvent)
+    && validIsoTimestamp(value.createdAt) && validIsoTimestamp(value.lastUpdatedAt);
+}
+
+function validLearnerModelGovernanceEvent(value: unknown): boolean {
+  return isRecord(value) && typeof value.id === "string" && Boolean(value.id)
+    && (value.action === "corrected" || value.action === "excluded")
+    && (value.note === null || typeof value.note === "string") && validIsoTimestamp(value.at);
+}
+
+function validIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
 function migrateTeachingExperiments(value: unknown): TeachingExperiment[] {
@@ -8756,6 +9358,36 @@ function validateAdaptiveTeachingReferences(session: LearningSession): void {
   }
   if (session.trailDraft.items.some((item) => item.links.understandingEvidenceIds.some((id) => !evidence.has(id)))) {
     throw new Error("Stored Trail Item Understanding Evidence references are invalid.");
+  }
+}
+
+function validateLearnerModelReuseReferences(state: LearningApplicationState, session: LearningSession): void {
+  const entries = new Map(state.learnerModel.entries.map((entry) => [entry.id, entry]));
+  const recordMatchesEntry = (record: LearnerModelReuseRecord, entry: LearnerModelLedgerEntry) => {
+    return record.sourceSessionId === entry.sourceEvidence.sessionId
+      && record.sourceRecordId === entry.sourceEvidence.sourceRecordId;
+  };
+  const transfersAreValid = session.evidenceTransfers.every((record) => {
+    const entry = entries.get(record.learnerModelEntryId);
+    if (!entry) return true;
+    return entry.kind === "understandingEvidence" && recordMatchesEntry(record, entry)
+      && (entry.scope.workspaceId !== session.workspaceId || entry.scope.missionId !== session.missionId);
+  });
+  const priorEvidenceIsValid = session.priorUnderstandingEvidence.every((record) => {
+    const entry = entries.get(record.learnerModelEntryId);
+    if (!entry) return true;
+    return entry.kind === "understandingEvidence" && recordMatchesEntry(record, entry)
+      && entry.scope.sessionId !== session.id && entry.scope.workspaceId === session.workspaceId
+      && entry.scope.missionId === session.missionId;
+  });
+  const preferencesAreValid = session.interactionPreferenceReuses.every((record) => {
+    const entry = entries.get(record.learnerModelEntryId);
+    if (!entry) return true;
+    return entry.kind === "interactionPreference" && recordMatchesEntry(record, entry)
+      && entry.scope.sessionId !== session.id;
+  });
+  if (!transfersAreValid || !priorEvidenceIsValid || !preferencesAreValid) {
+    throw new Error("Stored Learner Model reuse references are invalid.");
   }
 }
 

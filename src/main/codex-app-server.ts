@@ -1,4 +1,4 @@
-import { ModelAccessError, type
+import { ModelAccessError, isCompleteEvidenceTransferContext, type
   ArtifactSynthesisRequest,
   ArtifactSynthesisResult,
   AuthenticationState,
@@ -339,6 +339,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           "Interpret this mathematics intake for an adaptive learning session.",
           "Return only the requested JSON. Make the proposal concise and editable.",
           "Pause for confirmation only when ambiguity or likely cost makes a wrong start materially wasteful.",
+          "Return a structured Evidence Transfer context with concept, mathematical structure, directional prerequisite relationships, and task-demand labels. Each relationship must name the prerequisite and the concept it is required for. Use precise reusable mathematical labels rather than broad subject names.",
           "Classify materialScope as focused or longOrMultiStage by mathematical coherence, not arbitrary length. If it is longOrMultiStage, return a compact Argument Roadmap with major claims, stages, dependencies, and an exact verbatim sourceExcerpt for each stage. Propose one coherent stage as the current Learning Slice, including only its immediate prerequisites. Do not expand or teach every step. For focused material, return argumentRoadmap as null.",
           "Mathematics intake:",
           mathematics
@@ -859,7 +860,8 @@ function teachingSessionContext(request: TeachingRequest): string {
       ...(request.adaptiveTeaching ? [
         `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
         `Why this move: ${request.adaptiveTeaching.reason}`
-      ] : [])
+      ] : []),
+      learnerModelGuidance(request)
     ].join("\n");
   }
   const base = [
@@ -869,7 +871,8 @@ function teachingSessionContext(request: TeachingRequest): string {
     ...(request.adaptiveTeaching ? [
       `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
       `Why this move: ${request.adaptiveTeaching.reason}`
-    ] : [])
+    ] : []),
+    learnerModelGuidance(request)
   ];
   if (!request.learningSlice) return base.join("\n");
   return [
@@ -880,6 +883,40 @@ function teachingSessionContext(request: TeachingRequest): string {
     `Immediate prerequisites only: ${request.learningSlice.immediatePrerequisites.join("; ") || "none"}`,
     `Future Learning Sessions, not part of this Teaching Card: ${request.learningSlice.remainingStageTitles.join("; ")}`,
     "Teach only the chosen Learning Slice and its immediate prerequisites. Do not expand the remaining roadmap or replace it with one exhaustive explanation or artifact."
+  ].join("\n");
+}
+
+function learnerModelGuidance(request: TeachingRequest): string {
+  const transfers = request.learnerModelGuidance?.evidenceTransfers ?? [];
+  const priorEvidence = request.learnerModelGuidance?.priorUnderstandingEvidence ?? [];
+  const preferences = request.learnerModelGuidance?.interactionPreferences ?? [];
+  if (transfers.length + priorEvidence.length + preferences.length === 0) {
+    return "Learner Model guidance: none authorized for this Teaching Card.";
+  }
+  return [
+    "Qualified Learner Model guidance (keep every source distinct from evidence observed in the current Learning Session):",
+    ...(transfers.length > 0 ? ["Evidence Transfers from another Study Mission or Study Workspace:"] : []),
+    ...transfers.map((transfer) => [
+      `Evidence Transfer from ${transfer.sourceSessionId}: ${transfer.inference} (${transfer.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(transfer.provenance)}`,
+      `Qualified source context: ${JSON.stringify(transfer.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(transfer.targetContext)}`
+    ].join("\n")),
+    ...(priorEvidence.length > 0 ? ["Prior Understanding Evidence from this Study Mission:"] : []),
+    ...priorEvidence.map((evidence) => [
+      `Prior-session Understanding Evidence from ${evidence.sourceSessionId}: ${evidence.inference} (${evidence.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(evidence.provenance)}`,
+      `Qualified source context: ${JSON.stringify(evidence.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(evidence.targetContext)}`
+    ].join("\n")),
+    ...(preferences.length > 0 ? ["Reused Interaction Preferences:"] : []),
+    ...preferences.map((preference) => [
+      `Interaction Preference from ${preference.sourceSessionId}: ${preference.inference} (${preference.confidence} confidence).`,
+      `Source provenance: ${JSON.stringify(preference.provenance)}`,
+      `Qualified source context: ${JSON.stringify(preference.sourceContext)}`,
+      `Matched target context: ${JSON.stringify(preference.targetContext)}`
+    ].join("\n")),
+    "Use this only as contextual teaching guidance. Do not describe Understanding Evidence as global mastery or current-session evidence, and do not turn an Interaction Preference into a fixed learning style."
   ].join("\n");
 }
 
@@ -1094,7 +1131,8 @@ const SESSION_PROPOSAL_SCHEMA = {
     "requiresConfirmation",
     "confirmationReason",
     "materialScope",
-    "argumentRoadmap"
+    "argumentRoadmap",
+    "evidenceTransferContext"
   ],
   properties: {
     learningGoal: { type: "string" },
@@ -1129,6 +1167,28 @@ const SESSION_PROPOSAL_SCHEMA = {
             }
           }
         }
+      }
+    },
+    evidenceTransferContext: {
+      type: "object",
+      additionalProperties: false,
+      required: ["concepts", "mathematicalStructures", "prerequisiteRelationships", "taskDemands"],
+      properties: {
+        concepts: { type: "array", minItems: 1, items: { type: "string" } },
+        mathematicalStructures: { type: "array", minItems: 1, items: { type: "string" } },
+        prerequisiteRelationships: {
+          type: "array", minItems: 1,
+          items: {
+            type: "object", additionalProperties: false,
+            required: ["prerequisiteConcept", "supportsConcept", "relationship"],
+            properties: {
+              prerequisiteConcept: { type: "string" },
+              supportsConcept: { type: "string" },
+              relationship: { type: "string", enum: ["requiredFor"] }
+            }
+          }
+        },
+        taskDemands: { type: "array", minItems: 1, items: { type: "string" } }
       }
     }
   }
@@ -1193,6 +1253,7 @@ function parseSessionProposal(content: string): SessionProposal {
     || (proposal.materialScope === "focused" && proposal.argumentRoadmap !== null)
     || (proposal.materialScope === "longOrMultiStage" && proposal.argumentRoadmap === null)
     || !validArgumentRoadmapProposal(proposal.argumentRoadmap)
+    || !isCompleteEvidenceTransferContext(proposal.evidenceTransferContext)
   ) {
     throw new Error("Codex returned a malformed Session Proposal. Retry to request a fresh proposal.");
   }

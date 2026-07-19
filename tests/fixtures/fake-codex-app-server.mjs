@@ -179,7 +179,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
                 requiresConfirmation: false,
                 confirmationReason: null,
                 materialScope: "focused",
-                argumentRoadmap: null
+                argumentRoadmap: null,
+                evidenceTransferContext: {
+                  concepts: ["compactness"],
+                  mathematicalStructures: ["compact Hausdorff subspace"],
+                  prerequisiteRelationships: [{
+                    prerequisiteConcept: "Hausdorff separation", supportsConcept: "compactness", relationship: "requiredFor"
+                  }],
+                  taskDemands: ["explain a proof strategy"]
+                }
               })
             }
           });
