@@ -401,6 +401,35 @@ test("packaged Quick Study organizes durable work and resumes the latest session
       "Adapt the source proof around $a=b$ without changing the supplied source."
     );
 
+    await page.getByRole("button", { name: "Finish & consolidate" }).press("Enter");
+    const consolidation = page.getByRole("region", { name: "Session Consolidation" });
+    await expect(consolidation).toBeVisible();
+    await consolidation.getByRole("radio", { name: "Addressed" }).click();
+    await consolidation.getByRole("button", { name: "Create Consolidated Session Outcome" }).press("Enter");
+    const delayedTransfer = page.getByRole("alertdialog", { name: "Check this understanding later?" });
+    await expect(delayedTransfer.getByRole("radio", { name: "No follow-up" })).toBeChecked();
+    await expect(page.getByRole("region", { name: "Follow-ups" })).toHaveCount(0);
+    await delayedTransfer.getByRole("radio", { name: "Check me later" }).click();
+    await delayedTransfer.getByLabel("Intended transfer goal").fill(
+      "Apply the finite-choice proof structure to a fresh mathematical setting."
+    );
+    await delayedTransfer.getByRole("button", { name: "Save follow-up choice" }).press("Enter");
+    const followUps = page.getByRole("region", { name: "Follow-ups" });
+    await expect(followUps).toContainText("1 scheduled");
+    await followUps.getByRole("button", { name: /Open Follow-up Queue/ }).press("Enter");
+    await expect(page.getByRole("region", { name: "Follow-up Queue" })).toContainText(
+      "Apply the finite-choice proof structure to a fresh mathematical setting."
+    );
+
+    await quit();
+    page = await launch();
+    const restoredFollowUps = page.getByRole("region", { name: "Follow-ups" });
+    await expect(restoredFollowUps).toContainText("1 scheduled");
+    await restoredFollowUps.getByRole("button", { name: /Open Follow-up Queue/ }).press("Enter");
+    const restoredQueue = page.getByRole("region", { name: "Follow-up Queue" });
+    await restoredQueue.getByRole("button", { name: /Cancel follow-up for/ }).press("Enter");
+    await expect(page.getByRole("region", { name: "Follow-ups" })).toHaveCount(0);
+
   } finally {
     await quit();
     await removeTestDirectory(dataDirectory);

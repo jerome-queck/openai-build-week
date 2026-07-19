@@ -614,6 +614,24 @@ export interface ConsolidatedSessionOutcome extends Omit<SessionConsolidationDra
   trailItems: TrailItem[];
 }
 
+export interface DelayedTransferOffer {
+  status: "pending" | "declined" | "dismissed" | "scheduled" | "cancelled";
+  offeredAt: string;
+  proposedDueAt: string;
+}
+
+export interface DelayedTransferCheck {
+  id: string;
+  relatedSessionId: string;
+  originatingSessionTarget: string;
+  originatingConcepts: string[];
+  intendedTransferGoal: string;
+  scheduledAt: string;
+  updatedAt: string;
+  dueAt: string;
+  status: "scheduled" | "cancelled";
+}
+
 export interface ContinuationLink {
   sessionId: string;
   outcomeId: string;
@@ -1007,6 +1025,7 @@ export interface LearningSession {
   trailDraft: TrailDraft;
   consolidationDraft: SessionConsolidationDraft | null;
   consolidatedOutcome: ConsolidatedSessionOutcome | null;
+  delayedTransferOffer: DelayedTransferOffer | null;
   continuationOf: ContinuationLink | null;
   modelStopConfirmation: ModelStopConfirmation | null;
   learningSlice: LearningSlice | null;
@@ -1034,6 +1053,7 @@ export interface LearningApplicationState {
   reanchoringDecisions: ReanchoringDecision[];
   verifierManifests: VerifierManifest[];
   verifierEnvironment: VerifierEnvironmentState;
+  delayedTransferChecks: DelayedTransferCheck[];
   activeSessionId: string | null;
   resumeSessionId: string | null;
   navigation: {
@@ -1179,6 +1199,11 @@ export type LearnerAction =
   | { type: "beginSessionConsolidation" }
   | ({ type: "reviseSessionConsolidation" } & SessionConsolidationDraft)
   | { type: "consolidateSession" }
+  | { type: "declineDelayedTransfer"; sessionId: string }
+  | { type: "dismissDelayedTransfer"; sessionId: string }
+  | { type: "scheduleDelayedTransfer"; sessionId: string; intendedTransferGoal: string; dueAt: string }
+  | { type: "rescheduleDelayedTransfer"; checkId: string; dueAt: string }
+  | { type: "cancelDelayedTransfer"; checkId: string }
   | { type: "continueSession"; sessionId: string }
   | { type: "retrySessionModelStop"; sessionId: string }
   | { type: "selectSessionAccessPolicy"; policy: SessionAccessPolicy }
@@ -3137,6 +3162,14 @@ export class LearningApplication {
           targetDisposition,
           trailItems: structuredClone(session.trailDraft.items)
         };
+        if (targetDisposition === "addressed" && session.delayedTransferOffer === null) {
+          const offeredAt = new Date().toISOString();
+          session.delayedTransferOffer = {
+            status: "pending",
+            offeredAt,
+            proposedDueAt: new Date(Date.parse(offeredAt) + 7 * 24 * 60 * 60 * 1_000).toISOString()
+          };
+        }
         session.consolidationDraft = null;
         session.status = "consolidated";
         session.activityOrder = this.nextActivityOrder();
@@ -3144,6 +3177,52 @@ export class LearningApplication {
         this.state.resumeSessionId = this.latestPausedSessionId(session.id);
         this.state.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
         this.state.screen = "dashboard";
+        break;
+      }
+      case "declineDelayedTransfer":
+      case "dismissDelayedTransfer": {
+        const session = this.requirePendingDelayedTransferOffer(action.sessionId);
+        session.delayedTransferOffer!.status = action.type === "declineDelayedTransfer" ? "declined" : "dismissed";
+        break;
+      }
+      case "scheduleDelayedTransfer": {
+        const session = this.requireSession(action.sessionId);
+        if (this.state.delayedTransferChecks.some((check) =>
+          check.relatedSessionId === session.id && check.status === "scheduled")) {
+          throw new Error("This addressed Session Target already has a Delayed Transfer Check.");
+        }
+        this.requirePendingDelayedTransferOffer(action.sessionId);
+        const timestamp = new Date().toISOString();
+        const dueAt = requiredFutureIsoDate(action.dueAt, "Delayed Transfer due time", timestamp);
+        this.state.delayedTransferChecks.push({
+          id: crypto.randomUUID(),
+          relatedSessionId: session.id,
+          originatingSessionTarget: session.sessionTarget,
+          originatingConcepts: [...new Set(session.evidenceTransferContext?.concepts ?? [])],
+          intendedTransferGoal: requiredText(action.intendedTransferGoal, "Intended transfer goal"),
+          scheduledAt: timestamp,
+          updatedAt: timestamp,
+          dueAt,
+          status: "scheduled"
+        });
+        session.delayedTransferOffer!.status = "scheduled";
+        break;
+      }
+      case "rescheduleDelayedTransfer": {
+        const check = this.requireScheduledDelayedTransferCheck(action.checkId);
+        const timestamp = new Date().toISOString();
+        check.dueAt = requiredFutureIsoDate(action.dueAt, "Delayed Transfer due time", timestamp);
+        check.updatedAt = timestamp;
+        break;
+      }
+      case "cancelDelayedTransfer": {
+        const check = this.requireScheduledDelayedTransferCheck(action.checkId);
+        check.status = "cancelled";
+        check.updatedAt = new Date().toISOString();
+        const session = this.requireSession(check.relatedSessionId);
+        if (session.delayedTransferOffer?.status === "scheduled") {
+          session.delayedTransferOffer.status = "cancelled";
+        }
         break;
       }
       case "continueSession": {
@@ -5168,6 +5247,23 @@ export class LearningApplication {
     return session;
   }
 
+  private requirePendingDelayedTransferOffer(sessionId: string): LearningSession {
+    const session = this.requireSession(sessionId);
+    if (session.status !== "consolidated" || session.consolidatedOutcome?.targetDisposition !== "addressed") {
+      throw new Error("Delayed Transfer is available only for an Addressed Session Target.");
+    }
+    if (session.delayedTransferOffer?.status !== "pending") {
+      throw new Error("This Delayed Transfer choice has already been decided.");
+    }
+    return session;
+  }
+
+  private requireScheduledDelayedTransferCheck(checkId: string): DelayedTransferCheck {
+    const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === checkId);
+    if (!check || check.status !== "scheduled") throw new Error("Choose a scheduled Delayed Transfer Check.");
+    return check;
+  }
+
   private requireNamedWorkspace(workspaceId: string): StudyWorkspace {
     const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.kind !== "named") throw new Error("Choose a named Study Workspace.");
@@ -5552,6 +5648,13 @@ function requiredText(value: string, subject: string): string {
   const text = value.trim();
   if (!text) throw new Error(`${subject} text is required.`);
   return text;
+}
+
+function requiredFutureIsoDate(value: string, subject: string, relativeTo: string): string {
+  if (!validIsoTimestamp(value) || Date.parse(value) <= Date.parse(relativeTo)) {
+    throw new Error(`${subject} must be a future date and time.`);
+  }
+  return value;
 }
 
 function emptyVerificationState(): Pick<ClaimVerificationState,
@@ -6247,6 +6350,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.reanchoringDecisions = migrateReanchoringDecisions(stored.reanchoringDecisions);
     current.verifierManifests = migrateVerifierManifests(stored.verifierManifests);
     current.verifierEnvironment = migrateVerifierEnvironmentState(stored.verifierEnvironment, current.verifierManifests);
+    current.delayedTransferChecks = migrateDelayedTransferChecks(stored.delayedTransferChecks);
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
@@ -6302,6 +6406,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       trailDraft: migrateTrailDraft(session.trailDraft),
       consolidationDraft: migrateSessionConsolidationDraft(session.consolidationDraft),
       consolidatedOutcome: migrateConsolidatedSessionOutcome(session.consolidatedOutcome),
+      delayedTransferOffer: migrateDelayedTransferOffer(session.delayedTransferOffer),
       continuationOf: migrateContinuationLink(session.continuationOf),
       modelStopConfirmation: migrateModelStopConfirmation(session.modelStopConfirmation),
       learningSlice: migrateLearningSlice(session.learningSlice),
@@ -6328,6 +6433,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     }
     validateReanchoringDecisionReferences(current);
     validateSessionLifecycleReferences(current);
+    validateDelayedTransferReferences(current);
     validateArgumentRoadmapReferences(current);
     validatePrerequisiteBranchReferences(current);
     return current;
@@ -7756,9 +7862,15 @@ function isSessionLevelTrailItem(item: TrailItem): boolean {
 }
 
 function emptySessionLifecycle(): Pick<LearningSession,
-  "consolidationDraft" | "consolidatedOutcome" | "continuationOf" | "modelStopConfirmation"
+  "consolidationDraft" | "consolidatedOutcome" | "delayedTransferOffer" | "continuationOf" | "modelStopConfirmation"
 > {
-  return { consolidationDraft: null, consolidatedOutcome: null, continuationOf: null, modelStopConfirmation: null };
+  return {
+    consolidationDraft: null,
+    consolidatedOutcome: null,
+    delayedTransferOffer: null,
+    continuationOf: null,
+    modelStopConfirmation: null
+  };
 }
 
 function suggestedSessionConsolidation(session: LearningSession): SessionConsolidationDraft {
@@ -8439,6 +8551,38 @@ function migrateConsolidatedSessionOutcome(value: unknown): ConsolidatedSessionO
   return { ...(value as unknown as ConsolidatedSessionOutcome), trailItems };
 }
 
+function migrateDelayedTransferOffer(value: unknown): DelayedTransferOffer | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value)
+    || !["pending", "declined", "dismissed", "scheduled", "cancelled"].includes(String(value.status))
+    || !validIsoTimestamp(value.offeredAt) || !validIsoTimestamp(value.proposedDueAt)
+    || Date.parse(value.proposedDueAt as string) <= Date.parse(value.offeredAt as string)) {
+    throw new Error("Stored Delayed Transfer offer is invalid.");
+  }
+  return structuredClone(value) as unknown as DelayedTransferOffer;
+}
+
+function migrateDelayedTransferChecks(value: unknown): DelayedTransferCheck[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every(validDelayedTransferCheck)
+    || new Set(value.map((check) => (check as DelayedTransferCheck).id)).size !== value.length) {
+    throw new Error("Stored Delayed Transfer Checks are invalid.");
+  }
+  return structuredClone(value) as DelayedTransferCheck[];
+}
+
+function validDelayedTransferCheck(value: unknown): value is DelayedTransferCheck {
+  return isRecord(value)
+    && [value.id, value.relatedSessionId, value.originatingSessionTarget, value.intendedTransferGoal]
+      .every((item) => typeof item === "string" && Boolean(item.trim()))
+    && Array.isArray(value.originatingConcepts)
+    && value.originatingConcepts.every((concept) => typeof concept === "string" && Boolean(concept.trim()))
+    && new Set(value.originatingConcepts).size === value.originatingConcepts.length
+    && [value.scheduledAt, value.updatedAt, value.dueAt].every(validIsoTimestamp)
+    && Date.parse(value.dueAt as string) > Date.parse(value.scheduledAt as string)
+    && (value.status === "scheduled" || value.status === "cancelled");
+}
+
 function validSessionConsolidation(value: unknown, allowsMissingDisposition: boolean): boolean {
   if (!isRecord(value) || typeof value.centralInsight !== "string" || !value.centralInsight.trim()
     || typeof value.learningProgress !== "string" || typeof value.nextStep !== "string" || !value.nextStep.trim()
@@ -8501,6 +8645,35 @@ function validateSessionLifecycleReferences(state: LearningApplicationState): vo
       if (!origin?.consolidatedOutcome || origin.consolidatedOutcome.id !== session.continuationOf.outcomeId) {
         throw new Error("Stored Continuation Session link is invalid.");
       }
+    }
+  }
+}
+
+function validateDelayedTransferReferences(state: LearningApplicationState): void {
+  const scheduledSessionIds = new Set<string>();
+  for (const check of state.delayedTransferChecks) {
+    const session = state.sessions.find((candidate) => candidate.id === check.relatedSessionId);
+    if (!session || session.status !== "consolidated"
+      || session.consolidatedOutcome?.targetDisposition !== "addressed") {
+      throw new Error("Stored Delayed Transfer Check references an ineligible Learning Session.");
+    }
+    if (check.status === "scheduled") {
+      if (scheduledSessionIds.has(session.id)) {
+        throw new Error("Stored Delayed Transfer Checks contain a duplicate addressed Session Target.");
+      }
+      scheduledSessionIds.add(session.id);
+      if (session.delayedTransferOffer?.status !== "scheduled") {
+        throw new Error("Stored Delayed Transfer Check does not match its offer state.");
+      }
+    }
+    if (check.status === "cancelled" && session.delayedTransferOffer?.status !== "cancelled") {
+      throw new Error("Stored cancelled Delayed Transfer Check does not match its offer state.");
+    }
+  }
+  for (const session of state.sessions) {
+    if (session.delayedTransferOffer && (session.status !== "consolidated"
+      || session.consolidatedOutcome?.targetDisposition !== "addressed")) {
+      throw new Error("Stored Delayed Transfer offer references an ineligible Learning Session.");
     }
   }
 }
@@ -8936,6 +9109,7 @@ function initialState(): LearningApplicationState {
     reanchoringDecisions: [],
     verifierManifests: [],
     verifierEnvironment: defaultVerifierEnvironmentState(),
+    delayedTransferChecks: [],
     activeSessionId: null,
     resumeSessionId: null,
     navigation: {

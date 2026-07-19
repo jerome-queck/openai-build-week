@@ -97,6 +97,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "removeVerifierEnvironment":
     case "installVerifierEnvironment":
     case "cleanupVerifierEnvironment":
+    case "beginSessionConsolidation":
+    case "consolidateSession":
       return true;
     case "requestSpecialistReview":
       return !("coordination" in action) || action.coordination === undefined
@@ -108,7 +110,20 @@ function isLearnerAction(value: unknown): value is LearnerAction {
       return "researchActionId" in action && typeof action.researchActionId === "string";
     case "resumeSession":
     case "cancelSessionModelWork":
+    case "continueSession":
+    case "retrySessionModelStop":
+    case "declineDelayedTransfer":
+    case "dismissDelayedTransfer":
       return "sessionId" in action && typeof action.sessionId === "string";
+    case "scheduleDelayedTransfer":
+      return "sessionId" in action && typeof action.sessionId === "string"
+        && "intendedTransferGoal" in action && typeof action.intendedTransferGoal === "string"
+        && "dueAt" in action && typeof action.dueAt === "string";
+    case "rescheduleDelayedTransfer":
+      return "checkId" in action && typeof action.checkId === "string"
+        && "dueAt" in action && typeof action.dueAt === "string";
+    case "cancelDelayedTransfer":
+      return "checkId" in action && typeof action.checkId === "string";
     case "addSourceToSession":
       return "sourceId" in action && typeof action.sourceId === "string";
     case "startQuickStudy":
@@ -173,6 +188,16 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "setTrailItemRequired":
       return "trailItemId" in action && typeof action.trailItemId === "string"
         && "required" in action && typeof action.required === "boolean";
+    case "reviseSessionConsolidation":
+      return "centralInsight" in action && typeof action.centralInsight === "string"
+        && "learningProgress" in action && typeof action.learningProgress === "string"
+        && "unresolvedQuestions" in action && Array.isArray(action.unresolvedQuestions)
+        && action.unresolvedQuestions.every((question) => typeof question === "string")
+        && "nextStep" in action && typeof action.nextStep === "string"
+        && "includedArtifactIds" in action && Array.isArray(action.includedArtifactIds)
+        && action.includedArtifactIds.every((artifactId) => typeof artifactId === "string")
+        && "targetDisposition" in action
+        && ["addressed", "deferred", "unresolved"].includes(String(action.targetDisposition));
     case "loginWithApiKey":
       return "apiKey" in action && typeof action.apiKey === "string";
     case "reviseSessionProposal":

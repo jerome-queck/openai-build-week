@@ -45,7 +45,8 @@ function adaptiveSession(id: string, learningGoal: string): LearningSession {
     accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false, researchEgressPermission: { status: "notGranted" },
     researchActions: [], corroborationPass: null, corroborationPassHistory: [], sourceAnchors: [], sourceAnchorRequests: [], annotations: [],
     activeSourceAnchorId: null, anchoredTeachingCards: [], activeTeachingCardId: null, learningArtifacts: [], trailDraft: { items: [] },
-    consolidationDraft: null, consolidatedOutcome: null, continuationOf: null, modelStopConfirmation: null, learningSlice: null,
+    consolidationDraft: null, consolidatedOutcome: null, delayedTransferOffer: null,
+    continuationOf: null, modelStopConfirmation: null, learningSlice: null,
     conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null, agentTasks: [], activeAgentTaskId: null,
     reasoningPreference: "balanced", runtimeOverride: null, verifierEnvironmentPinId: null
   };

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type {
   AgentWorkLogEvidence,
   AnnotationPurpose,
@@ -69,6 +69,7 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
   const resumeSession = state.sessions.find((session) => session.id === state.resumeSessionId) ?? null;
+  const pendingDelayedTransfer = state.sessions.find((session) => session.delayedTransferOffer?.status === "pending") ?? null;
 
   return (
     <main className="shell">
@@ -85,6 +86,8 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
           <ModelAccessPanel state={state} onState={onState} />
           <ApplicationSettings state={state} onState={onState} />
           <LearnerModelLedger state={state} session={null} onState={onState} />
+          {pendingDelayedTransfer && <DelayedTransferPrompt session={pendingDelayedTransfer} onState={onState} />}
+          <FollowUpsCard state={state} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
           <Intake state={state} onState={onState} />
           <SessionSearch onState={onState} />
@@ -95,6 +98,130 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
       </div>
     </main>
   );
+}
+
+function DelayedTransferPrompt({ session, onState }: { session: LearningSession; onState: StateHandler }) {
+  const offer = session.delayedTransferOffer!;
+  const [choice, setChoice] = useState<"off" | "later">("off");
+  const [intendedTransferGoal, setIntendedTransferGoal] = useState(
+    `Apply ${session.sessionTarget} to a fresh, structurally comparable problem.`
+  );
+  const [dueAt, setDueAt] = useState(toDateTimeLocal(offer.proposedDueAt));
+  const [error, setError] = useState<string | null>(null);
+  const defaultChoice = useRef<HTMLInputElement>(null);
+  useEffect(() => { defaultChoice.current?.focus(); }, []);
+
+  const save = async () => {
+    setError(null);
+    try {
+      if (choice === "off") {
+        onState(await window.quickStudy.submit({ type: "declineDelayedTransfer", sessionId: session.id }));
+        return;
+      }
+      onState(await window.quickStudy.submit({
+        type: "scheduleDelayedTransfer",
+        sessionId: session.id,
+        intendedTransferGoal,
+        dueAt: new Date(dueAt).toISOString()
+      }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Delayed Transfer choice could not be saved.");
+    }
+  };
+
+  return (
+    <section className="history-card" role="alertdialog" aria-labelledby="delayed-transfer-title">
+      <p className="eyebrow">Optional follow-up</p>
+      <h2 id="delayed-transfer-title">Check this understanding later?</h2>
+      <p>You marked <strong>{session.sessionTarget}</strong> Addressed. This is not a mastery claim, and no follow-up is selected by default.</p>
+      <fieldset>
+        <legend>Delayed Transfer choice</legend>
+        <label><input ref={defaultChoice} type="radio" name="delayed-transfer-choice" checked={choice === "off"}
+          onChange={() => setChoice("off")} />No follow-up</label>
+        <label><input type="radio" name="delayed-transfer-choice" checked={choice === "later"}
+          onChange={() => setChoice("later")} />Check me later</label>
+      </fieldset>
+      {choice === "later" && <div className="compact-form">
+        <label htmlFor={`transfer-goal-${session.id}`}>Intended transfer goal</label>
+        <textarea id={`transfer-goal-${session.id}`} value={intendedTransferGoal}
+          onChange={(event) => setIntendedTransferGoal(event.target.value)} />
+        <label htmlFor={`transfer-due-${session.id}`}>When should Quick Study check in?</label>
+        <input id={`transfer-due-${session.id}`} type="datetime-local" value={dueAt}
+          onChange={(event) => setDueAt(event.target.value)} />
+        <small>The proposed time is seven days from now. Quick Study stores only this goal and timing; the fresh task is not generated early.</small>
+      </div>}
+      <div className="resume-actions">
+        <button className="primary" disabled={choice === "later" && (!intendedTransferGoal.trim() || !dueAt)}
+          onClick={() => void save()}>Save follow-up choice</button>
+        <button className="secondary" onClick={() => void window.quickStudy.submit({
+          type: "dismissDelayedTransfer", sessionId: session.id
+        }).then(onState).catch((cause: unknown) => setError(
+          cause instanceof Error ? cause.message : "The Delayed Transfer prompt could not be dismissed."
+        ))}>Dismiss</button>
+      </div>
+      {error && <p className="failure-message" role="alert">{error}</p>}
+    </section>
+  );
+}
+
+function FollowUpsCard({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+  const [open, setOpen] = useState(false);
+  const checks = state.delayedTransferChecks
+    .filter((check) => check.status === "scheduled")
+    .sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt));
+  if (checks.length === 0) return null;
+  const ready = checks.filter((check) => Date.parse(check.dueAt) <= Date.now()).length;
+  return (
+    <section className="history-card" aria-labelledby="follow-ups-title">
+      <p className="eyebrow">Optional delayed work</p>
+      <h2 id="follow-ups-title">Follow-ups</h2>
+      <p>{ready} ready · {checks.length} scheduled. Follow-ups never block other work.</p>
+      <button className="secondary" aria-expanded={open} aria-controls="follow-up-queue"
+        aria-label={`${open ? "Close" : "Open"} Follow-up Queue with ${checks.length} scheduled item${checks.length === 1 ? "" : "s"}`}
+        onClick={() => setOpen((current) => !current)}>{open ? "Close Follow-up Queue" : "Open Follow-up Queue"}</button>
+      {open && <section id="follow-up-queue" aria-labelledby="follow-up-queue-title">
+        <h3 id="follow-up-queue-title">Follow-up Queue</h3>
+        <p className="subtle">Only timing and the intended transfer goal are shown before the due check.</p>
+        <ul>{checks.map((check) => <FollowUpQueueItem key={check.id} check={check} onState={onState} />)}</ul>
+      </section>}
+    </section>
+  );
+}
+
+function FollowUpQueueItem({ check, onState }: {
+  check: LearningApplicationState["delayedTransferChecks"][number];
+  onState: StateHandler;
+}) {
+  const [dueAt, setDueAt] = useState(toDateTimeLocal(check.dueAt));
+  const [error, setError] = useState<string | null>(null);
+  return <li>
+    <strong>{check.originatingSessionTarget}</strong>
+    {check.originatingConcepts.length > 0 && <p>Originating concepts: {check.originatingConcepts.join(", ")}</p>}
+    <p>Intended transfer goal: {check.intendedTransferGoal}</p>
+    <p>Due {new Date(check.dueAt).toLocaleString()}</p>
+    <label htmlFor={`reschedule-${check.id}`}>Reschedule {check.originatingSessionTarget}</label>
+    <input id={`reschedule-${check.id}`} type="datetime-local" value={dueAt}
+      onChange={(event) => setDueAt(event.target.value)} />
+    <div className="resume-actions">
+      <button className="secondary" aria-label={`Save new time for ${check.originatingSessionTarget}`}
+        onClick={() => void window.quickStudy.submit({
+          type: "rescheduleDelayedTransfer", checkId: check.id, dueAt: new Date(dueAt).toISOString()
+        }).then(onState).catch((cause: unknown) => setError(
+          cause instanceof Error ? cause.message : "The follow-up could not be rescheduled."
+        ))}>Save new time</button>
+      <button className="text-button" aria-label={`Cancel follow-up for ${check.originatingSessionTarget}`}
+        onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransfer", checkId: check.id })
+          .then(onState).catch((cause: unknown) => setError(
+            cause instanceof Error ? cause.message : "The follow-up could not be cancelled."
+          ))}>Cancel follow-up</button>
+    </div>
+    {error && <p className="failure-message" role="alert">{error}</p>}
+  </li>;
+}
+
+function toDateTimeLocal(value: string): string {
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 function ApplicationSettings({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {

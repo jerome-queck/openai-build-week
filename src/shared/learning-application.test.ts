@@ -2118,6 +2118,118 @@ describe("Learning Application", () => {
     expect(state.sessions.find((session) => session.id === sessionId)).toEqual(historicalRecord);
   });
 
+  it("offers Delayed Transfer once only after an Addressed Session Target and defaults to no follow-up", async () => {
+    const { application } = await launch();
+    await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Show that every convergent sequence is bounded."
+    });
+    await application.submit({ type: "beginSessionConsolidation" });
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Convergence controls the tail while a finite prefix is bounded.",
+      learningProgress: "I can split the sequence into a finite prefix and a controlled tail.",
+      unresolvedQuestions: [],
+      nextStep: "Write the bound explicitly.",
+      includedArtifactIds: [],
+      targetDisposition: "deferred"
+    });
+    let state = await application.submit({ type: "consolidateSession" });
+
+    expect(state.sessions[0].delayedTransferOffer).toBeNull();
+    expect(state.delayedTransferChecks).toEqual([]);
+
+    state = await application.submit({ type: "continueSession", sessionId: state.sessions[0].id });
+    const addressedSessionId = state.activeSessionId!;
+    await application.submit({ type: "beginSessionConsolidation" });
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Convergence controls the tail while a finite prefix is bounded.",
+      learningProgress: "I can now construct the full bound.",
+      unresolvedQuestions: [],
+      nextStep: "Apply the same split to another sequence property.",
+      includedArtifactIds: [],
+      targetDisposition: "addressed"
+    });
+    state = await application.submit({ type: "consolidateSession" });
+
+    const addressed = state.sessions.find((session) => session.id === addressedSessionId)!;
+    expect(addressed.delayedTransferOffer).toMatchObject({ status: "pending" });
+    expect(Date.parse(addressed.delayedTransferOffer!.proposedDueAt)
+      - Date.parse(addressed.delayedTransferOffer!.offeredAt)).toBe(7 * 24 * 60 * 60 * 1_000);
+    expect(state.delayedTransferChecks).toEqual([]);
+
+    state = await application.submit({ type: "declineDelayedTransfer", sessionId: addressedSessionId });
+    expect(state.sessions.find((session) => session.id === addressedSessionId)?.delayedTransferOffer?.status)
+      .toBe("declined");
+    expect(state.delayedTransferChecks).toEqual([]);
+    await expect(application.submit({ type: "declineDelayedTransfer", sessionId: addressedSessionId }))
+      .rejects.toThrow("already been decided");
+  });
+
+  it("schedules one durable Delayed Transfer Check and supports rescheduling and cancellation", async () => {
+    const { application, dataDirectory } = await launch();
+    let state = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Prove that every finite subgroup of the multiplicative group of a field is cyclic."
+    });
+    const sessionId = state.activeSessionId!;
+    await application.submit({ type: "beginSessionConsolidation" });
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Bound the number of roots of each polynomial and compare element orders.",
+      learningProgress: "I can explain the element-order argument.",
+      unresolvedQuestions: [],
+      nextStep: "Try the same structural idea on a different finite group problem.",
+      includedArtifactIds: [],
+      targetDisposition: "addressed"
+    });
+    state = await application.submit({ type: "consolidateSession" });
+    const offeredAt = state.sessions[0].delayedTransferOffer!.offeredAt;
+    const dueAt = new Date(Date.parse(offeredAt) + 10 * 24 * 60 * 60 * 1_000).toISOString();
+
+    state = await application.submit({
+      type: "scheduleDelayedTransfer",
+      sessionId,
+      intendedTransferGoal: "Recognize and reuse the root-counting structure in a fresh proof.",
+      dueAt
+    });
+    expect(state.delayedTransferChecks).toHaveLength(1);
+    const scheduled = state.delayedTransferChecks[0];
+    expect(scheduled).toMatchObject({
+      relatedSessionId: sessionId,
+      originatingSessionTarget: state.sessions[0].sessionTarget,
+      intendedTransferGoal: "Recognize and reuse the root-counting structure in a fresh proof.",
+      dueAt,
+      status: "scheduled"
+    });
+    expect(scheduled).not.toHaveProperty("task");
+    expect(scheduled).not.toHaveProperty("question");
+    expect(state.sessions[0].delayedTransferOffer?.status).toBe("scheduled");
+    await expect(application.submit({
+      type: "scheduleDelayedTransfer",
+      sessionId,
+      intendedTransferGoal: "Create a duplicate.",
+      dueAt
+    })).rejects.toThrow("already has a Delayed Transfer Check");
+
+    const rescheduledDueAt = new Date(Date.parse(dueAt) + 4 * 24 * 60 * 60 * 1_000).toISOString();
+    state = await application.submit({
+      type: "rescheduleDelayedTransfer",
+      checkId: scheduled.id,
+      dueAt: rescheduledDueAt
+    });
+    expect(state.delayedTransferChecks[0].dueAt).toBe(rescheduledDueAt);
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().delayedTransferChecks[0]).toEqual(state.delayedTransferChecks[0]);
+
+    state = await relaunched.submit({ type: "cancelDelayedTransfer", checkId: scheduled.id });
+    expect(state.delayedTransferChecks[0].status).toBe("cancelled");
+    expect(state.sessions[0].delayedTransferOffer?.status).toBe("cancelled");
+  });
+
   it("lets the learner begin Session Consolidation while teaching is in flight", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand compactness",

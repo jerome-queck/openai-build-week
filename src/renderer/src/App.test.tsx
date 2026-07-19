@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentTask, LearningApplicationState, LearningSession } from "../../shared/learning-application";
@@ -878,6 +878,98 @@ describe("anchored teaching workbench", () => {
     expect(api.submit).toHaveBeenCalledWith({ type: "consolidateSession" });
   });
 
+  it("keeps Delayed Transfer off by default and records a one-time decline without a task", async () => {
+    const user = userEvent.setup();
+    const state = addressedDashboardState();
+    const declined = structuredClone(state);
+    declined.sessions[0].delayedTransferOffer!.status = "declined";
+    const api = quickStudyApi(state);
+    vi.mocked(api.submit).mockImplementation(async (action) =>
+      action.type === "declineDelayedTransfer" ? declined : state
+    );
+    window.quickStudy = api;
+
+    render(<App />);
+    const prompt = await screen.findByRole("alertdialog", { name: "Check this understanding later?" });
+    expect((within(prompt).getByRole("radio", { name: "No follow-up" }) as HTMLInputElement).checked).toBe(true);
+    expect(state.delayedTransferChecks).toEqual([]);
+    await user.click(within(prompt).getByRole("button", { name: "Save follow-up choice" }));
+
+    expect(api.submit).toHaveBeenCalledWith({ type: "declineDelayedTransfer", sessionId: "session-1" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Check this understanding later?" })).toBeNull());
+    expect(screen.queryByRole("region", { name: "Follow-ups" })).toBeNull();
+  });
+
+  it("lets the learner opt into an editable seven-day Delayed Transfer proposal", async () => {
+    const user = userEvent.setup();
+    const state = addressedDashboardState();
+    const api = quickStudyApi(state);
+    window.quickStudy = api;
+
+    render(<App />);
+    const prompt = await screen.findByRole("alertdialog", { name: "Check this understanding later?" });
+    await user.click(within(prompt).getByRole("radio", { name: "Check me later" }));
+    expect((within(prompt).getByLabelText("Intended transfer goal") as HTMLTextAreaElement).value).toBe(
+      "Apply Explain the selected claim to a fresh, structurally comparable problem."
+    );
+    expect((within(prompt).getByLabelText("When should Quick Study check in?") as HTMLInputElement).value).toBe(
+      localDateTimeValue("2026-07-27T12:00:00.000Z")
+    );
+    fireEvent.change(within(prompt).getByLabelText("When should Quick Study check in?"), {
+      target: { value: "2026-08-01T09:30" }
+    });
+    await user.click(within(prompt).getByRole("button", { name: "Save follow-up choice" }));
+
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "scheduleDelayedTransfer",
+      sessionId: "session-1",
+      intendedTransferGoal: "Apply Explain the selected claim to a fresh, structurally comparable problem.",
+      dueAt: new Date("2026-08-01T09:30").toISOString()
+    });
+  });
+
+  it("shows scheduled checks in one optional Follow-up Queue and supports editing and cancellation", async () => {
+    const user = userEvent.setup();
+    const state = addressedDashboardState();
+    state.sessions[0].delayedTransferOffer!.status = "scheduled";
+    state.delayedTransferChecks = [{
+      id: "follow-up-1",
+      relatedSessionId: "session-1",
+      originatingSessionTarget: "Explain the selected claim",
+      originatingConcepts: ["compactness"],
+      intendedTransferGoal: "Apply compactness in a fresh proof.",
+      scheduledAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+      dueAt: "2026-07-27T12:00:00.000Z",
+      status: "scheduled"
+    }];
+    const api = quickStudyApi(state);
+    window.quickStudy = api;
+
+    render(<App />);
+    const followUps = await screen.findByRole("region", { name: "Follow-ups" });
+    expect(within(followUps).getAllByRole("button", { name: /Open Follow-up Queue/ })).toHaveLength(1);
+    expect(followUps.textContent).toContain("1 scheduled");
+    expect(screen.queryByRole("region", { name: "Follow-up Queue" })).toBeNull();
+    await user.click(within(followUps).getByRole("button", { name: /Open Follow-up Queue/ }));
+
+    const queue = screen.getByRole("region", { name: "Follow-up Queue" });
+    expect(queue.textContent).toContain("Explain the selected claim");
+    expect(queue.textContent).toContain("Apply compactness in a fresh proof.");
+    expect(queue.textContent).not.toContain("transfer question");
+    fireEvent.change(within(queue).getByLabelText("Reschedule Explain the selected claim"), {
+      target: { value: "2026-07-30T10:15" }
+    });
+    await user.click(within(queue).getByRole("button", { name: "Save new time for Explain the selected claim" }));
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "rescheduleDelayedTransfer",
+      checkId: "follow-up-1",
+      dueAt: new Date("2026-07-30T10:15").toISOString()
+    });
+    await user.click(within(queue).getByRole("button", { name: "Cancel follow-up for Explain the selected claim" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "cancelDelayedTransfer", checkId: "follow-up-1" });
+  });
+
   it("shows a compact Consolidated Session Outcome with expandable required detail and continuation", async () => {
     const user = userEvent.setup();
     const state = workbenchState();
@@ -1222,6 +1314,7 @@ function workbenchState(): LearningApplicationState {
       trailDraft: { items: [] },
       consolidationDraft: null,
       consolidatedOutcome: null,
+      delayedTransferOffer: null,
       continuationOf: null,
       modelStopConfirmation: null,
       learningSlice: null
@@ -1260,6 +1353,7 @@ function workbenchState(): LearningApplicationState {
       }],
       installedBytes: 734_003_200, lastRemovedLogicalBytes: 0, error: null
     },
+    delayedTransferChecks: [],
     activeSessionId: "session-1",
     resumeSessionId: "session-1",
     navigation: { workspaceId: "quick-study-workspace", missionId: "quick-study-unfiled-mission" },
@@ -1274,4 +1368,34 @@ function workbenchState(): LearningApplicationState {
     sourceExcerptEgressPreference: { enabled: false },
     learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null }
   };
+}
+
+function addressedDashboardState(): LearningApplicationState {
+  const state = workbenchState();
+  state.screen = "dashboard";
+  state.activeSessionId = null;
+  state.resumeSessionId = null;
+  state.sessions[0].status = "consolidated";
+  state.sessions[0].consolidatedOutcome = {
+    id: "outcome-1",
+    centralInsight: "Compactness supplies the finite choice.",
+    learningProgress: "I can explain the proof structure.",
+    unresolvedQuestions: [],
+    nextStep: "Try a structurally comparable proof.",
+    includedArtifactIds: [],
+    targetDisposition: "addressed",
+    trailItems: []
+  };
+  state.sessions[0].delayedTransferOffer = {
+    status: "pending",
+    offeredAt: "2026-07-20T12:00:00.000Z",
+    proposedDueAt: "2026-07-27T12:00:00.000Z"
+  };
+  state.delayedTransferChecks = [];
+  return state;
+}
+
+function localDateTimeValue(value: string): string {
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
