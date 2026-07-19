@@ -106,6 +106,7 @@ function trailSession(): LearningSession {
     }],
     activeTeachingCardId: "card-1",
     agentTasks: [], activeAgentTaskId: null,
+    reasoningPreference: "balanced", runtimeOverride: null,
     learningArtifacts: [{
       id: "artifact-1", title: "Compactness walkthrough",
       kind: "learningArtifact", originatingSessionId: "session-1",

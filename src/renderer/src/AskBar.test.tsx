@@ -161,6 +161,7 @@ function questionSession(): LearningSession {
     consolidationDraft: null, consolidatedOutcome: null, continuationOf: null, modelStopConfirmation: null,
     conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null,
     agentTasks: [], activeAgentTaskId: null,
+    reasoningPreference: "balanced", runtimeOverride: null,
     learningArtifacts: [], learningSlice: null
   };
 }

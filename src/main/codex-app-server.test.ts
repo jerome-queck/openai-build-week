@@ -2,6 +2,40 @@ import { describe, expect, it } from "vitest";
 import { CodexAppServerRuntime, type AppServerTransport } from "./codex-app-server";
 
 describe("Codex app-server contract", () => {
+  it("discovers only models and reasoning efforts advertised by the active runtime", async () => {
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "model/list") {
+        transport.respond(message.id, {
+          data: [{
+            id: "codex-deep", model: "codex-deep", displayName: "Codex Deep", description: "Deep review",
+            isDefault: true, hidden: false, defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "medium", description: "Balanced" },
+              { reasoningEffort: "high", description: "Deep" }
+            ]
+          }],
+          nextCursor: null
+        });
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    await expect(runtime.getCapabilities()).resolves.toEqual({
+      models: [{
+        model: "codex-deep", displayName: "Codex Deep", isDefault: true,
+        supportedReasoningEfforts: ["medium", "high"]
+      }]
+    });
+    expect(transport.messages).toContainEqual(expect.objectContaining({
+      method: "model/list", params: { cursor: null, includeHidden: false, limit: 100 }
+    }));
+  });
+
   it("initializes once and supports both Codex-owned authentication paths", async () => {
     let account: null | { type: "chatgpt"; email: string; planType: string } | { type: "apiKey" } = null;
     const transport = new ScriptedTransport((message) => {
@@ -421,7 +455,7 @@ describe("Codex app-server contract", () => {
         verificationNeeds: ["Identify hidden assumptions."]
       },
       budget: {
-        agentCount: 1, concurrency: 1, model: "runtimeDefault", reasoningEffort: "medium",
+        agentCount: 1, concurrency: 1, model: "codex-deep", reasoningEffort: "high",
         tools: ["checkpointSpecialistResult"], maxOutputTokens: 512, maxLatencyMs: 120_000
       },
       signal: new AbortController().signal,
@@ -437,13 +471,14 @@ describe("Codex app-server contract", () => {
     expect(threadStart).toMatchObject({
       params: {
         sandbox: "read-only",
+        model: "codex-deep",
         dynamicTools: [expect.objectContaining({ name: "checkpoint_specialist_result" })],
         config: { features: { apps: false, multi_agent: false, shell_tool: false, unified_exec: false } }
       }
     });
     expect(JSON.stringify(threadStart.params)).toContain("Use only the supplied Agent Brief");
     const turnStart = transport.messages.find((message) => message.method === "turn/start")!;
-    expect(turnStart).toMatchObject({ params: { effort: "medium" } });
+    expect(turnStart).toMatchObject({ params: { effort: "high" } });
     expect(JSON.stringify(turnStart.params)).toContain("Choose disjoint neighbourhoods.");
     expect(JSON.stringify(turnStart.params)).not.toContain("/workspace");
     expect(events).toContain("specialist:turnCompleted");

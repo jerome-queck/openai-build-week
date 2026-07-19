@@ -70,6 +70,28 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         }
       });
       break;
+    case "model/list":
+      send({
+        id: message.id,
+        result: {
+          data: [{
+            id: "quick-study-test-model",
+            model: "quick-study-test-model",
+            displayName: "Quick Study Test Model",
+            description: "Deterministic packaged-test model",
+            isDefault: true,
+            hidden: false,
+            defaultReasoningEffort: "medium",
+            supportedReasoningEfforts: [
+              { reasoningEffort: "low", description: "Fast" },
+              { reasoningEffort: "medium", description: "Balanced" },
+              { reasoningEffort: "high", description: "Deep" }
+            ]
+          }],
+          nextCursor: null
+        }
+      });
+      break;
     case "account/login/start":
       send({ id: message.id, result: { type: message.params.type } });
       break;

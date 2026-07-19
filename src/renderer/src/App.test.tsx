@@ -244,6 +244,30 @@ describe("anchored teaching workbench", () => {
     });
   });
 
+  it("lets the learner choose a Reasoning Preference and only advertised Runtime Overrides", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    state.runtimeCapabilities.models = [
+      { model: "codex-fast", displayName: "Codex Fast", isDefault: true, supportedReasoningEfforts: ["low", "medium"] },
+      { model: "codex-deep", displayName: "Codex Deep", isDefault: false, supportedReasoningEfforts: ["medium", "high", "max"] }
+    ];
+    window.quickStudy = quickStudyApi(state);
+    render(<App />);
+
+    await user.click(await screen.findByRole("radio", { name: "Deeper" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "setReasoningPreference", preference: "deeper" });
+
+    await user.click(screen.getByText("Advanced Runtime Override"));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Runtime model" }), "codex-fast");
+    const effort = screen.getByRole("combobox", { name: "Runtime reasoning" });
+    expect([...effort.querySelectorAll("option")].map((option) => option.value)).toEqual(["low", "medium"]);
+    await user.selectOptions(effort, "low");
+    await user.click(screen.getByRole("button", { name: "Apply Runtime Override" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "setRuntimeOverride", override: { model: "codex-fast", reasoningEffort: "low" }
+    });
+  });
+
   it("keeps prerequisite decisions accessible and restores focus from a Branch Trail Return Point", async () => {
     const user = userEvent.setup();
     const originState = workbenchState();
@@ -699,6 +723,8 @@ function workbenchState(): LearningApplicationState {
       prerequisiteBranch: null,
       agentTasks: [],
       activeAgentTaskId: null,
+      reasoningPreference: "balanced",
+      runtimeOverride: null,
       learningArtifacts: [{
         id: "artifact-1",
         title: "Explain compact subset",
@@ -738,6 +764,7 @@ function workbenchState(): LearningApplicationState {
     authentication: { status: "failed", method: null, accountLabel: null, loginUrl: null, error: "Unavailable" },
     intakeError: null,
     runtimeAvailable: false,
+    runtimeCapabilities: { models: [] },
     modelAccess: { status: "unavailable", cause: "runtime", message: "Unavailable" },
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true }

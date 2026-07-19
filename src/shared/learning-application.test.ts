@@ -815,7 +815,7 @@ describe("Learning Application", () => {
       requiresConfirmation: false,
       confirmationReason: null
     }, true);
-    const { application } = await launchWithRuntime(runtime);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
     const started = await application.submit({
       type: "submitSessionIntake",
       mathematics: "Show that every compact subset of a Hausdorff space is closed."
@@ -3136,6 +3136,72 @@ describe("Learning Application", () => {
     expect(relaunched.getState().sessions[0].agentTasks[0]).toEqual(complete);
   });
 
+  it("uses each Reasoning Preference to select an inspectable automatic Agent Budget", async () => {
+    const expected = {
+      faster: { reasoningEffort: "low", maxOutputTokens: 256, maxLatencyMs: 60_000 },
+      balanced: { reasoningEffort: "medium", maxOutputTokens: 512, maxLatencyMs: 120_000 },
+      deeper: { reasoningEffort: "high", maxOutputTokens: 768, maxLatencyMs: 180_000 }
+    } as const;
+    for (const preference of ["faster", "balanced", "deeper"] as const) {
+      const runtime = new DeterministicModelRuntime({
+        learningGoal: "Understand why compact subsets are closed",
+        scope: "Find the hidden separation assumption",
+        initialTeachingDirection: "Inspect the complement argument",
+        requiresConfirmation: false, confirmationReason: null
+      }, true);
+      const { application } = await launchWithRuntime(runtime);
+      await application.submit({ type: "submitSessionIntake", mathematics: "Prove compact subsets are closed." });
+      runtime.emitTeaching("Choose disjoint neighbourhoods and use compactness.");
+      runtime.completeTeaching();
+      await application.waitForModelWork();
+      expect(application.getState().sessions[0]).toMatchObject({ reasoningPreference: "balanced", runtimeOverride: null });
+      await application.submit({ type: "setReasoningPreference", preference });
+      await application.submit({ type: "submitQuestion", text: "Which assumption controls the separation step?" });
+      expect(runtime.teachingRequests.at(-1)?.runtimeSelection).toEqual({
+        model: "runtimeDefault", reasoningEffort: expected[preference].reasoningEffort
+      });
+      expect(runtime.teachingRequests.at(-1)?.runtimeSelection.reasoningEffort).not.toBe("max");
+      runtime.completeTeaching();
+      await application.waitForModelWork();
+      const state = await application.submit({ type: "requestSpecialistReview" });
+      expect(state.sessions[0].agentTasks[0].budget).toMatchObject({ model: "runtimeDefault", ...expected[preference] });
+      expect(state.sessions[0].agentTasks[0].budget.reasoningEffort).not.toBe("max");
+      runtime.completeSpecialist({ title: "Review", content: "The Hausdorff assumption is required." });
+      await application.waitForModelWork();
+    }
+  });
+
+  it("validates an advanced Runtime Override against active Codex Runtime capabilities", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the claim", scope: "One inference",
+      initialTeachingDirection: "Start from the definition", requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Explain the claim." });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+
+    await expect(application.submit({
+      type: "setRuntimeOverride", override: { model: "codex-fast", reasoningEffort: "high" }
+    })).rejects.toThrow("does not support high reasoning");
+    const state = await application.submit({
+      type: "setRuntimeOverride", override: { model: "codex-deep", reasoningEffort: "high" }
+    });
+    expect(state.sessions[0].runtimeOverride).toEqual({ model: "codex-deep", reasoningEffort: "high" });
+    expect(state.runtimeCapabilities.models).toEqual(runtime.capabilities.models);
+    await application.submit({ type: "submitQuestion", text: "Check this inference." });
+    expect(runtime.teachingRequests.at(-1)?.runtimeSelection).toEqual({ model: "codex-deep", reasoningEffort: "high" });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const relaunched = await LearningApplication.launch(dataDirectory, runtime);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0]).toMatchObject({
+      reasoningPreference: "balanced",
+      runtimeOverride: { model: "codex-deep", reasoningEffort: "high" }
+    });
+  });
+
   it("includes the relevant Source Anchor when the learner requests review of an anchored Teaching Card", async () => {
     const mathematics = "Every compact subset of a Hausdorff space is closed.";
     const runtime = new DeterministicModelRuntime({
@@ -3211,6 +3277,31 @@ describe("Learning Application", () => {
         content: "The disjoint-neighbourhood step uses Hausdorff separation.",
         error: "The specialist could not finish the final review.",
         retryable: true
+      }
+    });
+  });
+
+  it("stops honestly at a budget limit while preserving useful partial output", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check a compactness argument", scope: "Inspect one assumption",
+      initialTeachingDirection: "Read the current explanation", requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Review this compactness proof." });
+    runtime.emitTeaching("The proof chooses disjoint neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    await application.submit({ type: "requestSpecialistReview" });
+    runtime.emitSpecialistPartial("The step uses Hausdorff separation.");
+    runtime.failSpecialist(new Error("Specialist Agent output exceeded its token budget."));
+    await application.waitForModelWork();
+
+    expect(application.getState().sessions[0].agentTasks[0]).toMatchObject({
+      status: "stopped",
+      statusMessage: "Agent Task stopped at its token limit. Useful partial output was preserved.",
+      integratedTeachingCard: {
+        status: "stopped", content: "The step uses Hausdorff separation.", retryable: true
       }
     });
   });
@@ -4426,6 +4517,12 @@ class DeterministicModelRuntime implements ModelRuntime {
     method: "chatgpt",
     accountLabel: "learner@example.com"
   };
+  readonly capabilities: Awaited<ReturnType<ModelRuntime["getCapabilities"]>> = {
+    models: [
+      { model: "codex-fast", displayName: "Codex Fast", isDefault: true, supportedReasoningEfforts: ["low", "medium"] },
+      { model: "codex-deep", displayName: "Codex Deep", isDefault: false, supportedReasoningEfforts: ["medium", "high", "max"] }
+    ]
+  };
   chatGptLoginStarts = 0;
   readonly receivedApiKeys: string[] = [];
   proposalError: Error | null = null;
@@ -4438,6 +4535,8 @@ class DeterministicModelRuntime implements ModelRuntime {
   holdArtifactSynthesis = false;
 
   constructor(private readonly proposal: SessionProposal, private readonly holdTeaching = false) {}
+
+  async getCapabilities() { return structuredClone(this.capabilities); }
 
   async getAuthentication() {
     if (this.authenticationError) throw this.authenticationError;

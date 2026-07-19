@@ -68,6 +68,10 @@ export interface TeachingSourceContext {
 
 export interface TeachingRequest {
   sessionId: string;
+  runtimeSelection: {
+    model: "runtimeDefault" | string;
+    reasoningEffort: ReasoningEffort;
+  };
   mathematics: string;
   learningGoal: string;
   scope: string;
@@ -146,11 +150,24 @@ export interface AgentBrief {
   verificationNeeds: string[];
 }
 
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export interface RuntimeModelCapability {
+  model: string;
+  displayName: string;
+  isDefault: boolean;
+  supportedReasoningEfforts: ReasoningEffort[];
+}
+
+export interface ModelRuntimeCapabilities {
+  models: RuntimeModelCapability[];
+}
+
 export interface AgentBudget {
-  agentCount: 1;
-  concurrency: 1;
-  model: "runtimeDefault";
-  reasoningEffort: "medium";
+  agentCount: number;
+  concurrency: number;
+  model: "runtimeDefault" | string;
+  reasoningEffort: ReasoningEffort;
   tools: ["checkpointSpecialistResult"];
   maxOutputTokens: number;
   maxLatencyMs: number;
@@ -181,6 +198,7 @@ export interface ModelRuntimeEvent {
 }
 
 export interface ModelRuntime {
+  getCapabilities(): Promise<ModelRuntimeCapabilities>;
   getAuthentication(): Promise<AuthenticationState>;
   startChatGptLogin(): Promise<ChatGptLogin>;
   loginWithApiKey(apiKey: string): Promise<void>;

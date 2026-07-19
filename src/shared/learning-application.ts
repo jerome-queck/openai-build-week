@@ -9,7 +9,9 @@ import {
   type AuthenticationState,
   type ModelAccessCause,
   type ModelRuntime,
+  type ModelRuntimeCapabilities,
   type ModelRuntimeEvent,
+  type ReasoningEffort,
   type RuntimeAccessDecision,
   type RuntimeAccessRequest,
   type TeachingRequest,
@@ -21,12 +23,15 @@ import {
 import { annotationPurposeLabel, type AnnotationPurpose, type SourceAnnotation } from "./annotations";
 export type { AnnotationPurpose, SourceAnnotation } from "./annotations";
 import { sessionAccessPolicyLabel, type SessionAccessPolicy } from "./session-access";
+import { coordinateAgentTasks } from "./agent-task-coordinator";
 export type { SessionAccessPolicy } from "./session-access";
 
 const MAX_TEACHING_SOURCE_CONTEXT_CHARACTERS = 60_000;
 
 export type SessionStatus = "active" | "paused" | "consolidated";
 export type TargetDisposition = "addressed" | "deferred" | "unresolved";
+export type ReasoningPreference = "faster" | "balanced" | "deeper";
+export interface RuntimeOverride { model: string; reasoningEffort: ReasoningEffort }
 
 export interface SessionAccessScope {
   policy: SessionAccessPolicy;
@@ -642,6 +647,8 @@ export interface LearningSession {
   prerequisiteBranch: PrerequisiteBranch | null;
   agentTasks: AgentTask[];
   activeAgentTaskId: string | null;
+  reasoningPreference: ReasoningPreference;
+  runtimeOverride: RuntimeOverride | null;
 }
 
 export interface LearningApplicationState {
@@ -671,6 +678,7 @@ export interface LearningApplicationState {
   };
   intakeError: string | null;
   runtimeAvailable: boolean;
+  runtimeCapabilities: ModelRuntimeCapabilities;
   modelAccess: ModelAccessState;
   accessConfirmationPreference: {
     confirmFullAccess: boolean;
@@ -689,6 +697,8 @@ export type LearnerAction =
   | { type: "retryModelWork" }
   | { type: "requestSpecialistReview" }
   | { type: "retryAgentTask"; taskId: string }
+  | { type: "setReasoningPreference"; preference: ReasoningPreference }
+  | { type: "setRuntimeOverride"; override: RuntimeOverride | null }
   | { type: "startChatGptLogin" }
   | { type: "loginWithApiKey"; apiKey: string }
   | { type: "refreshAuthentication" }
@@ -860,6 +870,7 @@ export class LearningApplication {
     if (modelRuntime) {
       application.state.runtimeAvailable = true;
       try {
+        application.state.runtimeCapabilities = validatedRuntimeCapabilities(await modelRuntime.getCapabilities());
         application.updateAuthentication(await modelRuntime.getAuthentication());
       } catch (error) {
         application.state.authentication = failedAuthentication(null, error);
@@ -2186,7 +2197,7 @@ export class LearningApplication {
         if (session.agentTasks.length > 0) {
           throw new Error("This Learning Session already has its bounded Specialist Agent review.");
         }
-        const task = createSpecialistReviewTask(session);
+        const task = createSpecialistReviewTask(session, selectAgentBudget(session));
         session.agentTasks.push(task);
         session.activeAgentTaskId = task.id;
         this.beginSpecialistAgentTask(session, task);
@@ -2200,6 +2211,27 @@ export class LearningApplication {
         if (this.modelWorks.has(session.id)) throw new Error("Wait for the current model work before retrying this Agent Task.");
         session.activeAgentTaskId = task.id;
         this.beginSpecialistAgentTask(session, task);
+        break;
+      }
+      case "setReasoningPreference": {
+        const session = this.requireActiveSession();
+        if (!isReasoningPreference(action.preference)) throw new Error("Choose Faster, Balanced, or Deeper reasoning.");
+        session.reasoningPreference = action.preference;
+        break;
+      }
+      case "setRuntimeOverride": {
+        const session = this.requireActiveSession();
+        const runtimeOverride = action.override;
+        if (runtimeOverride === null) {
+          session.runtimeOverride = null;
+          break;
+        }
+        const model = this.state.runtimeCapabilities.models.find((candidate) => candidate.model === runtimeOverride.model);
+        if (!model) throw new Error("Choose a model offered by the active Codex Runtime.");
+        if (!model.supportedReasoningEfforts.includes(runtimeOverride.reasoningEffort)) {
+          throw new Error(`${model.displayName} does not support ${runtimeOverride.reasoningEffort} reasoning.`);
+        }
+        session.runtimeOverride = structuredClone(runtimeOverride);
         break;
       }
       case "startChatGptLogin": {
@@ -2942,7 +2974,9 @@ export class LearningApplication {
       fromSequence: log.length + 1,
       toSequence: log.length + 1
     };
-    const promise = runtime.runSpecialistAgent({
+    let specialistResult: SpecialistAgentResult | null = null;
+    const runSpecialist = async () => {
+      specialistResult = await runtime.runSpecialistAgent({
       sessionId: session.id,
       purpose: task.purpose,
       brief: structuredClone(task.brief),
@@ -2969,9 +3003,15 @@ export class LearningApplication {
         if (task.agentWorkLogReference) task.agentWorkLogReference.toSequence = log.length;
         this.queuePersistence();
       }
-    }).then((result) => {
+      });
+    };
+    const promise = coordinateAgentTasks([{
+      id: task.id,
+      dependsOnTaskIds: [],
+      run: runSpecialist
+    }], task.budget.concurrency).then(() => {
       if (controller.signal.aborted) return;
-      const integrated = validatedSpecialistAgentResult(result, task.budget);
+      const integrated = validatedSpecialistAgentResult(specialistResult, task.budget);
       task.status = "complete";
       task.statusMessage = null;
       Object.assign(task.integratedTeachingCard, {
@@ -2983,6 +3023,15 @@ export class LearningApplication {
       });
     }).catch((error: unknown) => {
       if (controller.signal.aborted) return;
+      const limitMessage = agentBudgetLimitMessage(error);
+      if (limitMessage) {
+        task.status = "stopped";
+        task.statusMessage = limitMessage;
+        Object.assign(task.integratedTeachingCard, {
+          status: "stopped", error: limitMessage, retryable: true
+        });
+        return;
+      }
       task.status = "failed";
       task.statusMessage = usefulRuntimeError(error);
       Object.assign(task.integratedTeachingCard, {
@@ -3034,6 +3083,7 @@ export class LearningApplication {
     const stage = roadmap?.stages.find((candidate) => candidate.id === session.learningSlice?.stageId) ?? null;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
+      runtimeSelection: selectTeachingRuntime(session),
       mathematics,
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
@@ -3761,6 +3811,17 @@ export class LearningApplication {
   }
 }
 
+function agentBudgetLimitMessage(error: unknown): string | null {
+  const message = error instanceof Error ? error.message.toLocaleLowerCase() : "";
+  if (message.includes("token budget")) {
+    return "Agent Task stopped at its token limit. Useful partial output was preserved.";
+  }
+  if (message.includes("timed out") || message.includes("latency")) {
+    return "Agent Task stopped at its latency limit. Useful partial output was preserved.";
+  }
+  return null;
+}
+
 function isMissingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
@@ -3914,6 +3975,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
+    current.runtimeCapabilities = { models: [] };
     current.modelAccess ??= {
       status: "unavailable",
       cause: "runtime",
@@ -3955,7 +4017,9 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       prerequisiteBranchProposals: migratePrerequisiteBranchProposals(session.prerequisiteBranchProposals),
       prerequisiteBranch: migratePrerequisiteBranch(session.prerequisiteBranch),
       agentTasks: migrateAgentTasks(session.agentTasks),
-      activeAgentTaskId: typeof session.activeAgentTaskId === "string" ? session.activeAgentTaskId : null
+      activeAgentTaskId: typeof session.activeAgentTaskId === "string" ? session.activeAgentTaskId : null,
+      reasoningPreference: migrateReasoningPreference(session.reasoningPreference),
+      runtimeOverride: migrateRuntimeOverride(session.runtimeOverride)
     }));
     addLegacyUnresolvedReanchoringDecisions(current);
     attachManagedSourcesToLegacySessions(current);
@@ -4010,7 +4074,9 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       prerequisiteBranchProposals: [],
       prerequisiteBranch: null,
       agentTasks: [],
-      activeAgentTaskId: null
+      activeAgentTaskId: null,
+      reasoningPreference: "balanced",
+      runtimeOverride: null
     };
     migrated.sessions.push(session);
     attachManagedSourcesToLegacySessions(migrated);
@@ -4057,8 +4123,11 @@ function migrateAgentTasks(value: unknown): AgentTask[] {
       || !isNonEmptyStringArray(brief.constraints) || !isStringArray(brief.learnerEvidence)
       || typeof brief.expectedOutput !== "string" || !brief.expectedOutput.trim()
       || !isNonEmptyStringArray(brief.verificationNeeds)
-      || budget.agentCount !== 1 || budget.concurrency !== 1 || budget.model !== "runtimeDefault"
-      || budget.reasoningEffort !== "medium" || !Array.isArray(budget.tools)
+      || !Number.isInteger(budget.agentCount) || (budget.agentCount as number) < 1
+      || !Number.isInteger(budget.concurrency) || (budget.concurrency as number) < 1
+      || (budget.concurrency as number) > (budget.agentCount as number)
+      || typeof budget.model !== "string" || !budget.model.trim()
+      || !isReasoningEffort(budget.reasoningEffort) || !Array.isArray(budget.tools)
       || budget.tools.length !== 1 || budget.tools[0] !== "checkpointSpecialistResult"
       || !Number.isInteger(budget.maxOutputTokens) || (budget.maxOutputTokens as number) < 1
       || !Number.isInteger(budget.maxLatencyMs) || (budget.maxLatencyMs as number) < 1
@@ -4668,11 +4737,13 @@ function createLearningSession(details: NewLearningSession): LearningSession {
     prerequisiteBranchProposals: [],
     prerequisiteBranch: details.prerequisiteBranch ?? null,
     agentTasks: [],
-    activeAgentTaskId: null
+    activeAgentTaskId: null,
+    reasoningPreference: "balanced",
+    runtimeOverride: null
   };
 }
 
-function createSpecialistReviewTask(session: LearningSession): AgentTask {
+function createSpecialistReviewTask(session: LearningSession, budget: AgentBudget): AgentTask {
   const target = specialistReviewTarget(session);
   if (!target) throw new Error("Complete a Teaching Card before requesting a Specialist Agent review.");
   return {
@@ -4708,15 +4779,7 @@ function createSpecialistReviewTask(session: LearningSession): AgentTask {
         "Identify any hidden mathematical assumption and explain whether the argument depends on it."
       ]
     },
-    budget: {
-      agentCount: 1,
-      concurrency: 1,
-      model: "runtimeDefault",
-      reasoningEffort: "medium",
-      tools: ["checkpointSpecialistResult"],
-      maxOutputTokens: 512,
-      maxLatencyMs: 120_000
-    },
+    budget,
     integratedTeachingCard: {
       title: "Specialist review",
       status: "streaming",
@@ -5810,6 +5873,7 @@ function initialState(): LearningApplicationState {
     authentication: signedOutAuthentication(),
     intakeError: null,
     runtimeAvailable: false,
+    runtimeCapabilities: { models: [] },
     modelAccess: {
       status: "unavailable",
       cause: "runtime",
@@ -5817,6 +5881,67 @@ function initialState(): LearningApplicationState {
     },
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true }
+  };
+}
+
+function isReasoningPreference(value: unknown): value is ReasoningPreference {
+  return value === "faster" || value === "balanced" || value === "deeper";
+}
+
+function migrateReasoningPreference(value: unknown): ReasoningPreference {
+  if (value === undefined) return "balanced";
+  if (!isReasoningPreference(value)) throw new Error("Stored Reasoning Preference is invalid.");
+  return value;
+}
+
+function migrateRuntimeOverride(value: unknown): RuntimeOverride | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || typeof value.model !== "string" || !value.model.trim()
+    || !isReasoningEffort(value.reasoningEffort)) {
+    throw new Error("Stored Runtime Override is invalid.");
+  }
+  return { model: value.model, reasoningEffort: value.reasoningEffort };
+}
+
+function isReasoningEffort(value: unknown): value is ReasoningEffort {
+  return ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"].includes(String(value));
+}
+
+function validatedRuntimeCapabilities(value: unknown): ModelRuntimeCapabilities {
+  if (!isRecord(value) || !Array.isArray(value.models) || !value.models.every((model) => isRecord(model)
+    && typeof model.model === "string" && Boolean(model.model.trim())
+    && typeof model.displayName === "string" && Boolean(model.displayName.trim())
+    && typeof model.isDefault === "boolean"
+    && Array.isArray(model.supportedReasoningEfforts)
+    && model.supportedReasoningEfforts.length > 0
+    && model.supportedReasoningEfforts.every(isReasoningEffort))) {
+    throw new Error("Codex Runtime returned invalid model capabilities.");
+  }
+  return structuredClone(value) as unknown as ModelRuntimeCapabilities;
+}
+
+function selectAgentBudget(session: LearningSession): AgentBudget {
+  const automatic = ({
+    faster: { reasoningEffort: "low", maxOutputTokens: 256, maxLatencyMs: 60_000 },
+    balanced: { reasoningEffort: "medium", maxOutputTokens: 512, maxLatencyMs: 120_000 },
+    deeper: { reasoningEffort: "high", maxOutputTokens: 768, maxLatencyMs: 180_000 }
+  } as const)[session.reasoningPreference];
+  return {
+    agentCount: 1,
+    concurrency: 1,
+    model: session.runtimeOverride?.model ?? "runtimeDefault",
+    reasoningEffort: session.runtimeOverride?.reasoningEffort ?? automatic.reasoningEffort,
+    tools: ["checkpointSpecialistResult"],
+    maxOutputTokens: automatic.maxOutputTokens,
+    maxLatencyMs: automatic.maxLatencyMs
+  };
+}
+
+function selectTeachingRuntime(session: LearningSession): TeachingRequest["runtimeSelection"] {
+  const automaticEffort = ({ faster: "low", balanced: "medium", deeper: "high" } as const)[session.reasoningPreference];
+  return {
+    model: session.runtimeOverride?.model ?? "runtimeDefault",
+    reasoningEffort: session.runtimeOverride?.reasoningEffort ?? automaticEffort
   };
 }
 

@@ -5,7 +5,9 @@ import { ModelAccessError, type
   ChatGptLogin,
   ConceptPeekRequest,
   ModelRuntime,
+  ModelRuntimeCapabilities,
   ModelRuntimeEvent,
+  ReasoningEffort,
   SessionProposal,
   SpecialistAgentRequest,
   SpecialistAgentResult,
@@ -274,6 +276,25 @@ export class CodexAppServerRuntime implements ModelRuntime {
     return CodexAppServerRuntime.connect(new CodexProcessTransport(command, cwd), cwd);
   }
 
+  async getCapabilities(): Promise<ModelRuntimeCapabilities> {
+    const models: ModelRuntimeCapabilities["models"] = [];
+    let cursor: string | null = null;
+    do {
+      const response = await this.client.request("model/list", {
+        cursor, includeHidden: false, limit: 100
+      });
+      if (!isModelListResponse(response)) throw new Error("Codex returned an incompatible model catalog.");
+      models.push(...response.data.map((model) => ({
+        model: model.model,
+        displayName: model.displayName,
+        isDefault: model.isDefault,
+        supportedReasoningEfforts: model.supportedReasoningEfforts.map((option) => option.reasoningEffort)
+      })));
+      cursor = response.nextCursor ?? null;
+    } while (cursor !== null);
+    return { models };
+  }
+
   async getAuthentication(): Promise<AuthenticationState> {
     const response = await this.client.request("account/read", { refreshToken: false }) as {
       account: null | { type: "apiKey" } | { type: "chatgpt"; email: string | null };
@@ -406,7 +427,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
             request.onRuntimeEvent?.({ ...event, workKind: "specialist" });
           },
           undefined,
-          "You are one bounded Specialist Agent using the runtime-default model with medium reasoning. Use only the supplied Agent Brief. The checkpoint tool is the only permitted tool; do not inspect local files, session history, apps, or the network. Return one structured result for the Teaching Orchestrator to integrate; never produce an agent transcript.",
+          `You are one bounded Specialist Agent using ${request.budget.model === "runtimeDefault" ? "the runtime-default model" : request.budget.model} with ${request.budget.reasoningEffort} reasoning. Use only the supplied Agent Brief. The checkpoint tool is the only permitted tool; do not inspect local files, session history, apps, or the network. Return one structured result for the Teaching Orchestrator to integrate; never produce an agent transcript.`,
           request.budget.maxLatencyMs,
           request
         );
@@ -494,11 +515,15 @@ export class CodexAppServerRuntime implements ModelRuntime {
     const contextualQuestion = Boolean(teachingRequest?.questionContext);
     const boundedContext = anchoredFocus || contextualQuestion;
     const fullAccessTools = accessPolicy === "full" && !boundedContext;
+    const runtimeSelection = specialistRequest?.budget ?? teachingRequest?.runtimeSelection;
     const threadResponse = await this.client.request("thread/start", {
       cwd: this.cwd,
       approvalPolicy: "never",
       sandbox: "read-only",
       ephemeral: true,
+      ...(runtimeSelection?.model !== "runtimeDefault"
+        ? { model: runtimeSelection?.model }
+        : {}),
       dynamicTools: specialistRequest ? [SPECIALIST_CHECKPOINT_TOOL]
         : teachingRequest && !boundedContext ? [SESSION_ACCESS_REQUEST_TOOL] : [],
       config: {
@@ -530,7 +555,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     const turnResponse = await this.client.request("turn/start", {
       threadId: threadResponse.thread.id,
       input: [{ type: "text", text: prompt, text_elements: [] }],
-      ...(specialistRequest ? { effort: specialistRequest.budget.reasoningEffort } : {}),
+      ...(runtimeSelection ? { effort: runtimeSelection.reasoningEffort } : {}),
       ...(outputSchema ? { outputSchema } : {})
     }) as { turn: { id: string } };
     if (this.runtimeFailure) {
@@ -904,6 +929,29 @@ function dynamicToolFailure(error: unknown): unknown {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isModelListResponse(value: unknown): value is {
+  data: Array<{
+    model: string;
+    displayName: string;
+    isDefault: boolean;
+    supportedReasoningEfforts: Array<{ reasoningEffort: ReasoningEffort }>;
+  }>;
+  nextCursor?: string | null;
+} {
+  return isRecord(value) && Array.isArray(value.data)
+    && (value.nextCursor === undefined || value.nextCursor === null || typeof value.nextCursor === "string")
+    && value.data.every((model) => isRecord(model)
+      && typeof model.model === "string" && Boolean(model.model.trim())
+      && typeof model.displayName === "string" && Boolean(model.displayName.trim())
+      && typeof model.isDefault === "boolean"
+      && Array.isArray(model.supportedReasoningEfforts)
+      && model.supportedReasoningEfforts.length > 0
+      && model.supportedReasoningEfforts.every((option) => isRecord(option)
+        && typeof option.reasoningEffort === "string"
+        && ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+          .includes(option.reasoningEffort)));
 }
 
 function isInitializeResponse(value: unknown): boolean {
