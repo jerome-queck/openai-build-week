@@ -273,6 +273,26 @@ describe("anchored teaching workbench", () => {
     });
   });
 
+  it("makes dependent and genuinely independent Specialist Agent coordination explicit", async () => {
+    const user = userEvent.setup();
+    const state = workbenchState();
+    state.runtimeAvailable = true;
+    state.modelAccess = { status: "available" };
+    window.quickStudy = quickStudyApi(state);
+    render(<App />);
+
+    expect(await screen.findByText("Choose parallel work only for independent perspectives; use sequential review when the second brief needs the first result."))
+      .toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Sequential review then challenge" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "requestSpecialistReview", coordination: "dependent"
+    });
+    await user.click(screen.getByRole("button", { name: "Two independent perspectives" }));
+    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+      type: "requestSpecialistReview", coordination: "independent"
+    });
+  });
+
   it("keeps prerequisite decisions accessible and restores focus from a Branch Trail Return Point", async () => {
     const user = userEvent.setup();
     const originState = workbenchState();

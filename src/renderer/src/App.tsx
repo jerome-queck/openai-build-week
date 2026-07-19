@@ -1973,10 +1973,22 @@ function TeachingCard({ session, modelAvailable, onState }: { session: LearningS
       <div className="teaching-actions">
         {card.status === "streaming" && <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "cancelModelWork" }).then(onState)}>Stop teaching</button>}
         {card.retryable && modelAvailable && <button className="primary" onClick={() => void window.quickStudy.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
-        {card.status === "completed" && modelAvailable && !agentTask && <button className="secondary"
-          onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview" }).then(onState)}>
-          Request Specialist Agent review
-        </button>}
+        {card.status === "completed" && modelAvailable && !agentTask && <fieldset>
+          <legend>Specialist review plan</legend>
+          <p className="subtle">Choose parallel work only for independent perspectives; use sequential review when the second brief needs the first result.</p>
+          <button className="secondary"
+            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "single" }).then(onState)}>
+            One bounded review
+          </button>
+          <button className="secondary"
+            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "dependent" }).then(onState)}>
+            Sequential review then challenge
+          </button>
+          <button className="secondary"
+            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "independent" }).then(onState)}>
+            Two independent perspectives
+          </button>
+        </fieldset>}
       </div>
     </section>
     {agentTask && <AgentTaskStatusCard task={agentTask} modelAvailable={modelAvailable} onState={onState} />}

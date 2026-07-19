@@ -27,9 +27,10 @@ import { coordinateAgentTasks } from "./agent-task-coordinator";
 export type { SessionAccessPolicy } from "./session-access";
 
 const MAX_TEACHING_SOURCE_CONTEXT_CHARACTERS = 60_000;
-// Versioned continuation of issue #22's bounded Specialist Agent fixture. Reasoning preferences do not
-// invent distinct latency/token thresholds before supported-macOS measurements establish them.
-const BOUNDED_SPECIALIST_BUDGET_V1 = Object.freeze({ maxTokens: 2_048, maxLatencyMs: 120_000 });
+// Preserve issue #22's shipped numeric safety bounds while the broader supported-macOS benchmark work
+// in parent issue #2 remains pending. #23 applies the token number to runtime-reported total use, making
+// the inherited bound deliberately conservative instead of presenting it as an empirical universal threshold.
+const BOUNDED_SPECIALIST_BUDGET_V1 = Object.freeze({ maxTokens: 512, maxLatencyMs: 120_000 });
 
 export type SessionStatus = "active" | "paused" | "consolidated";
 export type TargetDisposition = "addressed" | "deferred" | "unresolved";
@@ -299,7 +300,12 @@ export interface AgentWorkLogEvidence {
 }
 
 export type AgentTaskStatus = "working" | "waiting" | "failed" | "stopped" | "complete";
-export type AgentTaskCoordination = "single" | "dependent" | "independent";
+export const AGENT_TASK_COORDINATIONS = ["single", "dependent", "independent"] as const;
+export type AgentTaskCoordination = typeof AGENT_TASK_COORDINATIONS[number];
+
+export function isAgentTaskCoordination(value: unknown): value is AgentTaskCoordination {
+  return AGENT_TASK_COORDINATIONS.includes(value as AgentTaskCoordination);
+}
 
 export interface AgentTask {
   id: string;
@@ -1269,6 +1275,14 @@ export class LearningApplication {
       this.state.authentication = failedAuthentication(null, error);
       this.applyModelAccessFailure(error);
     }
+    try {
+      this.state.runtimeCapabilities = validatedRuntimeCapabilities(await modelRuntime.getCapabilities());
+    } catch (error) {
+      this.applyModelAccessFailure(new ModelAccessError(
+        "runtime",
+        `Codex Runtime could not report supported model choices. ${usefulRuntimeError(error)}`
+      ));
+    }
     return this.publishAndPersist();
   }
 
@@ -2211,7 +2225,14 @@ export class LearningApplication {
           throw new Error("This Learning Session already has its bounded Specialist Agent review.");
         }
         const coordination = action.coordination ?? "single";
-        const task = createSpecialistReviewTask(session, selectAgentBudget(session, coordination), coordination);
+        if (!isAgentTaskCoordination(coordination)) {
+          throw new Error("Choose single, dependent, or independent Specialist Agent coordination.");
+        }
+        const task = createSpecialistReviewTask(
+          session,
+          selectAgentBudget(session, coordination, this.state.runtimeCapabilities),
+          coordination
+        );
         session.agentTasks.push(task);
         session.activeAgentTaskId = task.id;
         this.beginSpecialistAgentTask(session, task);
@@ -3120,7 +3141,7 @@ export class LearningApplication {
     const stage = roadmap?.stages.find((candidate) => candidate.id === session.learningSlice?.stageId) ?? null;
     const promise = runtime.streamTeaching({
       sessionId: session.id,
-      runtimeSelection: selectTeachingRuntime(session),
+      runtimeSelection: selectTeachingRuntime(session, this.state.runtimeCapabilities),
       mathematics,
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
@@ -5994,8 +6015,12 @@ function validatedRuntimeCapabilities(value: unknown): ModelRuntimeCapabilities 
   return structuredClone(value) as unknown as ModelRuntimeCapabilities;
 }
 
-function selectAgentBudget(session: LearningSession, coordination: AgentTaskCoordination): AgentBudget {
-  const runtimeSelection = selectTeachingRuntime(session);
+function selectAgentBudget(
+  session: LearningSession,
+  coordination: AgentTaskCoordination,
+  capabilities: ModelRuntimeCapabilities
+): AgentBudget {
+  const runtimeSelection = selectTeachingRuntime(session, capabilities);
   const agentCount = coordination === "single" ? 1 : 2;
   return {
     agentCount,
@@ -6008,11 +6033,27 @@ function selectAgentBudget(session: LearningSession, coordination: AgentTaskCoor
   };
 }
 
-function selectTeachingRuntime(session: LearningSession): TeachingRequest["runtimeSelection"] {
+function selectTeachingRuntime(
+  session: LearningSession,
+  capabilities: ModelRuntimeCapabilities
+): TeachingRequest["runtimeSelection"] {
+  if (session.runtimeOverride) return structuredClone(session.runtimeOverride);
   const automaticEffort = ({ faster: "low", balanced: "medium", deeper: "high" } as const)[session.reasoningPreference];
+  const defaultModel = capabilities.models.find((model) => model.isDefault);
+  if (!defaultModel) throw new Error("Codex Runtime did not advertise one default model.");
+  if (defaultModel.supportedReasoningEfforts.includes(automaticEffort)) {
+    return { model: "runtimeDefault", reasoningEffort: automaticEffort };
+  }
+  const supportingModel = capabilities.models.find((model) => model.supportedReasoningEfforts.includes(automaticEffort));
+  if (supportingModel) return { model: supportingModel.model, reasoningEffort: automaticEffort };
+  const safeFallback = (["medium", "low", "high", "minimal", "none", "xhigh"] as const)
+    .find((effort) => defaultModel.supportedReasoningEfforts.includes(effort));
+  if (!safeFallback) {
+    throw new Error("The default Codex Runtime model advertises only maximum reasoning choices; choose an advanced Runtime Override explicitly.");
+  }
   return {
-    model: session.runtimeOverride?.model ?? "runtimeDefault",
-    reasoningEffort: session.runtimeOverride?.reasoningEffort ?? automaticEffort
+    model: "runtimeDefault",
+    reasoningEffort: safeFallback
   };
 }
 

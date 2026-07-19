@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import {
   isSourceAnchorPaletteAction,
   isSourceAnchorSelection,
+  isAgentTaskCoordination,
   isTrailItemKind,
   LearningApplication,
   type LearnerAction
@@ -79,13 +80,15 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "confirmSessionProposal":
     case "cancelModelWork":
     case "retryModelWork":
-    case "requestSpecialistReview":
     case "startChatGptLogin":
     case "refreshAuthentication":
     case "discardPendingQuestion":
     case "submitPendingQuestion":
     case "returnToPrerequisiteOrigin":
       return true;
+    case "requestSpecialistReview":
+      return !("coordination" in action) || action.coordination === undefined
+        || isAgentTaskCoordination(action.coordination);
     case "retryAgentTask":
       return "taskId" in action && typeof action.taskId === "string";
     case "resumeSession":

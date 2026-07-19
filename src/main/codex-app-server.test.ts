@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRuntime, type AppServerTransport } from "./codex-app-server";
 
 describe("Codex app-server contract", () => {
@@ -606,6 +606,60 @@ describe("Codex app-server contract", () => {
     expect(transport.messages).toContainEqual(expect.objectContaining({
       method: "turn/interrupt", params: { threadId: "budget-thread", turnId: "budget-turn" }
     }));
+  });
+
+  it("interrupts every concurrent Specialist Agent turn owned by one Learning Session", async () => {
+    let nextThread = 0;
+    let nextTurn = 0;
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") {
+        nextThread += 1;
+        const id = `parallel-thread-${nextThread}`;
+        transport.respond(message.id, { thread: { id } });
+      }
+      if (message.method === "turn/start") {
+        nextTurn += 1;
+        transport.respond(message.id, { turn: { id: `parallel-turn-${nextTurn}` } });
+      }
+      if (message.method === "turn/interrupt") {
+        transport.respond(message.id, {});
+        const params = message.params as { threadId: string; turnId: string };
+        queueMicrotask(() => transport.notify("turn/completed", {
+          threadId: params.threadId,
+          turn: { id: params.turnId, status: "interrupted", error: null }
+        }));
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    const specialistRequest = () => runtime.runSpecialistAgent({
+      sessionId: "parallel-session", purpose: "Independent bounded review",
+      brief: {
+        learningGoal: "Check the proof", sourceAnchors: [], constraints: ["Review independently."],
+        learnerEvidence: [], expectedOutput: "One concise card.", verificationNeeds: ["Identify assumptions."]
+      },
+      budget: {
+        agentCount: 2, concurrency: 2, model: "runtimeDefault", reasoningEffort: "medium",
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
+      },
+      signal: new AbortController().signal, onStatus: () => undefined, onPartialResult: () => undefined
+    });
+    const reviews = [specialistRequest(), specialistRequest()];
+    await vi.waitFor(() => expect(transport.messages.filter((message) => message.method === "turn/start")).toHaveLength(2));
+
+    await runtime.cancelTeaching("parallel-session");
+    await Promise.allSettled(reviews);
+
+    expect(transport.messages.filter((message) => message.method === "turn/interrupt").map((message) => message.params))
+      .toEqual(expect.arrayContaining([
+        { threadId: "parallel-thread-1", turnId: "parallel-turn-1" },
+        { threadId: "parallel-thread-2", turnId: "parallel-turn-2" }
+      ]));
   });
 
   it("interrupts active teaching and shuts down the stdio transport", async () => {

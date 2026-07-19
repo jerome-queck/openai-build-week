@@ -493,9 +493,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
     if (!this.activeTeachingTurns.has(sessionId)) {
       await this.teachingStartSignals.get(sessionId)?.promise;
     }
-    const active = this.activeTeachingTurns.get(sessionId);
-    if (!active) return;
-    await this.client.request("turn/interrupt", active);
+    const active = [...(this.activeTeachingTurns.get(sessionId)?.values() ?? [])];
+    await Promise.all(active.map((turn) => this.client.request("turn/interrupt", turn)));
   }
 
   async shutdown(): Promise<void> {
@@ -593,10 +592,11 @@ export class CodexAppServerRuntime implements ModelRuntime {
         budgetExceeded: false
       });
       this.turnRegistrationWaiters.get(turnResponse.turn.id)?.();
-      if (sessionId) this.activeTeachingTurns.set(sessionId, {
-        threadId: threadResponse.thread.id,
-        turnId: turnResponse.turn.id
-      });
+      if (sessionId) {
+        const active = this.activeTeachingTurns.get(sessionId) ?? new Map<string, { threadId: string; turnId: string }>();
+        active.set(turnResponse.turn.id, { threadId: threadResponse.thread.id, turnId: turnResponse.turn.id });
+        this.activeTeachingTurns.set(sessionId, active);
+      }
       if (sessionId) this.teachingStartSignals.get(sessionId)?.resolve();
       for (const notification of this.earlyTurnNotifications.get(turnResponse.turn.id) ?? []) {
         this.receiveNotification(notification);
@@ -605,7 +605,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     });
   }
 
-  private readonly activeTeachingTurns = new Map<string, { threadId: string; turnId: string }>();
+  private readonly activeTeachingTurns = new Map<string, Map<string, { threadId: string; turnId: string }>>();
 
   private async handleDynamicToolCall(params: unknown): Promise<unknown> {
     if (isRecord(params) && params.tool === "checkpoint_specialist_result") {
@@ -722,9 +722,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     }
     this.turns.delete(params.turn.id);
     clearTimeout(turn.timeout);
-    for (const [sessionId, active] of this.activeTeachingTurns) {
-      if (active.turnId === params.turn.id) this.activeTeachingTurns.delete(sessionId);
-    }
+    this.removeActiveTeachingTurn(params.turn.id);
     if (params.turn.status === "completed") {
       turn.onRuntimeEvent?.({
         type: "turnCompleted",
@@ -790,7 +788,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
 
   private removeActiveTeachingTurn(turnId: string): void {
     for (const [sessionId, active] of this.activeTeachingTurns) {
-      if (active.turnId === turnId) this.activeTeachingTurns.delete(sessionId);
+      active.delete(turnId);
+      if (active.size === 0) this.activeTeachingTurns.delete(sessionId);
     }
   }
 }

@@ -3109,7 +3109,7 @@ describe("Learning Application", () => {
         identifiedNeed: expect.objectContaining({ kind: "hiddenAssumptionReview", requestedBy: "learner" }),
         budget: {
           agentCount: 1, concurrency: 1, model: "runtimeDefault", reasoningEffort: "medium",
-          tools: ["checkpointSpecialistResult"], maxTokens: 2_048, maxLatencyMs: 120_000
+          tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
         },
         integratedTeachingCard: expect.objectContaining({ status: "streaming", content: "" })
       })
@@ -3138,9 +3138,9 @@ describe("Learning Application", () => {
 
   it("uses each Reasoning Preference to select an inspectable automatic Agent Budget", async () => {
     const expected = {
-      faster: { reasoningEffort: "low", maxTokens: 2_048, maxLatencyMs: 120_000 },
-      balanced: { reasoningEffort: "medium", maxTokens: 2_048, maxLatencyMs: 120_000 },
-      deeper: { reasoningEffort: "high", maxTokens: 2_048, maxLatencyMs: 120_000 }
+      faster: { model: "runtimeDefault", reasoningEffort: "low", maxTokens: 512, maxLatencyMs: 120_000 },
+      balanced: { model: "runtimeDefault", reasoningEffort: "medium", maxTokens: 512, maxLatencyMs: 120_000 },
+      deeper: { model: "codex-deep", reasoningEffort: "high", maxTokens: 512, maxLatencyMs: 120_000 }
     } as const;
     for (const preference of ["faster", "balanced", "deeper"] as const) {
       const runtime = new DeterministicModelRuntime({
@@ -3158,13 +3158,13 @@ describe("Learning Application", () => {
       await application.submit({ type: "setReasoningPreference", preference });
       await application.submit({ type: "submitQuestion", text: "Which assumption controls the separation step?" });
       expect(runtime.teachingRequests.at(-1)?.runtimeSelection).toEqual({
-        model: "runtimeDefault", reasoningEffort: expected[preference].reasoningEffort
+        model: expected[preference].model, reasoningEffort: expected[preference].reasoningEffort
       });
       expect(runtime.teachingRequests.at(-1)?.runtimeSelection.reasoningEffort).not.toBe("max");
       runtime.completeTeaching();
       await application.waitForModelWork();
       const state = await application.submit({ type: "requestSpecialistReview" });
-      expect(state.sessions[0].agentTasks[0].budget).toMatchObject({ model: "runtimeDefault", ...expected[preference] });
+      expect(state.sessions[0].agentTasks[0].budget).toMatchObject(expected[preference]);
       expect(state.sessions[0].agentTasks[0].budget.reasoningEffort).not.toBe("max");
       runtime.completeSpecialist({ title: "Review", content: "The Hausdorff assumption is required." });
       await application.waitForModelWork();
@@ -3244,6 +3244,23 @@ describe("Learning Application", () => {
       status: "complete",
       integratedTeachingCard: { status: "completed", content: expect.stringContaining("Without Hausdorff separation") }
     });
+  });
+
+  it("rejects an unrecognized Specialist Agent coordination value at the application boundary", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check the proof", scope: "Inspect assumptions", initialTeachingDirection: "Read the step",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Review this proof." });
+    runtime.emitTeaching("The proof chooses disjoint neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+
+    await expect(application.submit({
+      type: "requestSpecialistReview", coordination: "unbounded-swarm"
+    } as never)).rejects.toThrow("Choose single, dependent, or independent");
+    expect(application.getState().sessions[0].agentTasks).toEqual([]);
   });
 
   it("starts genuinely independent Specialist Agents concurrently within the Agent Budget", async () => {
@@ -3788,7 +3805,11 @@ describe("Learning Application", () => {
 
     state = await application.restoreModelRuntime(runtime);
 
-    expect(state).toMatchObject({ runtimeAvailable: true, modelAccess: { status: "available" } });
+    expect(state).toMatchObject({
+      runtimeAvailable: true,
+      modelAccess: { status: "available" },
+      runtimeCapabilities: runtime.capabilities
+    });
     expect(state.sessions[0].pendingQuestion).toMatchObject({ text: "Where is finiteness used?" });
     expect(runtime.teachingRequests).toHaveLength(0);
   });
