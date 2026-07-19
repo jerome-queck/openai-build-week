@@ -1,6 +1,6 @@
 import { chromium, expect, test, type Browser, type Page } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +17,9 @@ const executablePath = join(
 
 test("packaged Quick Study organizes durable work and resumes the latest session", async () => {
   test.setTimeout(180_000);
+  const packagedManifest = join(executablePath, "..", "..", "Resources", "verifiers",
+    "lean-4.29.1-mathlib-4.29.1-quick-study-v1", "manifest.json");
+  expect((await stat(packagedManifest)).mode & 0o222).toBe(0);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-smoke-"));
   const sourceDirectory = await mkdtemp(join(tmpdir(), "quick-study-source-"));
   const primaryFolderPath = join(sourceDirectory, "algebra-course");

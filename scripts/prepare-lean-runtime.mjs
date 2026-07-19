@@ -14,7 +14,6 @@ const release = specification.releases[process.arch];
 const verifiersDirectory = join(projectRoot, "dist", "verifiers");
 const destination = join(verifiersDirectory, specification.id);
 if (await preparedRuntimeIsCurrent(destination)) {
-  await makeFilesReadOnly(destination);
   process.exit(0);
 }
 
@@ -87,7 +86,6 @@ await writeFile(join(staging, "manifest.json"), `${JSON.stringify({
 if (!await preparedRuntimeIsCurrent(staging)) {
   throw new Error("Staged Verification Environment failed version, manifest, or real-proof validation.");
 }
-await makeFilesReadOnly(staging);
 
 const backup = `${destination}.superseded-${process.pid}`;
 let hadDestination = false;
@@ -192,14 +190,6 @@ async function collectCompiledFiles(directory, sourceRoot, paths) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await collectCompiledFiles(path, sourceRoot, paths);
     else if (entry.name.includes(".olean") || entry.name.endsWith(".ir")) paths.push(relative(sourceRoot, path));
-  }
-}
-
-async function makeFilesReadOnly(directory) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) await makeFilesReadOnly(path);
-    else await chmod(path, path.endsWith(join("bin", "lean")) ? 0o555 : 0o444);
   }
 }
 
