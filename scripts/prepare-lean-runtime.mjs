@@ -13,10 +13,6 @@ if (process.platform !== "darwin" || !(process.arch in specification.releases)) 
 const release = specification.releases[process.arch];
 const verifiersDirectory = join(projectRoot, "dist", "verifiers");
 const destination = join(verifiersDirectory, specification.id);
-if (await preparedRuntimeIsCurrent(destination)) {
-  process.exit(0);
-}
-
 const cacheDirectory = join(projectRoot, "node_modules", ".cache", "quick-study-lean");
 const archivePath = join(cacheDirectory, release.archive);
 const extractionDirectory = join(cacheDirectory, `${specification.id}-${process.arch}-extracted`);
@@ -24,6 +20,11 @@ const mathlibSourceDirectory = join(cacheDirectory, `mathlib-source-${specificat
 const mathlibWorkingDirectory = join(cacheDirectory, `.mathlib-work-${process.pid}`);
 const staging = join(verifiersDirectory, `.${specification.id}.staging-${process.pid}`);
 await mkdir(cacheDirectory, { recursive: true });
+await removeAbandonedMathlibWorktrees(cacheDirectory);
+if (await preparedRuntimeIsCurrent(destination)) {
+  process.exit(0);
+}
+
 await mkdir(verifiersDirectory, { recursive: true });
 for (const entry of await readdir(verifiersDirectory, { withFileTypes: true })) {
   if (entry.isDirectory() && entry.name.startsWith(`.${specification.id}.staging-`)) {
@@ -110,10 +111,29 @@ try {
 }
 await rm(backup, { recursive: true, force: true });
 await rm(mathlibWorkingDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
-  .catch((error) => console.warn(`Validated environment activated; temporary mathlib cleanup will be retried by the operating system: ${error.message}`));
+  .catch((error) => console.warn(`Validated environment activated; temporary mathlib worktree retained at ${mathlibWorkingDirectory} and will be removed by a later build: ${error.message}`));
 for (const entry of await readdir(verifiersDirectory, { withFileTypes: true })) {
   if (entry.isDirectory() && !entry.name.startsWith(".") && entry.name !== specification.id) {
     await rm(join(verifiersDirectory, entry.name), { recursive: true, force: true });
+  }
+}
+
+async function removeAbandonedMathlibWorktrees(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const match = /^\.mathlib-work-(\d+)$/.exec(entry.name);
+    if (!entry.isDirectory() || !match || processIsRunning(Number(match[1]))) continue;
+    const path = join(directory, entry.name);
+    await rm(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+      .catch((error) => console.warn(`Could not remove abandoned mathlib worktree ${path}; a later build will retry: ${error.message}`));
+  }
+}
+
+function processIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
   }
 }
 
