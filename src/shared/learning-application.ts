@@ -223,6 +223,87 @@ export interface TeachingCardState {
   retryable: boolean;
 }
 
+export const UNDERSTANDING_CHECK_KINDS = ["explain", "apply", "compare", "diagnose", "continueReasoning"] as const;
+export type UnderstandingCheckKind = typeof UNDERSTANDING_CHECK_KINDS[number];
+export const TEACHING_ROUTES = ["visual", "symbolic", "exampleFirst", "proofStructural"] as const;
+export type TeachingRoute = typeof TEACHING_ROUTES[number];
+export type UnderstandingInterpretation = "specificGap" | "secureUnderstanding" | "excessivePace";
+export type TeachingMoveKind = "explain" | "demonstrate" | "apply" | "compare" | "slowDown" | "visualize";
+
+interface TeachingContext {
+  concept: string;
+  task: string;
+}
+
+const UNDERSTANDING_INTERPRETATION_POLICIES: Record<UnderstandingInterpretation, {
+  kind: TeachingMoveKind;
+  summary: string;
+  signal: string;
+  direction: string;
+}> = {
+  specificGap: {
+    kind: "demonstrate", summary: "specific gap", signal: "a specific gap", direction: "demonstrate the missing reasoning step"
+  },
+  secureUnderstanding: {
+    kind: "apply", summary: "secure understanding", signal: "secure understanding", direction: "move to an application or comparison"
+  },
+  excessivePace: {
+    kind: "slowDown", summary: "excessive pace", signal: "excessive pace", direction: "slow down and make the route explicit"
+  }
+};
+
+export interface TeachingMove {
+  id: string;
+  kind: TeachingMoveKind;
+  route: TeachingRoute;
+  reason: string;
+  evidenceIds: string[];
+  experimentId: string | null;
+}
+
+export interface UnderstandingCheck {
+  id: string;
+  kind: UnderstandingCheckKind;
+  prompt: string;
+  concept: string;
+  representation: TeachingRoute;
+  sourceContext: { sourceAnchorId: string | null; sourceIds: string[] };
+  teachingMoveId: string;
+  status: "offered" | "answered" | "skipped";
+}
+
+export interface UnderstandingEvidence {
+  id: string;
+  checkId: string;
+  response: string;
+  concept: string;
+  task: string;
+  representation: TeachingRoute;
+  sourceContext: UnderstandingCheck["sourceContext"];
+  elicitingTeachingMoveId: string;
+  interpretation: UnderstandingInterpretation;
+  learnerCorrection: string | null;
+}
+
+export interface TeachingExperiment {
+  id: string;
+  route: TeachingRoute;
+  reason: string;
+  context: TeachingContext;
+  evidenceIds: string[];
+  status: "active" | "completed";
+  outcome: "helpful" | "notHelpful" | "inconclusive" | null;
+}
+
+export interface InteractionPreference {
+  id: string;
+  route: TeachingRoute;
+  context: TeachingContext;
+  status: "supported" | "notSupported" | "uncertain";
+  evidenceIds: string[];
+  experimentId: string;
+}
+
 export interface TeachingCardRevision extends TeachingCardState {
   id: string;
   instruction: string;
@@ -807,6 +888,12 @@ export interface LearningSession {
     status: "accepted" | "awaitingConfirmation";
     confirmationReason: string | null;
   };
+  teachingMoves: TeachingMove[];
+  currentTeachingMove: TeachingMove;
+  understandingChecks: UnderstandingCheck[];
+  understandingEvidence: UnderstandingEvidence[];
+  teachingExperiments: TeachingExperiment[];
+  interactionPreferences: InteractionPreference[];
   teachingCard: TeachingCardState;
   teachingCardHistory: TeachingCardState[];
   submittedPendingQuestions: SubmittedPendingQuestion[];
@@ -918,6 +1005,33 @@ export type LearnerAction =
   | { type: "resumeAgentTask"; taskId: string }
   | { type: "setReasoningPreference"; preference: ReasoningPreference }
   | { type: "setRuntimeOverride"; override: RuntimeOverride | null }
+  | {
+      type: "offerUnderstandingCheck";
+      kind: UnderstandingCheckKind;
+      prompt: string;
+      concept: string;
+      representation: TeachingRoute;
+      sourceAnchorId?: string;
+    }
+  | { type: "skipUnderstandingCheck"; checkId: string }
+  | {
+      type: "recordUnderstandingEvidence";
+      checkId: string;
+      response: string;
+      interpretation: UnderstandingInterpretation;
+    }
+  | { type: "startTeachingExperiment"; route: TeachingRoute; reason: string }
+  | {
+      type: "completeTeachingExperiment";
+      experimentId: string;
+      outcome: Exclude<TeachingExperiment["outcome"], null>;
+    }
+  | {
+      type: "correctUnderstandingEvidence";
+      evidenceId: string;
+      interpretation: UnderstandingInterpretation;
+      correction: string;
+    }
   | { type: "startChatGptLogin" }
   | { type: "loginWithApiKey"; apiKey: string }
   | { type: "refreshAuthentication" }
@@ -2241,6 +2355,126 @@ export class LearningApplication {
         };
         this.state.missions.push(mission);
         this.state.navigation = { workspaceId: action.workspaceId, missionId: mission.id };
+        break;
+      }
+      case "offerUnderstandingCheck": {
+        const session = this.requireActiveSession();
+        if (!canOfferUnderstandingCheck(session)) {
+          throw new Error("Complete a substantive Teaching Card before offering an Understanding Check.");
+        }
+        if (!isUnderstandingCheckKind(action.kind)) throw new Error("Choose a reasoning-focused Understanding Check.");
+        const representation = requireTeachingRoute(action.representation);
+        const sourceAnchorId = action.sourceAnchorId ?? session.activeSourceAnchorId;
+        if (sourceAnchorId) requireSourceAnchor(session, sourceAnchorId);
+        if (session.understandingChecks.some((check) => check.status === "offered")) {
+          throw new Error("Respond to or skip the current Understanding Check before offering another.");
+        }
+        const sourceIds = sourceAnchorId
+          ? [requireSourceAnchor(session, sourceAnchorId).sourceId]
+          : [...session.sourceIds];
+        session.understandingChecks.push({
+          id: crypto.randomUUID(),
+          kind: action.kind,
+          prompt: requiredText(action.prompt, "Understanding Check prompt"),
+          concept: requiredName(action.concept, "Understanding Check concept"),
+          representation,
+          sourceContext: { sourceAnchorId: sourceAnchorId ?? null, sourceIds },
+          teachingMoveId: session.currentTeachingMove.id,
+          status: "offered"
+        });
+        break;
+      }
+      case "skipUnderstandingCheck": {
+        const session = this.requireActiveSession();
+        const check = requireUnderstandingCheck(session, action.checkId);
+        if (check.status !== "offered") throw new Error("This Understanding Check was already completed or skipped.");
+        check.status = "skipped";
+        break;
+      }
+      case "recordUnderstandingEvidence": {
+        const session = this.requireActiveSession();
+        const check = requireUnderstandingCheck(session, action.checkId);
+        if (check.status !== "offered") throw new Error("This Understanding Check was already completed or skipped.");
+        const interpretation = requireUnderstandingInterpretation(action.interpretation);
+        const evidence: UnderstandingEvidence = {
+          id: crypto.randomUUID(),
+          checkId: check.id,
+          response: requiredText(action.response, "Understanding Check response"),
+          concept: check.concept,
+          task: session.sessionTarget,
+          representation: check.representation,
+          sourceContext: structuredClone(check.sourceContext),
+          elicitingTeachingMoveId: check.teachingMoveId,
+          interpretation,
+          learnerCorrection: null
+        };
+        check.status = "answered";
+        session.understandingEvidence.push(evidence);
+        setAdaptiveTeachingMove(session, evidence, "Understanding Evidence indicates");
+        upsertUnderstandingEvidenceTrailItem(session, evidence);
+        break;
+      }
+      case "startTeachingExperiment": {
+        const session = this.requireActiveSession();
+        if (session.teachingExperiments.some((experiment) => experiment.status === "active")) {
+          throw new Error("Complete the active Teaching Experiment before starting another route.");
+        }
+        const route = requireTeachingRoute(action.route);
+        const latestEvidence = session.understandingEvidence.at(-1) ?? null;
+        const experiment: TeachingExperiment = {
+          id: crypto.randomUUID(),
+          route,
+          reason: requiredText(action.reason, "Teaching Experiment reason"),
+          context: {
+            concept: latestEvidence?.concept ?? session.learningGoal,
+            task: latestEvidence?.task ?? session.sessionTarget
+          },
+          evidenceIds: latestEvidence ? [latestEvidence.id] : [],
+          status: "active",
+          outcome: null
+        };
+        session.teachingExperiments.push(experiment);
+        appendTeachingMove(session, {
+          kind: teachingMoveKindForRoute(route),
+          route,
+          reason: `Teaching Experiment: ${experiment.reason}`,
+          evidenceIds: experiment.evidenceIds,
+          experimentId: experiment.id
+        });
+        break;
+      }
+      case "completeTeachingExperiment": {
+        const session = this.requireActiveSession();
+        const experiment = session.teachingExperiments.find((candidate) => candidate.id === action.experimentId);
+        if (!experiment || experiment.status !== "active") throw new Error("Choose an active Teaching Experiment.");
+        if (!isTeachingExperimentOutcome(action.outcome)) throw new Error("Choose the Teaching Experiment outcome.");
+        experiment.status = "completed";
+        experiment.outcome = action.outcome;
+        session.interactionPreferences.push({
+          id: crypto.randomUUID(),
+          route: experiment.route,
+          context: structuredClone(experiment.context),
+          status: interactionPreferenceStatus(action.outcome),
+          evidenceIds: [...experiment.evidenceIds],
+          experimentId: experiment.id
+        });
+        appendTeachingMove(session, {
+          kind: teachingMoveKindForRoute(experiment.route),
+          route: experiment.route,
+          reason: `The ${experiment.route} Teaching Experiment was ${teachingExperimentOutcomeLabel(action.outcome)} for this context.`,
+          evidenceIds: experiment.evidenceIds,
+          experimentId: experiment.id
+        });
+        break;
+      }
+      case "correctUnderstandingEvidence": {
+        const session = this.requireActiveSession();
+        const evidence = session.understandingEvidence.find((candidate) => candidate.id === action.evidenceId);
+        if (!evidence) throw new Error("Choose Understanding Evidence from the active Learning Session.");
+        evidence.interpretation = requireUnderstandingInterpretation(action.interpretation);
+        evidence.learnerCorrection = requiredText(action.correction, "Understanding Evidence correction");
+        setAdaptiveTeachingMove(session, evidence, "The learner corrected this Understanding Evidence; it now indicates");
+        upsertUnderstandingEvidenceTrailItem(session, evidence);
         break;
       }
       case "resolveReanchoring": {
@@ -4157,6 +4391,11 @@ export class LearningApplication {
       learningGoal: session.learningGoal,
       scope: session.proposal.scope,
       initialTeachingDirection: session.proposal.initialTeachingDirection,
+      adaptiveTeaching: {
+        kind: session.currentTeachingMove.kind,
+        route: session.currentTeachingMove.route,
+        reason: session.currentTeachingMove.reason
+      },
       corroboration: teachingCorroborationContext(corroborationPass),
       ...(roadmap && stage && session.learningSlice ? {
         learningSlice: {
@@ -5855,6 +6094,12 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       ...session,
       sourceIds: session.sourceIds ?? [],
       proposal: session.proposal ?? defaultAcceptedProposal(),
+      teachingMoves: migrateTeachingMoves(session.teachingMoves, session.id, session.proposal ?? defaultAcceptedProposal()),
+      currentTeachingMove: migrateCurrentTeachingMove(session.currentTeachingMove, session.teachingMoves, session.id, session.proposal ?? defaultAcceptedProposal()),
+      understandingChecks: migrateUnderstandingChecks(session.understandingChecks),
+      understandingEvidence: migrateUnderstandingEvidence(session.understandingEvidence),
+      teachingExperiments: migrateTeachingExperiments(session.teachingExperiments),
+      interactionPreferences: migrateInteractionPreferences(session.interactionPreferences),
       teachingCard: session.teachingCard ?? emptyTeachingCard(),
       teachingCardHistory: session.teachingCardHistory ?? [],
       submittedPendingQuestions: session.submittedPendingQuestions ?? [],
@@ -5897,6 +6142,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     attachManagedSourcesToLegacySessions(current);
     for (const session of current.sessions) {
       validateSessionSourceAnchorReferences(current, session);
+      validateAdaptiveTeachingReferences(session);
       validateQuestionCardReferences(current, session);
       validateAgentTaskReferences(session);
       refreshAskBarContext(current, session);
@@ -5920,6 +6166,12 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       status: "paused",
       activityOrder: 1,
       proposal: defaultAcceptedProposal(),
+      teachingMoves: [],
+      currentTeachingMove: initialTeachingMove(defaultAcceptedProposal().initialTeachingDirection),
+      understandingChecks: [],
+      understandingEvidence: [],
+      teachingExperiments: [],
+      interactionPreferences: [],
       teachingCard: emptyTeachingCard(),
       teachingCardHistory: [],
       submittedPendingQuestions: [],
@@ -5956,6 +6208,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       verifierEnvironmentPinId: null
     };
     migrated.sessions.push(session);
+    session.teachingMoves = [session.currentTeachingMove];
     attachManagedSourcesToLegacySessions(migrated);
     validateSessionSourceAnchorReferences(migrated, session);
     validatePrerequisiteBranchReferences(migrated);
@@ -6846,8 +7099,15 @@ type NewLearningSession = Pick<LearningSession,
 >>;
 
 function createLearningSession(details: NewLearningSession): LearningSession {
+  const initialMove = initialTeachingMove(details.proposal.initialTeachingDirection);
   return {
     ...details,
+    teachingMoves: [initialMove],
+    currentTeachingMove: initialMove,
+    understandingChecks: [],
+    understandingEvidence: [],
+    teachingExperiments: [],
+    interactionPreferences: [],
     teachingCard: emptyTeachingCard(),
     teachingCardHistory: [],
     submittedPendingQuestions: [],
@@ -6883,6 +7143,91 @@ function createLearningSession(details: NewLearningSession): LearningSession {
     runtimeOverride: null,
     verifierEnvironmentPinId: null
   };
+}
+
+function initialTeachingMove(direction: string): TeachingMove {
+  return {
+    id: crypto.randomUUID(),
+    kind: "explain",
+    route: "proofStructural",
+    reason: `Begin with the current teaching direction: ${direction}`,
+    evidenceIds: [],
+    experimentId: null
+  };
+}
+
+function appendTeachingMove(session: LearningSession, move: Omit<TeachingMove, "id">): void {
+  const next = { id: crypto.randomUUID(), ...move };
+  session.teachingMoves.push(next);
+  session.currentTeachingMove = next;
+}
+
+function setAdaptiveTeachingMove(
+  session: LearningSession,
+  evidence: UnderstandingEvidence,
+  prefix: string
+): void {
+  const policy = UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation];
+  appendTeachingMove(session, {
+    kind: policy.kind,
+    route: evidence.representation,
+    reason: `${prefix} ${policy.signal} in ${evidence.concept}; ${policy.direction}.`,
+    evidenceIds: [evidence.id],
+    experimentId: null
+  });
+}
+
+function understandingEvidenceSummary(evidence: UnderstandingEvidence): string {
+  return `Understanding Evidence for ${evidence.concept}: ${UNDERSTANDING_INTERPRETATION_POLICIES[evidence.interpretation].summary}.`;
+}
+
+export function canOfferUnderstandingCheck(session: LearningSession): boolean {
+  return (session.teachingCard.status === "completed" && Boolean(session.teachingCard.content.trim()))
+    || session.anchoredTeachingCards.some((card) => card.currentRevision.status === "completed"
+      && Boolean(card.currentRevision.content.trim()))
+    || session.questionCards.some((card) => card.currentRevision.status === "completed"
+      && Boolean(card.currentRevision.content.trim()));
+}
+
+function upsertUnderstandingEvidenceTrailItem(session: LearningSession, evidence: UnderstandingEvidence): void {
+  upsertSuggestedTrailItem(session, `understanding-evidence:${evidence.id}`, "evidence", understandingEvidenceSummary(evidence), {
+    ...emptyTrailItemLinks(),
+    sourceAnchorIds: evidence.sourceContext.sourceAnchorId ? [evidence.sourceContext.sourceAnchorId] : [],
+    understandingEvidenceIds: [evidence.id]
+  });
+}
+
+function isUnderstandingCheckKind(value: unknown): value is UnderstandingCheckKind {
+  return UNDERSTANDING_CHECK_KINDS.includes(value as UnderstandingCheckKind);
+}
+
+function requireUnderstandingInterpretation(value: unknown): UnderstandingInterpretation {
+  if (value === "specificGap" || value === "secureUnderstanding" || value === "excessivePace") return value;
+  throw new Error("Choose a contextual Understanding Evidence interpretation.");
+}
+
+function requireTeachingRoute(value: unknown): TeachingRoute {
+  if (TEACHING_ROUTES.includes(value as TeachingRoute)) return value as TeachingRoute;
+  throw new Error("Choose a contextual teaching route.");
+}
+
+function teachingMoveKindForRoute(route: TeachingRoute): TeachingMoveKind {
+  if (route === "visual") return "visualize";
+  if (route === "symbolic") return "compare";
+  if (route === "exampleFirst") return "demonstrate";
+  return "explain";
+}
+
+function isTeachingExperimentOutcome(value: unknown): value is Exclude<TeachingExperiment["outcome"], null> {
+  return value === "helpful" || value === "notHelpful" || value === "inconclusive";
+}
+
+function interactionPreferenceStatus(outcome: Exclude<TeachingExperiment["outcome"], null>): InteractionPreference["status"] {
+  return outcome === "helpful" ? "supported" : outcome === "notHelpful" ? "notSupported" : "uncertain";
+}
+
+function teachingExperimentOutcomeLabel(outcome: Exclude<TeachingExperiment["outcome"], null>): string {
+  return outcome === "helpful" ? "helpful" : outcome === "notHelpful" ? "not helpful" : "inconclusive";
 }
 
 function createSpecialistReviewTask(
@@ -7062,6 +7407,12 @@ function requireTrailItem(session: LearningSession, trailItemId: string): TrailI
   const item = session.trailDraft.items.find((candidate) => candidate.id === trailItemId);
   if (!item) throw new Error("Choose a Trail Item in the active Learning Session.");
   return item;
+}
+
+function requireUnderstandingCheck(session: LearningSession, checkId: string): UnderstandingCheck {
+  const check = session.understandingChecks.find((candidate) => candidate.id === checkId);
+  if (!check) throw new Error("Choose an Understanding Check in the active Learning Session.");
+  return check;
 }
 
 function requireAnchoredTeachingCard(session: LearningSession, cardId: string): AnchoredTeachingCard {
@@ -7725,8 +8076,7 @@ function validTrailItemLinks(value: unknown): value is TrailItemLinks {
     value.teachingCardIds,
     value.learningArtifactIds,
     value.understandingEvidenceIds
-  ].every((identifiers) => Array.isArray(identifiers) && identifiers.every((identifier) => typeof identifier === "string"))
-    && (value.understandingEvidenceIds as unknown[]).length === 0;
+  ].every((identifiers) => Array.isArray(identifiers) && identifiers.every((identifier) => typeof identifier === "string"));
 }
 
 export function isTrailItemKind(value: unknown): value is TrailItemKind {
@@ -8248,6 +8598,165 @@ function migrateRuntimeOverride(value: unknown): RuntimeOverride | null {
     throw new Error("Stored Runtime Override is invalid.");
   }
   return { model: value.model, reasoningEffort: value.reasoningEffort };
+}
+
+function legacyInitialTeachingMove(sessionId: string, proposal: LearningSession["proposal"]): TeachingMove {
+  return {
+    id: `legacy-teaching-move-${sessionId}`,
+    kind: "explain",
+    route: "proofStructural",
+    reason: `Begin with the current teaching direction: ${proposal.initialTeachingDirection}`,
+    evidenceIds: [],
+    experimentId: null
+  };
+}
+
+function migrateTeachingMoves(value: unknown, sessionId: string, proposal: LearningSession["proposal"]): TeachingMove[] {
+  if (value === undefined) return [legacyInitialTeachingMove(sessionId, proposal)];
+  if (!Array.isArray(value) || value.length === 0 || !value.every(validTeachingMove)) {
+    throw new Error("Stored Teaching Moves are invalid.");
+  }
+  return structuredClone(value);
+}
+
+function migrateCurrentTeachingMove(
+  value: unknown,
+  moves: unknown,
+  sessionId: string,
+  proposal: LearningSession["proposal"]
+): TeachingMove {
+  if (value === undefined) {
+    return Array.isArray(moves) && moves.length > 0 ? structuredClone(moves.at(-1) as TeachingMove)
+      : legacyInitialTeachingMove(sessionId, proposal);
+  }
+  if (!validTeachingMove(value)) throw new Error("Stored current Teaching Move is invalid.");
+  return structuredClone(value);
+}
+
+function validTeachingMove(value: unknown): value is TeachingMove {
+  return isRecord(value) && typeof value.id === "string" && Boolean(value.id)
+    && ["explain", "demonstrate", "apply", "compare", "slowDown", "visualize"].includes(String(value.kind))
+    && TEACHING_ROUTES.includes(value.route as TeachingRoute)
+    && typeof value.reason === "string" && Boolean(value.reason.trim())
+    && Array.isArray(value.evidenceIds) && value.evidenceIds.every((id) => typeof id === "string")
+    && (value.experimentId === null || typeof value.experimentId === "string");
+}
+
+function migrateUnderstandingChecks(value: unknown): UnderstandingCheck[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((check) => isRecord(check)
+    && typeof check.id === "string" && isUnderstandingCheckKind(check.kind)
+    && typeof check.prompt === "string" && Boolean(check.prompt.trim())
+    && typeof check.concept === "string" && Boolean(check.concept.trim())
+    && TEACHING_ROUTES.includes(check.representation as TeachingRoute)
+    && isRecord(check.sourceContext)
+    && (check.sourceContext.sourceAnchorId === null || typeof check.sourceContext.sourceAnchorId === "string")
+    && Array.isArray(check.sourceContext.sourceIds) && check.sourceContext.sourceIds.every((id) => typeof id === "string")
+    && typeof check.teachingMoveId === "string"
+    && ["offered", "answered", "skipped"].includes(String(check.status)))) {
+    throw new Error("Stored Understanding Checks are invalid.");
+  }
+  return structuredClone(value) as UnderstandingCheck[];
+}
+
+function migrateUnderstandingEvidence(value: unknown): UnderstandingEvidence[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((evidence) => isRecord(evidence)
+    && typeof evidence.id === "string" && typeof evidence.checkId === "string"
+    && typeof evidence.response === "string" && Boolean(evidence.response.trim())
+    && typeof evidence.concept === "string" && Boolean(evidence.concept.trim())
+    && typeof evidence.task === "string" && Boolean(evidence.task.trim())
+    && TEACHING_ROUTES.includes(evidence.representation as TeachingRoute)
+    && isRecord(evidence.sourceContext)
+    && (evidence.sourceContext.sourceAnchorId === null || typeof evidence.sourceContext.sourceAnchorId === "string")
+    && Array.isArray(evidence.sourceContext.sourceIds) && evidence.sourceContext.sourceIds.every((id) => typeof id === "string")
+    && typeof evidence.elicitingTeachingMoveId === "string"
+    && ["specificGap", "secureUnderstanding", "excessivePace"].includes(String(evidence.interpretation))
+    && (evidence.learnerCorrection === null || typeof evidence.learnerCorrection === "string"))) {
+    throw new Error("Stored Understanding Evidence is invalid.");
+  }
+  return structuredClone(value) as UnderstandingEvidence[];
+}
+
+function migrateTeachingExperiments(value: unknown): TeachingExperiment[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((experiment) => isRecord(experiment)
+    && typeof experiment.id === "string" && TEACHING_ROUTES.includes(experiment.route as TeachingRoute)
+    && typeof experiment.reason === "string" && Boolean(experiment.reason.trim())
+    && validTeachingContext(experiment.context)
+    && Array.isArray(experiment.evidenceIds) && experiment.evidenceIds.every((id) => typeof id === "string")
+    && ["active", "completed"].includes(String(experiment.status))
+    && (experiment.outcome === null || isTeachingExperimentOutcome(experiment.outcome)))) {
+    throw new Error("Stored Teaching Experiments are invalid.");
+  }
+  return structuredClone(value) as TeachingExperiment[];
+}
+
+function migrateInteractionPreferences(value: unknown): InteractionPreference[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || !value.every((preference) => isRecord(preference)
+    && typeof preference.id === "string" && TEACHING_ROUTES.includes(preference.route as TeachingRoute)
+    && validTeachingContext(preference.context)
+    && ["supported", "notSupported", "uncertain"].includes(String(preference.status))
+    && Array.isArray(preference.evidenceIds) && preference.evidenceIds.every((id) => typeof id === "string")
+    && typeof preference.experimentId === "string")) {
+    throw new Error("Stored Interaction Preferences are invalid.");
+  }
+  return structuredClone(value) as InteractionPreference[];
+}
+
+function validTeachingContext(value: unknown): value is TeachingContext {
+  return isRecord(value) && typeof value.concept === "string" && Boolean(value.concept.trim())
+    && typeof value.task === "string" && Boolean(value.task.trim());
+}
+
+function validateAdaptiveTeachingReferences(session: LearningSession): void {
+  const moves = new Map(session.teachingMoves.map((move) => [move.id, move]));
+  const checks = new Map(session.understandingChecks.map((check) => [check.id, check]));
+  const evidence = new Map(session.understandingEvidence.map((item) => [item.id, item]));
+  const experiments = new Map(session.teachingExperiments.map((experiment) => [experiment.id, experiment]));
+  const anchors = new Set(session.sourceAnchors.map((anchor) => anchor.id));
+  const sourceIds = new Set(session.sourceIds);
+  if (moves.size !== session.teachingMoves.length || !moves.has(session.currentTeachingMove.id)
+    || JSON.stringify(moves.get(session.currentTeachingMove.id)) !== JSON.stringify(session.currentTeachingMove)
+    || checks.size !== session.understandingChecks.length || evidence.size !== session.understandingEvidence.length
+    || experiments.size !== session.teachingExperiments.length
+    || session.teachingExperiments.filter((experiment) => experiment.status === "active").length > 1) {
+    throw new Error("Stored adaptive teaching references are invalid.");
+  }
+  for (const check of session.understandingChecks) {
+    if (!moves.has(check.teachingMoveId) || (check.sourceContext.sourceAnchorId !== null && !anchors.has(check.sourceContext.sourceAnchorId))
+      || check.sourceContext.sourceIds.some((sourceId) => !sourceIds.has(sourceId))) {
+      throw new Error("Stored Understanding Check references are invalid.");
+    }
+  }
+  for (const item of session.understandingEvidence) {
+    const check = checks.get(item.checkId);
+    if (!check || check.status !== "answered" || !moves.has(item.elicitingTeachingMoveId)
+      || (item.sourceContext.sourceAnchorId !== null && !anchors.has(item.sourceContext.sourceAnchorId))
+      || item.sourceContext.sourceIds.some((sourceId) => !sourceIds.has(sourceId))) {
+      throw new Error("Stored Understanding Evidence references are invalid.");
+    }
+  }
+  for (const move of session.teachingMoves) {
+    if (move.evidenceIds.some((id) => !evidence.has(id)) || (move.experimentId !== null && !experiments.has(move.experimentId))) {
+      throw new Error("Stored Teaching Move references are invalid.");
+    }
+  }
+  for (const experiment of session.teachingExperiments) {
+    if (experiment.evidenceIds.some((id) => !evidence.has(id))
+      || (experiment.status === "active") !== (experiment.outcome === null)) {
+      throw new Error("Stored Teaching Experiment references are invalid.");
+    }
+  }
+  for (const preference of session.interactionPreferences) {
+    if (!experiments.has(preference.experimentId) || preference.evidenceIds.some((id) => !evidence.has(id))) {
+      throw new Error("Stored Interaction Preference references are invalid.");
+    }
+  }
+  if (session.trailDraft.items.some((item) => item.links.understandingEvidenceIds.some((id) => !evidence.has(id)))) {
+    throw new Error("Stored Trail Item Understanding Evidence references are invalid.");
+  }
 }
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {

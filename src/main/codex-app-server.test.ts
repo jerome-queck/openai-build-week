@@ -240,6 +240,11 @@ describe("Codex app-server contract", () => {
       learningGoal: "Understand the alternating series test",
       scope: "Check decreasing magnitude and zero limit",
       initialTeachingDirection: "Inspect the absolute values first",
+      adaptiveTeaching: {
+        kind: "demonstrate",
+        route: "proofStructural",
+        reason: "Understanding Evidence indicates a specific gap in the finite-subcover step."
+      },
       learningSlice: {
         roadmapTitle: "Convergence test route",
         stageTitle: "Alternating series test",
@@ -259,6 +264,8 @@ describe("Codex app-server contract", () => {
       && JSON.stringify(message.params).includes("Chosen Learning Slice"));
     expect(JSON.stringify(slicedTurn?.params)).toContain("Teach only the chosen Learning Slice");
     expect(JSON.stringify(slicedTurn?.params)).toContain("Future Learning Sessions, not part of this Teaching Card: Error estimate; Application");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Adaptive next Teaching Move: demonstrate through a proofStructural route.");
+    expect(JSON.stringify(slicedTurn?.params)).toContain("Why this move: Understanding Evidence indicates a specific gap");
 
     await runtime.streamTeaching({
       sessionId: "learning-session-full",

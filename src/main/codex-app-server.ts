@@ -854,12 +854,22 @@ function authorizedSourceContext(request: TeachingRequest): string {
 
 function teachingSessionContext(request: TeachingRequest): string {
   if (request.questionContext) {
-    return "Session teaching context is limited to the learner-approved Ask Bar context below.";
+    return [
+      "Session teaching context is limited to the learner-approved Ask Bar context below.",
+      ...(request.adaptiveTeaching ? [
+        `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
+        `Why this move: ${request.adaptiveTeaching.reason}`
+      ] : [])
+    ].join("\n");
   }
   const base = [
     `Learning Goal: ${request.learningGoal}`,
     `Scope: ${request.scope}`,
-    `Initial teaching direction: ${request.initialTeachingDirection}`
+    `Initial teaching direction: ${request.initialTeachingDirection}`,
+    ...(request.adaptiveTeaching ? [
+      `Adaptive next Teaching Move: ${request.adaptiveTeaching.kind} through a ${request.adaptiveTeaching.route} route.`,
+      `Why this move: ${request.adaptiveTeaching.reason}`
+    ] : [])
   ];
   if (!request.learningSlice) return base.join("\n");
   return [

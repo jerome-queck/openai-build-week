@@ -1,4 +1,4 @@
-import type { CorroborationPass, QuestionContextItem, SessionAccessScope, SourceAnchorSelection } from "./learning-application";
+import type { CorroborationPass, QuestionContextItem, SessionAccessScope, SourceAnchorSelection, TeachingMove } from "./learning-application";
 
 export type AuthenticationMethod = "chatgpt" | "apiKey";
 export type ModelAccessCause = "network" | "authentication" | "subscriptionCapacity" | "quota" | "runtime";
@@ -76,6 +76,7 @@ export interface TeachingRequest {
   learningGoal: string;
   scope: string;
   initialTeachingDirection: string;
+  adaptiveTeaching?: Pick<TeachingMove, "kind" | "route" | "reason">;
   corroboration: TeachingCorroborationContext | null;
   learningSlice?: {
     roadmapTitle: string;

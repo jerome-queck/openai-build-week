@@ -24,6 +24,7 @@ import { AskBar } from "./AskBar";
 import { TrailDraft } from "./TrailDraft";
 import { AnnotationInspector } from "./AnnotationInspector";
 import { ReanchoringReview } from "./ReanchoringReview";
+import { AdaptiveTeaching } from "./AdaptiveTeaching";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -1207,6 +1208,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
             <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
+            <AdaptiveTeaching session={session} onState={onState} />
             <AskBar
               session={session}
               modelAvailable={state.modelAccess.status === "available"}
