@@ -545,6 +545,7 @@ describe("Learning Application", () => {
     const current = application.getState().sessions[0].learningArtifacts[0];
 
     const checked = await application.runFormalVerification(current.originatingSessionId, {
+      runId: "accepted-run",
       target: "learningArtifact", targetId: artifactId, claimId: current.currentRevision.claims[0].claimId
     });
 
@@ -555,10 +556,11 @@ describe("Learning Application", () => {
       assumptions: ["n : Nat"],
       environment: BUNDLED_LEAN_ENVIRONMENT,
       commandOutcome: "accepted",
+      formalStatementVerificationLevel: "formallyVerified",
       evidenceLocation: expect.stringContaining("verifier-evidence")
     });
     expect(checked.sessions[0].learningArtifacts[0].currentRevision.claims[0].verificationLevel)
-      .toBe("formallyVerified");
+      .toBe("notIndependentlyChecked");
 
     const relaunched = await LearningApplication.launch(dataDirectory);
     applications.push(relaunched);
@@ -589,11 +591,13 @@ describe("Learning Application", () => {
     });
     const current = application.getState().sessions[0].learningArtifacts[0];
     const checked = await application.runFormalVerification(current.originatingSessionId, {
+      runId: "timed-out-run",
       target: "learningArtifact", targetId: artifactId, claimId: current.currentRevision.claims[0].claimId
     });
 
     expect(checked.verifierManifests[0]).toMatchObject({
       commandOutcome: "timedOut", diagnostics: "Lean exceeded 15 seconds.",
+      formalStatementVerificationLevel: "incomplete",
       proofSource: expect.stringContaining("quickStudyNatAddZero")
     });
     expect(checked.sessions[0].learningArtifacts[0].currentRevision.claims[0]).toMatchObject({
@@ -602,6 +606,22 @@ describe("Learning Application", () => {
         reason: expect.stringContaining("timed out"),
         affectedConclusion: "For every natural number n, n + 0 = n."
       })]
+    });
+
+    vi.mocked(verifier.run).mockResolvedValueOnce({
+      outcome: "accepted", diagnostics: "Lean completed without diagnostics.",
+      evidenceLocation: join(dataDirectory, "verifier-evidence", "accepted-rerun.lean"),
+      command: "lean accepted-rerun.lean", environment: BUNDLED_LEAN_ENVIRONMENT
+    });
+    const rerun = await application.runFormalVerification(current.originatingSessionId, {
+      runId: "accepted-rerun", target: "learningArtifact", targetId: artifactId,
+      claimId: current.currentRevision.claims[0].claimId
+    });
+    expect(rerun.verifierManifests.at(-1)).toMatchObject({
+      commandOutcome: "accepted", formalStatementVerificationLevel: "formallyVerified"
+    });
+    expect(rerun.sessions[0].learningArtifacts[0].currentRevision.claims[0]).toMatchObject({
+      verificationLevel: "notIndependentlyChecked", verificationGaps: []
     });
   });
 

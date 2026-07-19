@@ -1,0 +1,20 @@
+{
+  "id": "lean-4.29.1-mathlib-4.29.1-quick-study-v1",
+  "checker": "Lean",
+  "leanVersion": "4.29.1",
+  "mathlibVersion": "4.29.1",
+  "mathlibCommit": "5e932f97dd25535344f80f9dd8da3aab83df0fe6",
+  "platform": "darwin",
+  "supportProfile": "Quick Study undergraduate arithmetic v1",
+  "runtimeFormat": 5,
+  "releases": {
+    "arm64": {
+      "archive": "lean-4.29.1-darwin_aarch64.zip",
+      "sha256": "c15284adf88ad830c71775b9828cb81f49f7f262cbe1456b25d935855bd70975"
+    },
+    "x64": {
+      "archive": "lean-4.29.1-darwin.zip",
+      "sha256": "8761365b4db21f6f4f78baa98636325ffd0bc620cb0f82cee0e8fa4d2d7843b2"
+    }
+  }
+}

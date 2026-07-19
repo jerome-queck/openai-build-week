@@ -6,6 +6,15 @@ import { BUNDLED_LEAN_ENVIRONMENT, formalizationForClaim } from "../shared/verif
 import { LeanVerifierRuntime, type LeanCommandExecutor } from "./lean-verifier";
 
 const directories: string[] = [];
+const installedEnvironment = {
+  ...BUNDLED_LEAN_ENVIRONMENT,
+  architecture: "arm64",
+  sourceArchive: "lean-4.29.1-darwin_aarch64.zip",
+  sourceSha256: "c15284adf88ad830c71775b9828cb81f49f7f262cbe1456b25d935855bd70975"
+};
+const runtime = (execute: LeanCommandExecutor) => new LeanVerifierRuntime(
+  "/bundle/bin/lean", execute, 15_000, async () => installedEnvironment
+);
 
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
 
@@ -33,14 +42,14 @@ describe("LeanVerifierRuntime", () => {
   });
 
   it("accepts an exact statement with the pinned bundled version and preserves its proof evidence", async () => {
-    const runtime = new LeanVerifierRuntime("/bundle/bin/lean", scripted(
+    const verifier = runtime(scripted(
       { stdout: "Lean (version 4.29.1, aarch64-apple-darwin)", stderr: "", exitCode: 0, signal: null },
       { stdout: "", stderr: "", exitCode: 0, signal: null }
     ));
 
-    const result = await runtime.run(await request());
+    const result = await verifier.run(await request());
 
-    expect(result).toMatchObject({ outcome: "accepted", environment: BUNDLED_LEAN_ENVIRONMENT });
+    expect(result).toMatchObject({ outcome: "accepted", environment: installedEnvironment });
     expect(await readFile(result.evidenceLocation, "utf8")).toContain("theorem quickStudyNatAddZero");
   });
 
@@ -50,30 +59,41 @@ describe("LeanVerifierRuntime", () => {
     ["cancellation", { stdout: "", stderr: "cancelled", exitCode: null, signal: "SIGTERM", cancelled: true }, "cancelled"],
     ["tool crash", { stdout: "", stderr: "segmentation fault", exitCode: null, signal: "SIGSEGV" }, "crashed"]
   ] as const)("reports %s without treating it as mathematical disproof", async (_label, commandResult, outcome) => {
-    const runtime = new LeanVerifierRuntime("/bundle/bin/lean", scripted(
+    const verifier = runtime(scripted(
       { stdout: "Lean (version 4.29.1, aarch64-apple-darwin)", stderr: "", exitCode: 0, signal: null },
       commandResult
     ));
-    expect(await runtime.run(await request())).toMatchObject({ outcome, diagnostics: expect.any(String) });
+    expect(await verifier.run(await request())).toMatchObject({ outcome, diagnostics: expect.any(String) });
   });
 
   it("reports an unavailable checker", async () => {
-    const runtime = new LeanVerifierRuntime("/missing/lean", async () => {
+    const verifier = new LeanVerifierRuntime("/missing/lean", async () => {
       const error = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
       throw error;
-    });
-    expect(await runtime.run(await request())).toMatchObject({ outcome: "unavailable" });
+    }, 15_000, async () => installedEnvironment);
+    expect(await verifier.run(await request())).toMatchObject({ outcome: "unavailable" });
   });
 
   it("rejects malformed command output", async () => {
-    const runtime = new LeanVerifierRuntime("/bundle/bin/lean", async () => ({ stdout: 42 } as never));
-    expect(await runtime.run(await request())).toMatchObject({ outcome: "malformedOutput" });
+    const verifier = runtime(async () => ({ stdout: 42 } as never));
+    expect(await verifier.run(await request())).toMatchObject({ outcome: "malformedOutput" });
   });
 
   it("refuses a different Lean version before checking the proof", async () => {
-    const runtime = new LeanVerifierRuntime("/bundle/bin/lean", scripted(
+    const verifier = runtime(scripted(
       { stdout: "Lean (version 4.28.0, aarch64-apple-darwin)", stderr: "", exitCode: 0, signal: null }
     ));
-    expect(await runtime.run(await request())).toMatchObject({ outcome: "versionMismatch" });
+    expect(await verifier.run(await request())).toMatchObject({ outcome: "versionMismatch" });
+  });
+
+  it("refuses to attribute a check to a missing or invalid environment manifest", async () => {
+    const verifier = new LeanVerifierRuntime("/bundle/bin/lean", scripted(
+      { stdout: "Lean (version 4.29.1, aarch64-apple-darwin)", stderr: "", exitCode: 0, signal: null }
+    ), 15_000, async () => { throw new Error("invalid manifest"); });
+
+    expect(await verifier.run(await request())).toMatchObject({
+      outcome: "versionMismatch",
+      environment: { id: "untrusted-environment" }
+    });
   });
 });

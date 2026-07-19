@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
-  BUNDLED_LEAN_ENVIRONMENT,
+  validVerificationEnvironment,
+  type VerificationEnvironment,
   type VerifierCommandOutcome,
   type VerifierRunRequest,
   type VerifierRunResult,
@@ -55,7 +56,8 @@ export class LeanVerifierRuntime implements VerifierRuntime {
   constructor(
     private readonly executablePath: string,
     private readonly execute: LeanCommandExecutor = executeLean,
-    private readonly timeoutMs = 15_000
+    private readonly timeoutMs = 15_000,
+    private readonly loadEnvironment: () => Promise<VerificationEnvironment> = () => loadEnvironmentBeside(this.executablePath)
   ) {}
 
   async run(request: VerifierRunRequest, signal?: AbortSignal): Promise<VerifierRunResult> {
@@ -66,24 +68,32 @@ export class LeanVerifierRuntime implements VerifierRuntime {
     await rename(stagingPath, evidenceLocation);
     const command = `${basename(this.executablePath)} ${basename(evidenceLocation)}`;
 
+    let environment: VerificationEnvironment;
+    try {
+      environment = await this.loadEnvironment();
+    } catch (error) {
+      return this.result("versionMismatch", usefulError(error), evidenceLocation, command, null);
+    }
+
     let version: LeanCommandResult;
     try {
       version = await this.execute(this.executablePath, ["--version"], { timeoutMs: this.timeoutMs, signal });
     } catch (error) {
-      return this.result("unavailable", usefulError(error), evidenceLocation, command);
+      return this.result("unavailable", usefulError(error), evidenceLocation, command, environment);
     }
     if (!validCommandResult(version)) {
-      return this.result("malformedOutput", "Lean returned malformed version output.", evidenceLocation, command);
+      return this.result("malformedOutput", "Lean returned malformed version output.", evidenceLocation, command, environment);
     }
-    if (version.cancelled) return this.result("cancelled", diagnostics(version), evidenceLocation, command);
-    if (version.timedOut) return this.result("timedOut", diagnostics(version), evidenceLocation, command);
-    if (version.exitCode !== 0) return this.result("unavailable", diagnostics(version), evidenceLocation, command);
-    if (!version.stdout.includes(`version ${BUNDLED_LEAN_ENVIRONMENT.leanVersion}`)) {
+    if (version.cancelled) return this.result("cancelled", diagnostics(version), evidenceLocation, command, environment);
+    if (version.timedOut) return this.result("timedOut", diagnostics(version), evidenceLocation, command, environment);
+    if (version.exitCode !== 0) return this.result("unavailable", diagnostics(version), evidenceLocation, command, environment);
+    if (!version.stdout.includes(`version ${environment.leanVersion}`)) {
       return this.result(
         "versionMismatch",
-        `Expected Lean ${BUNDLED_LEAN_ENVIRONMENT.leanVersion}; received ${version.stdout.trim() || "no version"}.`,
+        `Expected Lean ${environment.leanVersion}; received ${version.stdout.trim() || "no version"}.`,
         evidenceLocation,
-        command
+        command,
+        environment
       );
     }
 
@@ -91,28 +101,52 @@ export class LeanVerifierRuntime implements VerifierRuntime {
     try {
       checked = await this.execute(this.executablePath, [evidenceLocation], { timeoutMs: this.timeoutMs, signal });
     } catch (error) {
-      return this.result("unavailable", usefulError(error), evidenceLocation, command);
+      return this.result("unavailable", usefulError(error), evidenceLocation, command, environment);
     }
     if (!validCommandResult(checked)) {
-      return this.result("malformedOutput", "Lean returned malformed command output.", evidenceLocation, command);
+      return this.result("malformedOutput", "Lean returned malformed command output.", evidenceLocation, command, environment);
     }
-    return this.result(outcomeFor(checked), diagnostics(checked), evidenceLocation, command);
+    return this.result(outcomeFor(checked), diagnostics(checked), evidenceLocation, command, environment);
   }
 
   private result(
     outcome: VerifierCommandOutcome,
     diagnosticsText: string,
     evidenceLocation: string,
-    command: string
+    command: string,
+    environment: VerificationEnvironment | null
   ): VerifierRunResult {
     return {
       outcome,
       diagnostics: diagnosticsText,
       evidenceLocation,
       command,
-      environment: BUNDLED_LEAN_ENVIRONMENT
+      environment: environment ?? invalidEnvironmentIdentity()
     };
   }
+}
+
+async function loadEnvironmentBeside(executablePath: string): Promise<VerificationEnvironment> {
+  const manifestPath = join(dirname(dirname(executablePath)), "manifest.json");
+  const value: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (!validVerificationEnvironment(value)) throw new Error("The installed Verification Environment Manifest is invalid or does not match the pinned bundle.");
+  return value;
+}
+
+function invalidEnvironmentIdentity(): VerificationEnvironment {
+  return {
+    id: "untrusted-environment",
+    checker: "Lean",
+    leanVersion: "unknown",
+    mathlibVersion: "unknown",
+    mathlibCommit: "unknown",
+    platform: process.platform,
+    architecture: process.arch,
+    sourceArchive: "unknown",
+    sourceSha256: "unknown",
+    supportProfile: "unknown",
+    runtimeFormat: 0
+  };
 }
 
 function outcomeFor(result: LeanCommandResult): VerifierCommandOutcome {
@@ -143,4 +177,3 @@ function safeRunId(value: string): string {
 function usefulError(error: unknown): string {
   return error instanceof Error ? error.message : "Lean could not be launched.";
 }
-

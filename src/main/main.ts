@@ -18,9 +18,14 @@ import { MacOsSourceAccess } from "./source-access";
 import { MacOsArtifactSharing } from "./artifact-sharing";
 import { BrowserExternalResearch } from "./browser-external-research";
 import { LeanVerifierRuntime } from "./lean-verifier";
+import { VerifierEnvironmentRegistry } from "./verifier-environment-registry";
+import { BUNDLED_LEAN_ENVIRONMENT } from "../shared/verifier-runtime";
+import type { VerifierEnvironmentStatus } from "../shared/verifier-runtime";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
+let verifierEnvironmentRegistry: VerifierEnvironmentRegistry;
+let verifierInstallation: Promise<VerifierEnvironmentStatus> | null = null;
 const execFileAsync = promisify(execFile);
 const sourceAccess = new MacOsSourceAccess({
   showOpenDialog: (options) => dialog.showOpenDialog(options),
@@ -301,12 +306,41 @@ function registerLearningApplicationHandlers(): void {
     }
     return learningApplication.shareLearningArtifact(sessionId, artifactId);
   });
+  const verifierRuns = new Map<string, AbortController>();
   ipcMain.handle("verifier:run", async (event, sessionId: unknown, request: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof sessionId !== "string" || !isFormalVerificationRequest(request)) {
       throw new Error("Invalid formal verification request.");
     }
-    return learningApplication.runFormalVerification(sessionId, request);
+    if (verifierRuns.has(request.runId)) throw new Error("A formal verification run with this identifier is already active.");
+    if (verifierInstallation) await verifierInstallation;
+    const controller = new AbortController();
+    verifierRuns.set(request.runId, controller);
+    try {
+      return await learningApplication.runFormalVerification(sessionId, request, controller.signal);
+    } finally {
+      verifierRuns.delete(request.runId);
+    }
+  });
+  ipcMain.handle("verifier:cancel", async (event, runId: unknown) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (typeof runId !== "string") throw new Error("Invalid formal verification run identifier.");
+    verifierRuns.get(runId)?.abort();
+  });
+  ipcMain.handle("verifier:status", async (event) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (verifierInstallation) await verifierInstallation;
+    return verifierEnvironmentRegistry.getStatus();
+  });
+  ipcMain.handle("verifier:remove", async (event) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    if (verifierInstallation) await verifierInstallation;
+    return verifierEnvironmentRegistry.remove();
+  });
+  ipcMain.handle("verifier:install", async (event) => {
+    if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
+    verifierInstallation = trackedVerifierInstallation(verifierEnvironmentRegistry.install());
+    return verifierInstallation;
   });
   ipcMain.handle("source:linkPrimaryFolder", async (event, workspaceId: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
@@ -379,7 +413,7 @@ function registerLearningApplicationHandlers(): void {
   });
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1180,
     height: 780,
@@ -405,22 +439,25 @@ function createWindow(): void {
   } else {
     void window.loadFile(join(__dirname, "../renderer/index.html"));
   }
+  return window;
 }
 
 function isFormalVerificationRequest(value: unknown): value is import("../shared/learning-application").FormalVerificationRequest {
   if (!value || typeof value !== "object") return false;
   const request = value as Record<string, unknown>;
   return (request.target === "teachingCard" || request.target === "learningArtifact")
+    && typeof request.runId === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(request.runId)
     && typeof request.targetId === "string" && typeof request.claimId === "string";
 }
 
 function bundledLeanPath(): string {
   const root = app.isPackaged ? process.resourcesPath : join(process.cwd(), "dist");
-  return join(root, "verifiers", "lean-4.29.1-core-v1", "bin", "lean");
+  return join(root, "verifiers", BUNDLED_LEAN_ENVIRONMENT.id);
 }
 
 void app.whenReady().then(async () => {
   const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+  verifierEnvironmentRegistry = new VerifierEnvironmentRegistry(dataDirectory, bundledLeanPath());
   try {
     modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
   } catch (error) {
@@ -435,10 +472,15 @@ void app.whenReady().then(async () => {
       ? async () => undefined
       : (url) => shell.openExternal(url)),
     null,
-    new LeanVerifierRuntime(process.env.QUICK_STUDY_LEAN_PATH ?? bundledLeanPath())
+    new LeanVerifierRuntime(process.env.QUICK_STUDY_LEAN_PATH ?? verifierEnvironmentRegistry.executablePath())
   );
   registerLearningApplicationHandlers();
-  createWindow();
+  const primaryWindow = createWindow();
+  if (!process.env.QUICK_STUDY_LEAN_PATH) {
+    verifierInstallation = trackedVerifierInstallation(new Promise<void>((resolve) => {
+      primaryWindow.webContents.once("did-finish-load", () => resolve());
+    }).then(() => verifierEnvironmentRegistry.ensureDefaultInstalled()));
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -448,3 +490,15 @@ void app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   void learningApplication.shutdown().finally(() => app.quit());
 });
+
+function trackedVerifierInstallation(operation: Promise<VerifierEnvironmentStatus>): Promise<VerifierEnvironmentStatus> {
+  return operation.catch((error) => {
+    console.error("Bundled Lean installation failed:", error);
+    return {
+      environmentId: BUNDLED_LEAN_ENVIRONMENT.id,
+      installed: false,
+      ready: false,
+      diagnostics: error instanceof Error ? error.message : "The Bundled Lean Runtime could not be installed."
+    };
+  });
+}

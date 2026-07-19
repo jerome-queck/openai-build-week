@@ -10,6 +10,7 @@ import type {
   SessionSearchResult,
   SourceSearchResult
 } from "../../shared/learning-application";
+import type { VerifierEnvironmentStatus } from "../../shared/verifier-runtime";
 
 declare global {
   interface Window {
@@ -31,6 +32,10 @@ declare global {
       exportLearningArtifact(sessionId: string, artifactId: string): Promise<ArtifactExportResult>;
       shareLearningArtifact(sessionId: string, artifactId: string): Promise<ArtifactShareResult>;
       verifyClaim(sessionId: string, request: FormalVerificationRequest): Promise<LearningApplicationState>;
+      cancelClaimVerification(runId: string): Promise<void>;
+      getVerifierEnvironmentStatus(): Promise<VerifierEnvironmentStatus>;
+      removeVerifierEnvironment(): Promise<VerifierEnvironmentStatus>;
+      installVerifierEnvironment(): Promise<VerifierEnvironmentStatus>;
       onStateChanged(listener: (state: LearningApplicationState) => void): () => void;
       openExternal(url: string): Promise<void>;
     };

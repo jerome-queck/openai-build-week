@@ -11,6 +11,7 @@ import type {
   SessionSearchResult,
   SourceSearchResult
 } from "../shared/learning-application";
+import type { VerifierEnvironmentStatus } from "../shared/verifier-runtime";
 
 contextBridge.exposeInMainWorld("quickStudy", {
   getState: (): Promise<LearningApplicationState> => ipcRenderer.invoke("learning:getState"),
@@ -38,6 +39,10 @@ contextBridge.exposeInMainWorld("quickStudy", {
     ipcRenderer.invoke("artifact:share", sessionId, artifactId),
   verifyClaim: (sessionId: string, request: FormalVerificationRequest): Promise<LearningApplicationState> =>
     ipcRenderer.invoke("verifier:run", sessionId, request),
+  cancelClaimVerification: (runId: string): Promise<void> => ipcRenderer.invoke("verifier:cancel", runId),
+  getVerifierEnvironmentStatus: (): Promise<VerifierEnvironmentStatus> => ipcRenderer.invoke("verifier:status"),
+  removeVerifierEnvironment: (): Promise<VerifierEnvironmentStatus> => ipcRenderer.invoke("verifier:remove"),
+  installVerifierEnvironment: (): Promise<VerifierEnvironmentStatus> => ipcRenderer.invoke("verifier:install"),
   onStateChanged: (listener: (state: LearningApplicationState) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: LearningApplicationState) => listener(state);
     ipcRenderer.on("learning:stateChanged", handler);

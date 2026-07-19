@@ -30,7 +30,7 @@ npm run dev
 
 The development command builds the native Source Index and security-scoped bookmark helpers before starting Electron. Restart it after changing either helper under `native/` so it is rebuilt.
 
-The first development or production build downloads the official Lean 4.29.1 archive for the current Mac architecture, verifies its pinned SHA-256 digest, and prepares the immutable `lean-4.29.1-core-v1` verification bundle. The cached archive is reused from `node_modules/.cache/quick-study-lean`. Learners do not need a separate Lean or `elan` installation.
+The first development or production build downloads the official Lean 4.29.1 archive for the current Mac architecture, verifies its pinned SHA-256 digest, checks out mathlib 4.29.1 at its pinned commit, and uses mathlib's cache tool to prepare the transitive precompiled support closure for the immutable `lean-4.29.1-mathlib-4.29.1-quick-study-v1` environment. The staged environment must accept the app's real reference proof before atomic activation. Downloads are reused from `node_modules/.cache/quick-study-lean`; learners do not need a separate Lean or `elan` installation. The installed environment can be removed and reinstalled from Application settings without deleting sessions, proof source, or historical Verifier Manifests.
 
 Local application data uses Electron's standard `userData` directory. Set `QUICK_STUDY_DATA_DIR` to isolate it when developing or diagnosing persistence.
 

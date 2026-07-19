@@ -287,6 +287,7 @@ export interface AcceptedFormalVerification {
 }
 
 export interface FormalVerificationRequest {
+  runId: string;
   target: AcceptedFormalVerification["target"];
   targetId: string;
   claimId: string;
@@ -306,6 +307,7 @@ export interface VerifierManifest {
   environment: Readonly<VerificationEnvironment>;
   command: string;
   commandOutcome: VerifierCommandOutcome;
+  formalStatementVerificationLevel: "formallyVerified" | "incomplete";
   diagnostics: string;
   evidenceLocation: string | null;
   createdAt: string;
@@ -1244,7 +1246,7 @@ export class LearningApplication {
     const session = this.requireSession(sessionId);
     const revision = claimCheckRevision(session, request.target, request.targetId);
     const claim = requireClaimVerification(revision, request.claimId);
-    const runId = crypto.randomUUID();
+    const runId = requireVerifierRunId(request.runId);
     const formalization = formalizationForClaim(claim.claimStatement);
     const result = !formalization
       ? {
@@ -1281,30 +1283,18 @@ export class LearningApplication {
       environment: result.environment,
       command: result.command,
       commandOutcome: result.outcome,
+      formalStatementVerificationLevel: result.outcome === "accepted" && formalization ? "formallyVerified" : "incomplete",
       diagnostics: result.diagnostics,
       evidenceLocation: result.evidenceLocation || null,
       createdAt: new Date().toISOString()
     };
     this.state.verifierManifests.push(manifest);
     if (result.outcome === "accepted" && formalization) {
-      const evidence: ClaimVerificationEvidence = {
-        id: crypto.randomUUID(),
-        method: "formalVerification",
-        outcome: "supports",
-        summary: `${result.environment.checker} accepted the exact formal statement in Verifier Manifest ${manifest.id}.`,
-        limitation: "Formal verification covers only the exact accepted statement in the recorded environment.",
-        reference: {
-          kind: "formalChecker",
-          checker: result.environment.checker,
-          verificationEnvironment: result.environment.id
-        },
-        currency: "current",
-        changedBecause: null,
-        createdAt: manifest.createdAt
-      };
-      claim.verificationEvidence.push(evidence);
-      claim.verificationCurrency = "current";
-      claim.verificationLevel = currentVerificationLevel(claim.verificationEvidence);
+      const priorManifestIds = new Set(this.state.verifierManifests
+        .filter((candidate) => candidate.id !== manifest.id && candidate.claimRevisionId === revision.id
+          && candidate.claimId === claim.claimId && candidate.formalStatement === formalization.formalStatement)
+        .map((candidate) => candidate.id));
+      claim.verificationGaps = claim.verificationGaps.filter((gap) => !gap.evidenceId || !priorManifestIds.has(gap.evidenceId));
       claim.verificationEscalation = escalationForEvidence(claim.verificationEvidence, claim.verificationGaps);
     } else {
       claim.verificationGaps.push({
@@ -1358,6 +1348,8 @@ export class LearningApplication {
     const filenameStem = artifact.title.trim().toLocaleLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || "learning-artifact";
+    const verifierManifests = this.state.verifierManifests.filter((manifest) => manifest.target === "learningArtifact"
+      && manifest.targetId === artifact.id);
     return {
       artifactId: artifact.id,
       originatingSessionId: artifact.originatingSessionId,
@@ -1404,6 +1396,25 @@ export class LearningApplication {
             evidence.summary,
             ""
           ]))
+        ]),
+        ...(verifierManifests.length === 0 ? [] : [
+          "",
+          "## Verifier Manifests",
+          "",
+          ...verifierManifests.flatMap((manifest) => [
+            `### Verifier Manifest ${manifest.id}`,
+            `- Claim revision: ${manifest.claimRevisionId}`,
+            `- Exact claim: ${manifest.exactClaim}`,
+            `- Exact formal statement: ${manifest.formalStatement ?? "Unsupported translation"}`,
+            `- Exact statement status: ${manifest.formalStatementVerificationLevel === "formallyVerified" ? "Formally verified" : "Incomplete"}`,
+            `- Assumptions: ${manifest.assumptions.join("; ") || "None recorded"}`,
+            `- Command outcome: ${manifest.commandOutcome}`,
+            `- Verification Environment: ${manifest.environment.id} · Lean ${manifest.environment.leanVersion} · mathlib ${manifest.environment.mathlibVersion} · ${manifest.environment.architecture}`,
+            `- Evidence location: ${manifest.evidenceLocation ?? "No proof file was produced"}`,
+            "",
+            manifest.diagnostics,
+            ""
+          ])
         ]),
         ...(artifact.currentRevision.claims.every((claim) => claim.verificationGaps.length === 0) ? [] : [
           "## Verification Gaps",
@@ -5686,13 +5697,26 @@ function validVerifierManifest(value: unknown): value is VerifierManifest {
     && Array.isArray(value.assumptions) && value.assumptions.every((item) => typeof item === "string")
     && (value.proofSource === null || typeof value.proofSource === "string")
     && (value.evidenceLocation === null || typeof value.evidenceLocation === "string")
+    && (value.formalStatementVerificationLevel === "formallyVerified" || value.formalStatementVerificationLevel === "incomplete")
     && ["accepted", "rejected", "timedOut", "cancelled", "unsupported", "unavailable", "crashed",
       "malformedOutput", "versionMismatch"].includes(String(value.commandOutcome))
     && typeof value.environment.id === "string" && Boolean(value.environment.id.trim())
     && typeof value.environment.checker === "string" && Boolean(value.environment.checker.trim())
     && typeof value.environment.leanVersion === "string" && Boolean(value.environment.leanVersion.trim())
-    && (value.environment.mathlibVersion === null || typeof value.environment.mathlibVersion === "string")
-    && typeof value.environment.platform === "string" && Boolean(value.environment.platform.trim());
+    && typeof value.environment.mathlibVersion === "string" && Boolean(value.environment.mathlibVersion.trim())
+    && typeof value.environment.mathlibCommit === "string" && Boolean(value.environment.mathlibCommit.trim())
+    && typeof value.environment.platform === "string" && Boolean(value.environment.platform.trim())
+    && typeof value.environment.architecture === "string" && Boolean(value.environment.architecture.trim())
+    && typeof value.environment.sourceArchive === "string" && Boolean(value.environment.sourceArchive.trim())
+    && typeof value.environment.sourceSha256 === "string" && Boolean(value.environment.sourceSha256.trim())
+    && typeof value.environment.supportProfile === "string" && Boolean(value.environment.supportProfile.trim())
+    && typeof value.environment.runtimeFormat === "number";
+}
+
+function requireVerifierRunId(value: string): string {
+  const runId = value.trim();
+  if (!/^[a-zA-Z0-9-]{1,100}$/.test(runId)) throw new Error("Verifier run identifier is invalid.");
+  return runId;
 }
 
 function migrateAgentWorkLogs(value: unknown): Record<string, Array<ModelRuntimeEvent & { sequence: number }>> {
