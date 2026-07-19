@@ -9,6 +9,8 @@ describe("Browser External Research", () => {
     const destination = "https://duckduckgo.com/?q=orbit-stabilizer";
     const result = await research.research({
       query: buildDerivedResearchQuery({ theoremNames: ["Orbit-stabilizer theorem"], assumptions: [], keywords: [] }),
+      queryOrigin: "learnerAuthored",
+      informedBySourceIds: [],
       destination,
       excerpts: [],
       signal: new AbortController().signal
@@ -24,8 +26,25 @@ describe("Browser External Research", () => {
     const research = new BrowserExternalResearch(vi.fn());
     const query = buildDerivedResearchQuery({ theoremNames: ["Cauchy's theorem"], assumptions: [], keywords: [] });
     for (const destination of ["https://example.com/search", "http://duckduckgo.com/?q=cauchy"]) {
-      await expect(research.research({ query, destination, excerpts: [], signal: new AbortController().signal }))
+      await expect(research.research({
+        query, queryOrigin: "learnerAuthored", informedBySourceIds: [], destination, excerpts: [],
+        signal: new AbortController().signal
+      }))
         .rejects.toThrow("destination is not allowed");
     }
+  });
+
+  it("observes cancellation while the browser handoff is pending", async () => {
+    const controller = new AbortController();
+    const research = new BrowserExternalResearch(() => new Promise<void>(() => undefined));
+    const pending = research.research({
+      query: buildDerivedResearchQuery({ theoremNames: ["Sylow theorems"], assumptions: [], keywords: [] }),
+      queryOrigin: "learnerAuthored",
+      informedBySourceIds: [],
+      destination: "https://duckduckgo.com/?q=sylow",
+      excerpts: [], signal: controller.signal
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });

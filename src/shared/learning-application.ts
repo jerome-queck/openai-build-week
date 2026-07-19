@@ -67,9 +67,11 @@ export interface ResearchAction {
   id: string;
   accessPolicy: SessionAccessPolicy;
   query: DerivedResearchQuery;
+  queryOrigin: "learnerAuthored" | "automaticCorroboration";
+  informedBySourceIds: string[];
   destination: string;
   excerpts: ResearchExcerpt[];
-  status: "running" | "completed" | "denied" | "timedOut" | "failed";
+  status: "running" | "completed" | "denied" | "timedOut" | "failed" | "stopped";
   result: ExternalResearchResult | null;
   error: string | null;
 }
@@ -799,6 +801,7 @@ export type LearnerAction =
   | { type: "setSourceExcerptEgressPreference"; enabled: boolean }
   | { type: "setResearchEgressPermission"; enabled: boolean }
   | { type: "researchWeb"; query: DerivedResearchQueryInput; sourceAnchorIds: string[] }
+  | { type: "cancelExternalResearch"; researchActionId: string }
   | { type: "decideFullAccessConfirmation"; decision: "confirm" | "cancel" }
   | {
       type: "decideAccessRequest";
@@ -857,6 +860,7 @@ export class LearningApplication {
     restart(): Promise<void>;
   }>();
   private readonly accessDecisionWaiters = new Map<string, (decision: RuntimeAccessDecision) => void>();
+  private readonly researchWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
   private agentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
   private sourceIndexDocuments = new Map<string, SourceIndexDocument>();
@@ -1483,6 +1487,7 @@ export class LearningApplication {
 
   async waitForModelWork(): Promise<void> {
     await Promise.all([...this.modelWorks.values()].map((work) => work.promise));
+    await Promise.all([...this.researchWorks.values()].map((work) => work.promise));
     await this.persistence;
   }
 
@@ -1492,6 +1497,15 @@ export class LearningApplication {
         if (request.status !== "pending") continue;
         request.status = "denied";
         this.resolveAccessDecision(request.id, { status: "denied", policy: session.accessPolicy });
+      }
+    }
+    for (const [researchActionId, work] of this.researchWorks) {
+      work.controller.abort();
+      const research = this.state.sessions.flatMap((session) => session.researchActions)
+        .find((candidate) => candidate.id === researchActionId);
+      if (research?.status === "running") {
+        research.status = "stopped";
+        research.error = "External research stopped when the application closed. Start it again explicitly after relaunch.";
       }
     }
     const activeWorks = [...this.modelWorks.entries()];
@@ -2477,6 +2491,15 @@ export class LearningApplication {
       case "setResearchEgressPermission": {
         const session = this.requireActiveSession();
         session.researchEgressPermission = { status: action.enabled ? "granted" : "revoked" };
+        if (!action.enabled) this.stopSessionResearch(session, "Research Egress Permission was revoked. No retry was attempted.");
+        else this.beginAutomaticCorroboration(session);
+        break;
+      }
+      case "cancelExternalResearch": {
+        const session = this.requireActiveSession();
+        const research = session.researchActions.find((candidate) => candidate.id === action.researchActionId);
+        if (!research || research.status !== "running") throw new Error("Choose active external research to stop.");
+        this.stopResearch(research, "External research was stopped by the learner. No retry was attempted.");
         break;
       }
       case "researchWeb": {
@@ -2487,6 +2510,8 @@ export class LearningApplication {
           id: crypto.randomUUID(),
           accessPolicy: session.accessPolicy,
           query,
+          queryOrigin: "learnerAuthored",
+          informedBySourceIds: [],
           destination,
           excerpts: [],
           status: "running",
@@ -2494,10 +2519,14 @@ export class LearningApplication {
           error: null
         };
         session.researchActions.push(researchAction);
+        if (session.researchEgressPermission.status !== "granted") {
+          researchAction.status = "denied";
+          researchAction.error = "Research Egress Permission is not granted for this Learning Session. Nothing was sent.";
+          break;
+        }
         const sourceAnchorIds = [...new Set(action.sourceAnchorIds)];
         if (sourceAnchorIds.length > 0) {
-          if (!this.state.sourceExcerptEgressPreference.enabled
-            || session.researchEgressPermission.status !== "granted") {
+          if (!this.state.sourceExcerptEgressPreference.enabled) {
             researchAction.status = "denied";
             researchAction.error = "Source Excerpt Egress was denied. The Derived Research Query was not sent.";
             break;
@@ -2522,7 +2551,8 @@ export class LearningApplication {
                 sourceId: anchor.sourceId,
                 kind: anchor.selection.kind === "equation" ? "equation" as const : "excerpt" as const,
                 content: anchor.selection.exactText,
-                location: `${anchor.selection.kind === "equation" ? `Equation ${anchor.selection.equationIndex + 1}` : "Text"}: characters ${anchor.selection.startOffset}–${anchor.selection.endOffset}`
+                location: `${anchor.selection.kind === "equation" ? `Equation ${anchor.selection.equationIndex + 1}` : "Text"}: characters ${anchor.selection.startOffset}–${anchor.selection.endOffset}`,
+                relevance: "learnerSelectedForQuery" as const
               };
             });
           } catch (error) {
@@ -2537,34 +2567,7 @@ export class LearningApplication {
           researchAction.error = "External research is unavailable. Local work and model access remain unchanged.";
           break;
         }
-        const controller = new AbortController();
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        try {
-          const result = await Promise.race([
-            this.externalResearch.research({
-              query,
-              destination: researchAction.destination,
-              excerpts: structuredClone(researchAction.excerpts),
-              signal: controller.signal
-            }),
-            new Promise<never>((_resolve, reject) => {
-              timeout = setTimeout(() => {
-                controller.abort();
-                reject(new DOMException("External research timed out.", "TimeoutError"));
-              }, 15_000);
-            })
-          ]);
-          researchAction.result = validatedExternalResearchResult(result);
-          researchAction.status = "completed";
-        } catch (error) {
-          const timedOut = error instanceof DOMException && error.name === "TimeoutError";
-          researchAction.status = timedOut ? "timedOut" : "failed";
-          researchAction.error = timedOut
-            ? "External research timed out. No access was elevated and no retry was attempted."
-            : usefulResearchError(error);
-        } finally {
-          if (timeout !== undefined) clearTimeout(timeout);
-        }
+        this.beginExternalResearch(researchAction);
         break;
       }
       case "selectSessionAccessPolicy": {
@@ -3681,6 +3684,80 @@ export class LearningApplication {
     }
   }
 
+  private beginAutomaticCorroboration(session: LearningSession): void {
+    if (!this.externalResearch || session.researchActions.some((research) => research.queryOrigin === "automaticCorroboration")) return;
+    const query = automaticCorroborationQuery(session.mathematics);
+    if (!query) return;
+    const authorizedSourceIds = new Set(this.getSessionAccessScope(session.id).sourceIds);
+    const informedBySourceIds = session.sourceIds.filter((sourceId) => authorizedSourceIds.has(sourceId));
+    const research: ResearchAction = {
+      id: crypto.randomUUID(),
+      accessPolicy: session.accessPolicy,
+      query,
+      queryOrigin: "automaticCorroboration",
+      informedBySourceIds,
+      destination: researchDestination(query),
+      excerpts: [],
+      status: "running",
+      result: null,
+      error: null
+    };
+    session.researchActions.push(research);
+    this.beginExternalResearch(research);
+  }
+
+  private beginExternalResearch(research: ResearchAction): void {
+    const controller = new AbortController();
+    const promise = Promise.resolve().then(async () => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          this.externalResearch!.research({
+            query: research.query,
+            queryOrigin: research.queryOrigin,
+            informedBySourceIds: [...research.informedBySourceIds],
+            destination: research.destination,
+            excerpts: structuredClone(research.excerpts),
+            signal: controller.signal
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(new DOMException("External research timed out.", "TimeoutError"));
+            }, 15_000);
+          })
+        ]);
+        if (research.status !== "running") return;
+        research.result = validatedExternalResearchResult(result);
+        research.status = "completed";
+      } catch (error) {
+        if (research.status !== "running") return;
+        const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+        research.status = timedOut ? "timedOut" : "failed";
+        research.error = timedOut
+          ? "External research timed out. No access was elevated and no retry was attempted."
+          : usefulResearchError(error);
+      } finally {
+        if (timeout !== undefined) clearTimeout(timeout);
+        this.researchWorks.delete(research.id);
+        await this.publishAndPersist();
+      }
+    });
+    this.researchWorks.set(research.id, { controller, promise });
+  }
+
+  private stopSessionResearch(session: LearningSession, message: string): void {
+    for (const research of session.researchActions) {
+      if (research.status === "running") this.stopResearch(research, message);
+    }
+  }
+
+  private stopResearch(research: ResearchAction, message: string): void {
+    this.researchWorks.get(research.id)?.controller.abort();
+    research.status = "stopped";
+    research.error = message;
+  }
+
   private emitState(state = this.getState()): void {
     for (const listener of this.stateListeners) listener(state);
   }
@@ -4222,6 +4299,24 @@ function usefulResearchError(error: unknown): string {
     ? error.message
     : "The external research service failed.";
   return `${detail} No access was elevated and no retry was attempted.`;
+}
+
+function automaticCorroborationQuery(mathematics: string): DerivedResearchQuery | null {
+  const namedTheorem = mathematics.match(
+    /(?:prove|show|verify|study|understand|explain)\s+(?:the\s+)?([a-z][a-z'’\-]*(?:\s+[a-z][a-z'’\-]*){0,4}\s+theorem)\b/i
+  )?.[1];
+  if (!namedTheorem) return null;
+  const theoremName = namedTheorem.replace(/\s+/g, " ");
+  const theoremTerms = new Set(theoremName.toLocaleLowerCase().match(/[a-z][a-z'’\-]*/g) ?? []);
+  const excluded = new Set([
+    "prove", "show", "verify", "study", "understand", "explain", "theorem", "that", "this", "with", "from",
+    "the", "for", "using", "where", "when", "then", "into", "learner", "users", "file", "notes", "pdf", "document"
+  ]);
+  const keywords = (mathematics.match(/[a-z][a-z'’\-]{2,}/gi) ?? [])
+    .map((term) => term.toLocaleLowerCase())
+    .filter((term, index, terms) => !theoremTerms.has(term) && !excluded.has(term) && terms.indexOf(term) === index)
+    .slice(0, 5);
+  return buildDerivedResearchQuery({ theoremNames: [theoremName], assumptions: [], keywords });
 }
 
 function researchDestination(query: DerivedResearchQuery, excerpts: ResearchExcerpt[] = []): string {
@@ -4766,7 +4861,10 @@ function migrateResearchActions(value: unknown): ResearchAction[] {
     if (!isRecord(candidate) || typeof candidate.id !== "string"
       || !["focused", "workspace", "full"].includes(String(candidate.accessPolicy))
       || typeof candidate.destination !== "string" || !researchDestinationIsAllowed(candidate.destination)
-      || !["running", "completed", "denied", "timedOut", "failed"].includes(String(candidate.status))
+      || !["learnerAuthored", "automaticCorroboration"].includes(String(candidate.queryOrigin))
+      || !Array.isArray(candidate.informedBySourceIds)
+      || !candidate.informedBySourceIds.every((sourceId) => typeof sourceId === "string")
+      || !["running", "completed", "denied", "timedOut", "failed", "stopped"].includes(String(candidate.status))
       || !(candidate.error === null || typeof candidate.error === "string")
       || !Array.isArray(candidate.excerpts) || !isRecord(candidate.query)) {
       throw new Error("Stored external research actions are invalid.");
@@ -4780,7 +4878,8 @@ function migrateResearchActions(value: unknown): ResearchAction[] {
       if (!isRecord(excerpt) || typeof excerpt.sourceId !== "string"
         || !["excerpt", "equation", "selectedPages"].includes(String(excerpt.kind))
         || typeof excerpt.content !== "string" || !excerpt.content.trim()
-        || typeof excerpt.location !== "string" || !excerpt.location.trim()) {
+        || typeof excerpt.location !== "string" || !excerpt.location.trim()
+        || excerpt.relevance !== "learnerSelectedForQuery") {
         throw new Error("Stored external research actions are invalid.");
       }
       return excerpt as unknown as ResearchExcerpt;
@@ -4789,13 +4888,15 @@ function migrateResearchActions(value: unknown): ResearchAction[] {
     const status = candidate.status as ResearchAction["status"];
     if (candidate.destination !== researchDestination(query, excerpts)
       || (status === "completed") !== (result !== null)
-      || (["denied", "timedOut", "failed"].includes(status) && typeof candidate.error !== "string")) {
+      || (["denied", "timedOut", "failed", "stopped"].includes(status) && typeof candidate.error !== "string")) {
       throw new Error("Stored external research actions are invalid.");
     }
     return {
       id: candidate.id,
       accessPolicy: candidate.accessPolicy as SessionAccessPolicy,
       query,
+      queryOrigin: candidate.queryOrigin as ResearchAction["queryOrigin"],
+      informedBySourceIds: candidate.informedBySourceIds as string[],
       destination: candidate.destination,
       excerpts,
       status,

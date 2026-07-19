@@ -9,7 +9,14 @@ export class BrowserExternalResearch implements ExternalResearch {
       throw new Error("The external research destination is not allowed.");
     }
     if (request.signal.aborted) throw new DOMException("External research was stopped.", "AbortError");
-    await this.openExternal(destination.href);
+    await Promise.race([
+      this.openExternal(destination.href),
+      new Promise<never>((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(
+          new DOMException("External research was stopped.", "AbortError")
+        ), { once: true });
+      })
+    ]);
     return {
       title: "Research opened in browser",
       summary: request.excerpts.length > 0

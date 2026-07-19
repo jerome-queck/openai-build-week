@@ -4413,6 +4413,7 @@ describe("Learning Application", () => {
         state = await application.submit({ type: "setFullAccessConfirmation", enabled: false });
         state = await application.submit({ type: "selectSessionAccessPolicy", policy });
       }
+      state = await application.submit({ type: "setResearchEgressPermission", enabled: true });
 
       state = await application.submit({
         type: "researchWeb",
@@ -4423,6 +4424,8 @@ describe("Learning Application", () => {
         },
         sourceAnchorIds: []
       });
+      await application.waitForModelWork();
+      state = application.getState();
 
       expect(research.requests).toHaveLength(1);
       expect(research.requests[0]).toMatchObject({
@@ -4445,6 +4448,35 @@ describe("Learning Application", () => {
       expect(state.modelAccess.status).toBe("unavailable");
     }
   );
+
+  it("starts automatic Source Corroboration only after explicit Research Egress Permission", async () => {
+    const research = new DeterministicExternalResearch();
+    const { application } = await launchWithExternalResearch(research);
+    let state = await application.submit({
+      type: "startQuickStudy",
+      mathematics: "Prove the orbit-stabilizer theorem for a finite group acting on a set."
+    });
+    expect(research.requests).toEqual([]);
+    expect(state.sessions[0].researchEgressPermission).toEqual({ status: "notGranted" });
+
+    state = await application.submit({ type: "setResearchEgressPermission", enabled: true });
+    expect(state.sessions[0].researchActions.at(-1)).toMatchObject({
+      queryOrigin: "automaticCorroboration",
+      informedBySourceIds: state.sessions[0].sourceIds,
+      query: {
+        theoremNames: ["orbit-stabilizer theorem"],
+        assumptions: [],
+        keywords: ["finite", "group", "acting", "set"]
+      }
+    });
+    await application.waitForModelWork();
+    expect(application.getState().sessions[0].researchActions.at(-1)).toMatchObject({ status: "completed" });
+    expect(research.requests[0]).toMatchObject({
+      queryOrigin: "automaticCorroboration",
+      informedBySourceIds: state.sessions[0].sourceIds,
+      excerpts: []
+    });
+  });
 
   it("keeps Source Excerpt Egress session-scoped, inspectable, and revocable", async () => {
     const research = new DeterministicExternalResearch();
@@ -4471,6 +4503,8 @@ describe("Learning Application", () => {
       query: { theoremNames: ["Orbit-stabilizer theorem"], assumptions: [], keywords: [] },
       sourceAnchorIds: [anchorId]
     });
+    await application.waitForModelWork();
+    state = application.getState();
     expect(state.sessions[0].researchActions.at(-1)).toMatchObject({ status: "denied" });
     expect(research.requests).toEqual([]);
 
@@ -4481,12 +4515,16 @@ describe("Learning Application", () => {
       query: { theoremNames: ["Orbit-stabilizer theorem"], assumptions: [], keywords: [] },
       sourceAnchorIds: [anchorId]
     });
+    await application.waitForModelWork();
+    state = application.getState();
     expect(research.requests[0].excerpts).toEqual([{
-      sourceId, kind: "equation", content: "G/G_x", location: "Equation 1: characters 39–44"
+      sourceId, kind: "equation", content: "G/G_x", location: "Equation 1: characters 39–44",
+      relevance: "learnerSelectedForQuery"
     }]);
     expect(state.sessions[0].researchEgressPermission).toEqual({ status: "granted" });
     expect(state.sessions[0].researchActions.at(-1)?.excerpts).toEqual([{
-      sourceId, kind: "equation", location: "Equation 1: characters 39–44", content: "G/G_x"
+      sourceId, kind: "equation", location: "Equation 1: characters 39–44", content: "G/G_x",
+      relevance: "learnerSelectedForQuery"
     }]);
 
     state = await application.submit({
@@ -4536,12 +4574,15 @@ describe("Learning Application", () => {
     const research = new DeterministicExternalResearch();
     const { application } = await launchWithExternalResearch(research);
     let state = await application.submit({ type: "startQuickStudy", mathematics: "Study Cauchy's theorem." });
+    state = await application.submit({ type: "setResearchEgressPermission", enabled: true });
     research.error = new DOMException("Research timed out", "TimeoutError");
     state = await application.submit({
       type: "researchWeb",
       query: { theoremNames: ["Cauchy's theorem"], assumptions: [], keywords: ["finite groups"] },
       sourceAnchorIds: []
     });
+    await application.waitForModelWork();
+    state = application.getState();
     expect(state.sessions[0].researchActions.at(-1)).toMatchObject({
       status: "timedOut", error: expect.stringContaining("timed out")
     });
@@ -4553,10 +4594,41 @@ describe("Learning Application", () => {
       query: { theoremNames: ["Cauchy's theorem"], assumptions: [], keywords: [] },
       sourceAnchorIds: []
     });
+    await application.waitForModelWork();
+    state = application.getState();
     expect(state.sessions[0].researchActions.at(-1)).toMatchObject({
       status: "failed", error: expect.stringContaining("malformed result")
     });
     expect(state.sessions[0].accessPolicy).toBe("focused");
+  });
+
+  it("publishes cancellable external research and never retries it silently", async () => {
+    const research = new DeterministicExternalResearch();
+    research.hold = true;
+    const { application } = await launchWithExternalResearch(research);
+    let state = await application.submit({ type: "startQuickStudy", mathematics: "Study the Sylow theorems." });
+    state = await application.submit({ type: "setResearchEgressPermission", enabled: true });
+    const observedStatuses: string[] = [];
+    application.subscribe((next) => {
+      const status = next.sessions[0]?.researchActions.at(-1)?.status;
+      if (status) observedStatuses.push(status);
+    });
+
+    state = await application.submit({
+      type: "researchWeb",
+      query: { theoremNames: ["Sylow theorems"], assumptions: [], keywords: ["finite groups"] },
+      sourceAnchorIds: []
+    });
+    const actionId = state.sessions[0].researchActions.at(-1)!.id;
+    expect(observedStatuses).toContain("running");
+    expect(state.sessions[0].researchActions.at(-1)).toMatchObject({ status: "running" });
+
+    state = await application.submit({ type: "cancelExternalResearch", researchActionId: actionId });
+    await application.waitForModelWork();
+    expect(state.sessions[0].researchActions.at(-1)).toMatchObject({
+      status: "stopped", error: expect.stringContaining("stopped by the learner")
+    });
+    expect(research.requests).toHaveLength(1);
   });
 
   it("supplies only authorized source content to the Model Runtime", async () => {
@@ -5115,10 +5187,16 @@ class DeterministicExternalResearch implements ExternalResearch {
     sources: [{ title: "Orbit-stabilizer theorem", url: "https://example.test/orbit-stabilizer" }]
   };
   error: Error | null = null;
+  hold = false;
 
   async research(request: ExternalResearchRequest): Promise<ExternalResearchResult> {
     this.requests.push(request);
     if (this.error) throw this.error;
+    if (this.hold) {
+      await new Promise<void>((_resolve, reject) => request.signal.addEventListener(
+        "abort", () => reject(new DOMException("External research was stopped.", "AbortError")), { once: true }
+      ));
+    }
     return structuredClone(this.result);
   }
 }

@@ -13,10 +13,13 @@ export interface ResearchExcerpt {
   kind: "excerpt" | "equation" | "selectedPages";
   content: string;
   location: string;
+  relevance: "learnerSelectedForQuery";
 }
 
 export interface ExternalResearchRequest {
   query: DerivedResearchQuery;
+  queryOrigin: "learnerAuthored" | "automaticCorroboration";
+  informedBySourceIds: string[];
   destination: string;
   excerpts: ResearchExcerpt[];
   signal: AbortSignal;

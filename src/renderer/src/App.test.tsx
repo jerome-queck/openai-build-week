@@ -21,6 +21,8 @@ describe("anchored teaching workbench", () => {
         text: "Heine-Borel theorem; compact subset",
         theoremNames: ["Heine-Borel theorem"], assumptions: [], keywords: ["compact subset"]
       },
+      queryOrigin: "learnerAuthored",
+      informedBySourceIds: [],
       destination: "https://duckduckgo.com/?q=Heine-Borel+theorem%3B+compact+subset",
       excerpts: [], status: "completed", error: null,
       result: {
@@ -52,7 +54,7 @@ describe("anchored teaching workbench", () => {
       },
       sourceAnchorIds: ["anchor-1"]
     });
-    await user.click(within(panel).getByRole("checkbox", { name: "Allow Source Excerpt Egress for this Learning Session" }));
+    await user.click(within(panel).getByRole("checkbox", { name: "Allow External Research for this Learning Session" }));
     expect(api.submit).toHaveBeenCalledWith({ type: "setResearchEgressPermission", enabled: false });
   });
 

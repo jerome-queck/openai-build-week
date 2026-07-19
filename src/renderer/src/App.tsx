@@ -2007,7 +2007,7 @@ function ExternalResearchPanel({ state, session, onState }: {
         <div>
           <p className="eyebrow">External research</p>
           <h2 id="external-research-title">Privacy-minimized web research</h2>
-          <p>Independent from Codex model access. Every Session Access Policy can use a Derived Research Query.</p>
+          <p>Independent from Codex model access. Every Session Access Policy can use a Derived Research Query after session-scoped Research Egress Permission is granted.</p>
         </div>
         <span className="saved" role="status">{sessionAccessPolicyLabel(session.accessPolicy)}</span>
       </div>
@@ -2018,7 +2018,7 @@ function ExternalResearchPanel({ state, session, onState }: {
         <input id="research-assumptions" value={assumptions} onChange={(event) => setAssumptions(event.target.value)} />
         <label htmlFor="research-keywords">Mathematical keywords</label>
         <input id="research-keywords" value={keywords} onChange={(event) => setKeywords(event.target.value)} />
-        <small>Separate multiple terms with semicolons. Automatic queries exclude raw passages, local paths, filenames, annotations, Personal Notes, and unrelated workspace context.</small>
+        <small>Separate multiple terms with semicolons. Learner-authored terms do not read local material. Automatic queries record the policy-authorized sources that informed them and exclude raw passages, local paths, filenames, annotations, Personal Notes, and unrelated workspace context.</small>
         <label className="confirmation-preference">
           <input type="checkbox" checked={includeActiveAnchor}
             disabled={!activeAnchor || !state.sourceExcerptEgressPreference.enabled
@@ -2038,21 +2038,29 @@ function ExternalResearchPanel({ state, session, onState }: {
       <label className="confirmation-preference">
         <input type="checkbox" checked={session.researchEgressPermission.status === "granted"}
           onChange={(event) => void submit({ type: "setResearchEgressPermission", enabled: event.target.checked })} />
-        Allow Source Excerpt Egress for this Learning Session
+        Allow External Research for this Learning Session
       </label>
+      <small>Granting permission starts a minimized automatic Corroboration Pass when the intake names a theorem. Revoking it stops active research and never retries silently.</small>
       <small>Only inspectable excerpts under the active policy are eligible. Whole-file transmission always needs a separate explicit confirmation and is not available from this control.</small>
       {latestResearch && (
         <article className="research-receipt" aria-label="Latest external research receipt">
           <p className="eyebrow">Derived Research Query</p>
           <strong>{latestResearch.query.text}</strong>
           <dl>
+            <div><dt>Query origin</dt><dd>{latestResearch.queryOrigin === "automaticCorroboration" ? "Automatic Source Corroboration" : "Learner-authored terms"}</dd></div>
+            <div><dt>Local sources informing query</dt><dd>{latestResearch.informedBySourceIds.length}</dd></div>
             <div><dt>Destination used</dt><dd><code>{latestResearch.destination}</code></dd></div>
             <div><dt>Source Excerpts sent</dt><dd>{latestResearch.excerpts.length}</dd></div>
-            <div><dt>Status</dt><dd>{latestResearch.status}</dd></div>
+            <div><dt>Status</dt><dd role="status">{latestResearch.status}</dd></div>
           </dl>
           <button className="secondary" onClick={() => void window.quickStudy.openExternal(latestResearch.destination)}>
             Inspect destination used
           </button>
+          {latestResearch.status === "running" && (
+            <button className="secondary" onClick={() => void submit({
+              type: "cancelExternalResearch", researchActionId: latestResearch.id
+            })}>Stop external research</button>
+          )}
           {latestResearch.result && <><h3>{latestResearch.result.title}</h3><p>{latestResearch.result.summary}</p></>}
           {latestResearch.error && <p className="failure-message" role="alert">{latestResearch.error}</p>}
         </article>

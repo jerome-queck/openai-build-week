@@ -93,6 +93,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "retryAgentTask":
     case "resumeAgentTask":
       return "taskId" in action && typeof action.taskId === "string";
+    case "cancelExternalResearch":
+      return "researchActionId" in action && typeof action.researchActionId === "string";
     case "resumeSession":
     case "cancelSessionModelWork":
       return "sessionId" in action && typeof action.sessionId === "string";
