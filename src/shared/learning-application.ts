@@ -324,6 +324,11 @@ export interface SourceIndexExtraction {
   pages: SourceIndexPage[];
 }
 
+export interface SourceIndexExtractionResult extends SourceIndexExtraction {
+  fingerprint: SourceFingerprint;
+  linkRefresh?: Pick<SelectedLocalSource, "lastKnownPath" | "canonicalPath" | "accessGrant">;
+}
+
 export interface SourceIndexSummary {
   sourceId: string;
   status: "ready" | "cleared" | "unavailable";
@@ -456,6 +461,7 @@ export interface ManagedAsset {
   sourceSnapshot?: {
     linkedSourceId: string;
     sourceRevisionId: string;
+    encoding: "base64";
   };
 }
 
@@ -472,11 +478,12 @@ export interface AvailableLinkedSourceView {
 
 export interface LocalSourceAccess {
   read(source: LinkedSource): Promise<AvailableLinkedSourceView>;
-  extractForIndex(source: LinkedSource): Promise<SourceIndexExtraction>;
+  extractForIndex(source: LinkedSource): Promise<SourceIndexExtractionResult>;
   snapshot(source: LinkedSource): Promise<{
     mediaType: ManagedAsset["mediaType"];
-    content: string;
+    contentBase64: string;
     fingerprint: SourceFingerprint;
+    linkRefresh?: Pick<SelectedLocalSource, "lastKnownPath" | "canonicalPath" | "accessGrant">;
   }>;
 }
 
@@ -954,7 +961,11 @@ export class LearningApplication {
     return this.serializeSourceIndexOperation(() => this.searchSourceIndexNow(workspaceId, query));
   }
 
-  private async searchSourceIndexNow(workspaceId: string, query: string): Promise<SourceSearchResult[]> {
+  private async searchSourceIndexNow(
+    workspaceId: string,
+    query: string,
+    allowChangedSourceRetry = true
+  ): Promise<SourceSearchResult[]> {
     this.requireWorkspace(workspaceId);
     if (query.length > 500) throw new Error("Source Index search is limited to 500 characters.");
     const terms = searchTerms(query);
@@ -964,27 +975,40 @@ export class LearningApplication {
     const workspace = this.requireWorkspace(workspaceId);
     const results: SourceSearchResult[] = [];
     const seenLocations = new Set<string>();
-    for (const document of this.sourceIndexDocuments.values()) {
+    for (const cachedDocument of this.sourceIndexDocuments.values()) {
+      let document = cachedDocument;
       if (document.workspaceId !== workspaceId || this.sourceIndexStatus(document.sourceId)?.status !== "ready") continue;
       const source = this.state.sources.find((candidate): candidate is LinkedSource =>
         candidate.id === document.sourceId && candidate.kind === "linkedSource"
       );
       if (!source) continue;
-      const view = await this.openLinkedSource(document.sourceId);
+      const opened = await this.readLinkedSourceNow(document.sourceId);
+      const view = opened.view;
       if (view.status === "unavailable") {
         await this.markSourceIndexUnavailable(document.sourceId, view.error);
         continue;
+      }
+      if (opened.changed || !sameFingerprint(document.fingerprint, source.link.fingerprint)) {
+        await this.indexSourceNow(document.sourceId, true);
+        const rebuilt = this.sourceIndexDocuments.get(document.sourceId);
+        if (!rebuilt) continue;
+        document = rebuilt;
       }
       const hasCachedMatch = document.pages.some((page) => page.regions.some(
         (region) => termHashes.every((termHash) => region.termHashes.includes(termHash))
       ));
       if (!hasCachedMatch) continue;
-      let liveExtraction: SourceIndexExtraction;
+      let liveExtraction: SourceIndexExtractionResult;
       try {
-        liveExtraction = validatedSourceIndexExtraction(await this.sourceAccess!.extractForIndex(source));
+        liveExtraction = validatedSourceIndexExtractionResult(await this.sourceAccess!.extractForIndex(source));
       } catch (error) {
         await this.markSourceIndexUnavailable(document.sourceId, usefulSourceError(error));
         continue;
+      }
+      if (!sameFingerprint(document.fingerprint, liveExtraction.fingerprint)) {
+        this.recordSourceFingerprint(source, liveExtraction.fingerprint);
+        await this.indexSourceNow(document.sourceId, true);
+        return allowChangedSourceRetry ? this.searchSourceIndexNow(workspaceId, query, false) : [];
       }
       for (const page of document.pages) {
         for (const region of page.regions) {
@@ -1030,20 +1054,26 @@ export class LearningApplication {
     return this.serializeSourceIndexOperation(() => this.indexSourceNow(sourceId));
   }
 
-  private async indexSourceNow(sourceId: string): Promise<LearningApplicationState> {
+  private async indexSourceNow(sourceId: string, sourceAlreadyOpened = false): Promise<LearningApplicationState> {
     const source = this.state.sources.find((candidate): candidate is LinkedSource =>
       candidate.id === sourceId && candidate.kind === "linkedSource"
     );
     if (!source) throw new Error("Choose an indexable Linked Source.");
     try {
-      const view = await this.openLinkedSource(sourceId);
-      if (view.status === "unavailable") return this.markSourceIndexUnavailable(sourceId, view.error);
-      const extraction = validatedSourceIndexExtraction(await this.sourceAccess!.extractForIndex(source));
+      if (!sourceAlreadyOpened) {
+        const opened = await this.readLinkedSourceNow(sourceId);
+        if (opened.view.status === "unavailable") return this.markSourceIndexUnavailable(sourceId, opened.view.error);
+      }
+      const extraction = validatedSourceIndexExtractionResult(await this.sourceAccess!.extractForIndex(source));
+      if (extraction.linkRefresh) Object.assign(source.link, extraction.linkRefresh);
+      this.recordSourceFingerprint(source, extraction.fingerprint);
+      source.link.accessStatus = "available";
+      source.link.error = null;
       const document: SourceIndexDocument = {
         sourceId,
         sourceName: source.name,
         workspaceId: source.workspaceId,
-        fingerprint: source.link.fingerprint,
+        fingerprint: extraction.fingerprint,
         extractionMethod: extraction.extractionMethod,
         pages: extraction.pages.map((page) => ({
           ...page,
@@ -1103,19 +1133,31 @@ export class LearningApplication {
     if (!result || this.sourceIndexStatus(result.sourceId)?.status !== "ready") {
       throw new Error("Search this Source Index again before opening the result.");
     }
-    const view = await this.openLinkedSource(result.sourceId);
+    const opened = await this.readLinkedSourceNow(result.sourceId);
+    const view = opened.view;
     if (view.status === "unavailable") return view;
     const source = this.state.sources.find((candidate): candidate is LinkedSource =>
       candidate.id === result.sourceId && candidate.kind === "linkedSource"
     );
     if (!source) throw new Error("Search this Source Index again before opening the result.");
+    if (opened.changed) {
+      await this.indexSourceNow(result.sourceId, true);
+      throw new Error("This source changed. Search its rebuilt Source Index again before opening the result.");
+    }
     let extraction: SourceIndexExtraction;
+    let extracted: SourceIndexExtractionResult;
     try {
-      extraction = validatedSourceIndexExtraction(await this.sourceAccess!.extractForIndex(source));
+      extracted = validatedSourceIndexExtractionResult(await this.sourceAccess!.extractForIndex(source));
     } catch (error) {
       await this.markSourceIndexUnavailable(result.sourceId, usefulSourceError(error));
       throw error;
     }
+    if (!sameFingerprint(source.link.fingerprint, extracted.fingerprint)) {
+      this.recordSourceFingerprint(source, extracted.fingerprint);
+      await this.indexSourceNow(result.sourceId, true);
+      throw new Error("This source changed. Search its rebuilt Source Index again before opening the result.");
+    }
+    extraction = extracted;
     const page = extraction.pages.find((candidate) => candidate.pageNumber === result.match.pageNumber);
     const region = page?.regions.find((candidate) => sameIndexMatch(candidate, result.match));
     if (!page || !region) throw new Error("Search this Source Index again before opening the result.");
@@ -1199,31 +1241,38 @@ export class LearningApplication {
       lastKnownPath: selection.lastKnownPath,
       canonicalPath: selection.canonicalPath,
       accessGrant: selection.accessGrant,
-      fingerprint: selection.fingerprint,
       accessStatus: "available" as const,
       error: null
     });
     if (changed) {
-      source.link.currentRevisionId = crypto.randomUUID();
-      this.state.sourceRevisions.push(sourceRevision(source));
+      this.recordSourceFingerprint(source, selection.fingerprint);
     }
     await this.publishAndPersist();
-    if (changed || this.sourceIndexStatus(sourceId)?.status === "unavailable") await this.indexSourceNow(sourceId);
+    if (changed || this.sourceIndexStatus(sourceId)?.status === "unavailable") {
+      await this.serializeSourceIndexOperation(() => this.indexSourceNow(sourceId, true));
+    }
     return this.getState();
   }
 
   async preserveSourceSnapshot(sourceId: string): Promise<LearningApplicationState> {
-    const source = this.state.sources.find(
+    let source = this.state.sources.find(
       (candidate): candidate is LinkedSource => candidate.id === sourceId && candidate.kind === "linkedSource"
     );
     if (!source) throw new Error("Choose an existing Linked Source.");
     if (!this.sourceAccess) throw new Error("Local source access is unavailable.");
+    const opened = await this.readLinkedSourceNow(sourceId);
+    if (opened.view.status === "unavailable") return this.getState();
+    if (opened.changed) await this.serializeSourceIndexOperation(() => this.indexSourceNow(sourceId, true));
+    source = this.state.sources.find(
+      (candidate): candidate is LinkedSource => candidate.id === sourceId && candidate.kind === "linkedSource"
+    )!;
     const revision = this.state.sourceRevisions.find(
       (candidate) => candidate.id === source.link.currentRevisionId && candidate.sourceId === source.id
     );
     if (!revision) throw new Error("The current Source Revision is unavailable.");
     if (revision.snapshotAssetId) return this.getState();
     const snapshot = await this.sourceAccess.snapshot(source);
+    if (snapshot.linkRefresh) Object.assign(source.link, snapshot.linkRefresh);
     if (!sameFingerprint(source.link.fingerprint, snapshot.fingerprint)) {
       throw new Error("This source changed before its Source Snapshot could be preserved. Open it and review the new revision first.");
     }
@@ -1233,8 +1282,8 @@ export class LearningApplication {
       workspaceId: source.workspaceId,
       name: `${source.name} — Source Snapshot`,
       mediaType: snapshot.mediaType,
-      content: snapshot.content,
-      sourceSnapshot: { linkedSourceId: source.id, sourceRevisionId: revision.id }
+      content: snapshot.contentBase64,
+      sourceSnapshot: { linkedSourceId: source.id, sourceRevisionId: revision.id, encoding: "base64" }
     };
     this.state.sources.push(asset);
     this.requireWorkspace(source.workspaceId).context.sourceIds.push(asset.id);
@@ -1243,6 +1292,14 @@ export class LearningApplication {
   }
 
   async openLinkedSource(sourceId: string): Promise<LinkedSourceView> {
+    const opened = await this.readLinkedSourceNow(sourceId);
+    if (opened.view.status === "available" && opened.changed) {
+      await this.serializeSourceIndexOperation(() => this.indexSourceNow(sourceId, true));
+    }
+    return opened.view;
+  }
+
+  private async readLinkedSourceNow(sourceId: string): Promise<{ view: LinkedSourceView; changed: boolean }> {
     const source = this.state.sources.find(
       (candidate): candidate is LinkedSource => candidate.id === sourceId && candidate.kind === "linkedSource"
     );
@@ -1252,34 +1309,17 @@ export class LearningApplication {
       const view = await this.sourceAccess.read(source);
       if (view.linkRefresh) Object.assign(source.link, view.linkRefresh);
       const changed = !sameFingerprint(source.link.fingerprint, view.fingerprint);
-      if (changed) {
-        source.link.fingerprint = view.fingerprint;
-        source.link.currentRevisionId = crypto.randomUUID();
-        const revision = sourceRevision(source);
-        this.state.sourceRevisions.push(revision);
-        this.sourceIndexDocuments.delete(sourceId);
-        this.removeSourceSearchResults(sourceId);
-        this.upsertSourceIndexSummary({
-          sourceId,
-          status: "cleared",
-          extractionMethod: null,
-          pageCount: 0,
-          equationCount: 0,
-          error: null
-        });
-        await this.persistSourceIndexCache();
-      }
+      if (changed) this.recordSourceFingerprint(source, view.fingerprint);
       source.link.accessStatus = "available";
       source.link.error = null;
       await this.publishAndPersist();
-      if (changed) await this.indexSourceNow(sourceId);
-      return { status: "available", ...view };
+      return { view: { status: "available", ...view }, changed };
     } catch (error) {
       const message = usefulSourceError(error);
       source.link.accessStatus = "unavailable";
       source.link.error = message;
       await this.publishAndPersist();
-      return { status: "unavailable", sourceId, error: message };
+      return { view: { status: "unavailable", sourceId, error: message }, changed: false };
     }
   }
 
@@ -2885,7 +2925,7 @@ export class LearningApplication {
       const source = this.state.sources.find((candidate) => candidate.id === sourceId);
       if (!source) continue;
       if (source.kind === "managedAsset") {
-        addContext({ sourceId, name: source.name, mediaType: source.mediaType, content: source.content });
+        addContext({ sourceId, name: source.name, mediaType: source.mediaType, content: managedAssetLearnerContent(source) });
         continue;
       }
       if (!this.sourceAccess) continue;
@@ -3232,6 +3272,15 @@ export class LearningApplication {
     if (linkedSources.some((source) => source.role === "externalAttachment" && pathIsInside(source.link.canonicalPath, path))) {
       throw new Error("An existing External Attachment is already inside this Primary Folder.");
     }
+  }
+
+  private recordSourceFingerprint(source: LinkedSource, fingerprint: SourceFingerprint): boolean {
+    if (sameFingerprint(source.link.fingerprint, fingerprint)) return false;
+    source.link.fingerprint = structuredClone(fingerprint);
+    source.link.currentRevisionId = crypto.randomUUID();
+    this.state.sourceRevisions.push(sourceRevision(source));
+    this.removeSourceSearchResults(source.id);
+    return true;
   }
 
   private createManagedTextAsset(workspaceId: string, content: string): ManagedAsset {
@@ -4055,7 +4104,7 @@ function refreshAskBarContext(state: LearningApplicationState, session: Learning
       location: source.kind === "managedAsset"
         ? "Managed Asset in this Learning Session"
         : `${source.role === "primaryFolder" ? "Primary Folder" : "External Attachment"} in this Study Workspace`,
-      preview: source.kind === "managedAsset" ? source.content.slice(0, 120) : source.name,
+      preview: source.kind === "managedAsset" ? managedAssetLearnerContent(source).slice(0, 120) : source.name,
       sourceId: source.id,
       sourceAnchorId: null
     });
@@ -4371,7 +4420,9 @@ function migrateWorkspaceSources(value: unknown): WorkspaceSource[] {
       if (!validManagedAssetMediaType(candidate.mediaType) || typeof candidate.content !== "string"
         || !(candidate.sourceSnapshot === undefined || (isRecord(candidate.sourceSnapshot)
           && typeof candidate.sourceSnapshot.linkedSourceId === "string"
-          && typeof candidate.sourceSnapshot.sourceRevisionId === "string"))) {
+          && typeof candidate.sourceSnapshot.sourceRevisionId === "string"
+          && candidate.sourceSnapshot.encoding === "base64"
+          && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(candidate.content)))) {
         throw new Error("Stored Managed Asset is invalid.");
       }
       return candidate as unknown as ManagedAsset;
@@ -4537,6 +4588,19 @@ function validatedSourceIndexExtraction(value: unknown): SourceIndexExtraction {
   return {
     extractionMethod: value.extractionMethod as SourceIndexExtraction["extractionMethod"],
     pages
+  };
+}
+
+function validatedSourceIndexExtractionResult(value: unknown): SourceIndexExtractionResult {
+  const extraction = validatedSourceIndexExtraction(value);
+  if (!isRecord(value) || !validFingerprint(value.fingerprint)
+    || !(value.linkRefresh === undefined || validSourceLinkRefresh(value.linkRefresh))) {
+    throw new Error("Extracted Source Index identity is invalid.");
+  }
+  return {
+    ...extraction,
+    fingerprint: value.fingerprint,
+    ...(value.linkRefresh === undefined ? {} : { linkRefresh: value.linkRefresh })
   };
 }
 
@@ -4986,7 +5050,7 @@ function validatedSourceAnchorSelection(value: unknown, source?: WorkspaceSource
     prefix: value.prefix,
     suffix: value.suffix
   };
-  if (source?.kind === "managedAsset" && !matchesSourceTextLocation(source.content, location)) {
+  if (source?.kind === "managedAsset" && !matchesSourceTextLocation(managedAssetLearnerContent(source), location)) {
     throw new Error("The selected source text no longer matches this Source Layer.");
   }
   if (value.kind === "text") return { kind: "text", ...location };
@@ -5032,9 +5096,23 @@ function validAccessGrant(value: unknown): value is LocalSourceAccessGrant {
     && typeof value.bookmarkData === "string" && Boolean(value.bookmarkData));
 }
 
+function validSourceLinkRefresh(
+  value: unknown
+): value is Pick<SelectedLocalSource, "lastKnownPath" | "canonicalPath" | "accessGrant"> {
+  return isRecord(value) && typeof value.lastKnownPath === "string" && isAbsolute(value.lastKnownPath)
+    && typeof value.canonicalPath === "string" && isAbsolute(value.canonicalPath)
+    && validAccessGrant(value.accessGrant);
+}
+
 function validManagedAssetMediaType(value: unknown): value is ManagedAsset["mediaType"] {
   return ["text/plain", "application/pdf", "image/png", "image/jpeg", "inode/directory",
     "application/octet-stream", "application/vnd.quick-study.folder-snapshot+json"].includes(String(value));
+}
+
+function managedAssetLearnerContent(asset: ManagedAsset): string {
+  if (!asset.sourceSnapshot) return asset.content;
+  if (asset.mediaType === "text/plain") return Buffer.from(asset.content, "base64").toString("utf8");
+  return `[Explicit ${asset.mediaType} Source Snapshot: ${asset.name}]`;
 }
 
 function validFingerprint(value: unknown): value is SourceFingerprint {

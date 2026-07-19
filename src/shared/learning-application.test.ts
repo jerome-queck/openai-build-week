@@ -8,6 +8,7 @@ import {
   type LocalSourceAccess,
   type SelectedLocalSource,
   type SourceIndexExtraction,
+  type SourceIndexExtractionResult,
   type SourceFingerprint
 } from "./learning-application";
 import { ModelAccessError, type ArtifactSynthesisRequest, type ModelAccessCause, type ModelRuntime, type RuntimeAccessRequest, type SessionProposal, type TeachingRequest } from "./model-runtime";
@@ -1676,6 +1677,8 @@ describe("Learning Application", () => {
       id: source.id,
       link: { accessStatus: "unavailable", error: "The source is missing or access is no longer available." }
     });
+    const withoutAutomaticSnapshot = await application.preserveSourceSnapshot(source.id);
+    expect(withoutAutomaticSnapshot.sources.filter((candidate) => candidate.kind === "managedAsset")).toEqual([]);
 
   });
 
@@ -1795,6 +1798,36 @@ describe("Learning Application", () => {
     expect(state.sources.filter((candidate) => candidate.kind === "managedAsset")).toEqual([]);
   });
 
+  it("serializes automatic and learner-requested Source Index rebuilds", async () => {
+    const sourceAccess = new DeterministicSourceAccess();
+    sourceAccess.indexBySourceName.set("lemma.txt", textExtraction("Revised lemma."));
+    const { application } = await launchWithSourceAccess(sourceAccess);
+    const workspace = await application.submit({ type: "createWorkspace", name: "Algebra" });
+    const linked = await application.linkExternalAttachment(workspace.navigation.workspaceId, {
+      name: "lemma.txt",
+      resourceType: "file",
+      lastKnownPath: "/Users/learner/lemma.txt",
+      canonicalPath: "/Users/learner/lemma.txt",
+      accessGrant: null,
+      fingerprint: sourceAccess.fingerprint
+    });
+    const source = linked.sources.find((candidate): candidate is LinkedSource => candidate.kind === "linkedSource")!;
+    sourceAccess.fingerprint = { size: 72, modifiedAtMs: 5678 };
+    let releaseExtraction!: () => void;
+    sourceAccess.indexGate = new Promise((resolve) => { releaseExtraction = resolve; });
+
+    const automatic = application.openLinkedSource(source.id);
+    await vi.waitFor(() => expect(sourceAccess.activeIndexExtractions).toBe(1));
+    const requested = application.rebuildSourceIndex(source.id);
+    await Promise.resolve();
+
+    expect(sourceAccess.activeIndexExtractions).toBe(1);
+    expect(sourceAccess.maxConcurrentIndexExtractions).toBe(1);
+    releaseExtraction();
+    await Promise.all([automatic, requested]);
+    expect(sourceAccess.maxConcurrentIndexExtractions).toBe(1);
+  });
+
   it("preserves only the current Source Revision as an explicit Source Snapshot", async () => {
     const sourceAccess = new DeterministicSourceAccess();
     sourceAccess.snapshotContent = "Exact learner-requested revision.";
@@ -1810,6 +1843,11 @@ describe("Learning Application", () => {
     });
     const source = linked.sources.find((candidate): candidate is LinkedSource => candidate.kind === "linkedSource")!;
     const revisionId = source.link.currentRevisionId;
+    sourceAccess.snapshotLinkRefresh = {
+      lastKnownPath: "/Users/learner/moved/proof.txt",
+      canonicalPath: "/Users/learner/moved/proof.txt",
+      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "snapshot-bookmark" }
+    };
 
     const snapshotted = await application.preserveSourceSnapshot(source.id);
 
@@ -1819,14 +1857,45 @@ describe("Learning Application", () => {
       kind: "managedAsset",
       name: "proof.txt — Source Snapshot",
       mediaType: "text/plain",
-      content: "Exact learner-requested revision.",
-      sourceSnapshot: { linkedSourceId: source.id, sourceRevisionId: revisionId }
+      content: Buffer.from("Exact learner-requested revision.").toString("base64"),
+      sourceSnapshot: { linkedSourceId: source.id, sourceRevisionId: revisionId, encoding: "base64" }
     });
     expect(sourceAccess.snapshotSourceIds).toEqual([source.id]);
     const relaunched = await LearningApplication.launch(dataDirectory, null, sourceAccess);
     applications.push(relaunched);
     expect(relaunched.getState().sourceRevisions.find((candidate) => candidate.id === revisionId)?.snapshotAssetId)
       .toBe(snapshot.id);
+    expect(relaunched.getState().sources.find((candidate) => candidate.id === source.id)).toMatchObject({
+      link: {
+        lastKnownPath: "/Users/learner/moved/proof.txt",
+        accessGrant: { kind: "securityScopedBookmark", bookmarkData: "snapshot-bookmark" }
+      }
+    });
+  });
+
+  it("ties a rebuilt Source Index to the stable fingerprint returned by extraction", async () => {
+    const sourceAccess = new DeterministicSourceAccess();
+    sourceAccess.indexBySourceName.set("lemma.txt", textExtraction("Revised lemma."));
+    sourceAccess.indexFingerprint = { size: 80, modifiedAtMs: 6789 };
+    const { application } = await launchWithSourceAccess(sourceAccess);
+    const workspace = await application.submit({ type: "createWorkspace", name: "Algebra" });
+    const linked = await application.linkExternalAttachment(workspace.navigation.workspaceId, {
+      name: "lemma.txt",
+      resourceType: "file",
+      lastKnownPath: "/Users/learner/lemma.txt",
+      canonicalPath: "/Users/learner/lemma.txt",
+      accessGrant: null,
+      fingerprint: sourceAccess.fingerprint
+    });
+    const source = linked.sources.find((candidate): candidate is LinkedSource => candidate.kind === "linkedSource")!;
+
+    const indexed = await application.indexSource(source.id);
+
+    expect(indexed.sources.find((candidate) => candidate.id === source.id)).toMatchObject({
+      link: { fingerprint: { size: 80, modifiedAtMs: 6789 } }
+    });
+    expect(indexed.sourceRevisions.filter((revision) => revision.sourceId === source.id)).toHaveLength(2);
+    expect(indexed.sourceIndexes).toContainEqual(expect.objectContaining({ sourceId: source.id, status: "ready" }));
   });
 
   it("indexes, searches, clears, and rebuilds source content without disturbing anchors or canonical records", async () => {
@@ -3754,6 +3823,11 @@ class DeterministicSourceAccess implements LocalSourceAccess {
   error: Error | null = null;
   fingerprint: SourceFingerprint = { size: 64, modifiedAtMs: 1234 };
   linkRefresh: Awaited<ReturnType<LocalSourceAccess["read"]>>["linkRefresh"];
+  snapshotLinkRefresh: Awaited<ReturnType<LocalSourceAccess["read"]>>["linkRefresh"];
+  indexFingerprint: SourceFingerprint | null = null;
+  indexGate: Promise<void> | null = null;
+  activeIndexExtractions = 0;
+  maxConcurrentIndexExtractions = 0;
   snapshotContent = "Every open cover has a finite subcover.";
 
   async read(source: LinkedSource) {
@@ -3769,18 +3843,30 @@ class DeterministicSourceAccess implements LocalSourceAccess {
     };
   }
 
-  async extractForIndex(source: LinkedSource): Promise<SourceIndexExtraction> {
+  async extractForIndex(source: LinkedSource): Promise<SourceIndexExtractionResult> {
     this.indexedSourceIds.push(source.id);
     if (this.error) throw this.error;
-    const extraction = this.indexBySourceName.get(source.name);
-    if (!extraction) throw new Error("This source does not have indexable content.");
-    return structuredClone(extraction);
+    this.activeIndexExtractions += 1;
+    this.maxConcurrentIndexExtractions = Math.max(this.maxConcurrentIndexExtractions, this.activeIndexExtractions);
+    try {
+      if (this.indexGate) await this.indexGate;
+      const extraction = this.indexBySourceName.get(source.name);
+      if (!extraction) throw new Error("This source does not have indexable content.");
+      return { ...structuredClone(extraction), fingerprint: this.indexFingerprint ?? this.fingerprint };
+    } finally {
+      this.activeIndexExtractions -= 1;
+    }
   }
 
   async snapshot(source: LinkedSource) {
     this.snapshotSourceIds.push(source.id);
     if (this.error) throw this.error;
-    return { mediaType: "text/plain" as const, content: this.snapshotContent, fingerprint: this.fingerprint };
+    return {
+      mediaType: "text/plain" as const,
+      contentBase64: Buffer.from(this.snapshotContent).toString("base64"),
+      fingerprint: this.fingerprint,
+      ...(this.snapshotLinkRefresh ? { linkRefresh: this.snapshotLinkRefresh } : {})
+    };
   }
 }
 

@@ -74,6 +74,22 @@ describe("macOS source access", () => {
     expect(view.content).toContain("finite subcover");
   });
 
+  it("keeps security-scoped access open until an asynchronous read settles", async () => {
+    let finishStat!: (value: ReturnType<typeof fileStat>) => void;
+    const stopAccess = vi.fn();
+    const sourceDependencies = dependencies();
+    sourceDependencies.startAccessingSecurityScopedResource.mockReturnValue(stopAccess);
+    sourceDependencies.stat.mockReturnValue(new Promise((resolve) => { finishStat = resolve; }));
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("settled"));
+    const pending = new MacOsSourceAccess(sourceDependencies).read(linkedFile());
+
+    await Promise.resolve();
+    expect(stopAccess).not.toHaveBeenCalled();
+    finishStat(fileStat());
+    await pending;
+    expect(stopAccess).toHaveBeenCalledOnce();
+  });
+
   it("uses a persisted bookmark after a source-access relaunch", async () => {
     const first = dependencies();
     first.showOpenDialog.mockResolvedValue({
@@ -242,11 +258,29 @@ describe("macOS source access", () => {
 
     expect(snapshot).toEqual({
       mediaType: "text/plain",
-      content: "Exact preserved proof.\n",
+      contentBase64: Buffer.from("Exact preserved proof.\n").toString("base64"),
       fingerprint: { size: 128, modifiedAtMs: 1234 }
     });
-    expect(sourceDependencies.readFile).toHaveBeenCalledOnce();
+    expect(sourceDependencies.readFile).toHaveBeenCalledTimes(2);
     expect(sourceDependencies.readFile).toHaveBeenCalledWith("/Users/learner/notes/lecture.txt");
+  });
+
+  it("returns refreshed bookmark metadata with an explicit Source Snapshot", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.resolveSecurityScopedBookmark.mockResolvedValue({
+      path: "/Users/learner/moved/lecture.txt",
+      stale: true,
+      refreshedBookmarkData: "snapshot-bookmark"
+    });
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("snapshot"));
+
+    const snapshot = await new MacOsSourceAccess(sourceDependencies).snapshot(linkedFile());
+
+    expect(snapshot.linkRefresh).toEqual({
+      lastKnownPath: "/Users/learner/moved/lecture.txt",
+      canonicalPath: "/Users/learner/moved/lecture.txt",
+      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "snapshot-bookmark" }
+    });
   });
 
   it("extracts searchable text, equation geometry, page geometry, and a small thumbnail", async () => {
@@ -309,6 +343,19 @@ describe("macOS source access", () => {
         text: "Assume the sequence is Cauchy"
       })] }]
     });
+  });
+
+  it("rejects native extraction when the source changes before extraction completes", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.stat
+      .mockResolvedValueOnce(fileStat())
+      .mockResolvedValueOnce({ ...fileStat(), size: 129, mtimeMs: 5678 });
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("synthetic-pdf"));
+    sourceDependencies.extractDocument = vi.fn().mockResolvedValue({ extractionMethod: "pdfText", pages: [] });
+    const source = { ...linkedFile(), name: "lecture.pdf" };
+
+    await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex(source))
+      .rejects.toThrow("changed while its Source Index was being built");
   });
 });
 

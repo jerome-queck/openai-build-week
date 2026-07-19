@@ -6,6 +6,7 @@ import type {
   LocalSourceAccess,
   SelectedLocalSource,
   SourceIndexExtraction,
+  SourceIndexExtractionResult,
   SourceFingerprint
 } from "../shared/learning-application";
 
@@ -62,13 +63,13 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       ? this.dependencies.startAccessingSecurityScopedResource(location.bookmarkData)
       : null;
     try {
-      return this.readAtLocation(source, location);
+      return await this.readAtLocation(source, location);
     } finally {
       stopAccess?.();
     }
   }
 
-  async extractForIndex(source: LinkedSource): Promise<SourceIndexExtraction> {
+  async extractForIndex(source: LinkedSource): Promise<SourceIndexExtractionResult> {
     const location = await this.resolveSourceLocation(source);
     const stopAccess = location.bookmarkData
       ? this.dependencies.startAccessingSecurityScopedResource(location.bookmarkData)
@@ -83,11 +84,22 @@ export class MacOsSourceAccess implements LocalSourceAccess {
             ? "ocr"
             : null;
       if (!extractionMethod) throw new Error("This source type does not have indexable mathematical content.");
+      let extraction: SourceIndexExtraction;
       if (view.mediaType !== "text/plain") {
         if (!this.dependencies.extractDocument) throw new Error("Native document indexing is unavailable.");
-        return this.dependencies.extractDocument(location.path);
+        extraction = await this.dependencies.extractDocument(location.path);
+      } else {
+        extraction = textSourceIndexExtraction(view.content, EMPTY_THUMBNAIL_DATA_URL);
       }
-      return textSourceIndexExtraction(view.content, EMPTY_THUMBNAIL_DATA_URL);
+      const afterExtraction = await this.readAtLocation(source, location);
+      if (!sameFingerprint(view.fingerprint, afterExtraction.fingerprint)) {
+        throw new Error("This source changed while its Source Index was being built. Retry after the source is stable.");
+      }
+      return {
+        ...extraction,
+        fingerprint: view.fingerprint,
+        ...(view.linkRefresh ? { linkRefresh: view.linkRefresh } : {})
+      };
     } finally {
       stopAccess?.();
     }
@@ -101,37 +113,32 @@ export class MacOsSourceAccess implements LocalSourceAccess {
     try {
       const view = await this.readAtLocation(source, location);
       if (source.resourceType === "file") {
-        return { mediaType: view.mediaType, content: view.content, fingerprint: view.fingerprint };
-      }
-      const canonicalRoot = await this.dependencies.realpath(location.path);
-      const files: Array<{ path: string; contentBase64: string }> = [];
-      let totalBytes = 0;
-      const visitedDirectories = new Set<string>();
-      const visit = async (directoryPath: string): Promise<void> => {
-        const canonicalDirectory = await this.dependencies.realpath(directoryPath);
-        if (visitedDirectories.has(canonicalDirectory)) return;
-        visitedDirectories.add(canonicalDirectory);
-        for (const name of (await this.dependencies.readdir(directoryPath)).sort()) {
-          const candidatePath = join(directoryPath, name);
-          const canonicalPath = await this.dependencies.realpath(candidatePath);
-          const relativePath = relative(canonicalRoot, canonicalPath);
-          if (!relativePath || relativePath === ".." || relativePath.startsWith(`..${sep}`)) continue;
-          const stat = await this.dependencies.stat(canonicalPath);
-          if (stat.isDirectory()) {
-            await visit(canonicalPath);
-            continue;
-          }
-          if (!stat.isFile()) continue;
-          totalBytes += stat.size;
-          if (totalBytes > MAX_SOURCE_VIEW_BYTES) throw new Error("This folder is too large to preserve as a Source Snapshot.");
-          files.push({ path: relativePath, contentBase64: (await this.dependencies.readFile(canonicalPath)).toString("base64") });
+        const content = await this.dependencies.readFile(location.path);
+        const afterSnapshotFingerprint = fingerprint(await this.dependencies.stat(location.path));
+        if (!sameFingerprint(view.fingerprint, afterSnapshotFingerprint)) {
+          throw new Error("This source changed while its Source Snapshot was being preserved. Retry after the source is stable.");
         }
-      };
-      await visit(canonicalRoot);
+        return {
+          mediaType: view.mediaType,
+          contentBase64: content.toString("base64"),
+          fingerprint: view.fingerprint,
+          ...(view.linkRefresh ? { linkRefresh: view.linkRefresh } : {})
+        };
+      }
+      const files = (await this.readBoundedFolderFiles(
+        location.path,
+        (name) => sourceMediaType(name) === "text/plain",
+        "This folder is too large to preserve as a Source Snapshot."
+      )).map((file) => ({ path: file.path, contentBase64: file.content.toString("base64") }));
+      const afterSnapshot = await this.readAtLocation(source, location);
+      if (!sameFingerprint(view.fingerprint, afterSnapshot.fingerprint)) {
+        throw new Error("This source changed while its Source Snapshot was being preserved. Retry after the source is stable.");
+      }
       return {
         mediaType: "application/vnd.quick-study.folder-snapshot+json" as const,
-        content: JSON.stringify({ format: "quick-study-folder-snapshot-v1", files }),
-        fingerprint: view.fingerprint
+        contentBase64: Buffer.from(JSON.stringify({ format: "quick-study-folder-snapshot-v1", files })).toString("base64"),
+        fingerprint: view.fingerprint,
+        ...(view.linkRefresh ? { linkRefresh: view.linkRefresh } : {})
       };
     } finally {
       stopAccess?.();
@@ -188,8 +195,21 @@ export class MacOsSourceAccess implements LocalSourceAccess {
   }
 
   private async readSupportedFolder(rootPath: string): Promise<string> {
+    const files = await this.readBoundedFolderFiles(
+      rootPath,
+      (name) => sourceMediaType(name) === "text/plain",
+      "This folder's supported files are too large for the read-only preview."
+    );
+    return files.map((file) => `--- ${file.path} ---\n${file.content.toString("utf8")}`).join("\n\n");
+  }
+
+  private async readBoundedFolderFiles(
+    rootPath: string,
+    include: (name: string) => boolean,
+    tooLargeMessage: string
+  ): Promise<Array<{ path: string; content: Buffer }>> {
     const canonicalRoot = await this.dependencies.realpath(rootPath);
-    const sections: string[] = [];
+    const files: Array<{ path: string; content: Buffer }> = [];
     const visitedDirectories = new Set<string>();
     let totalBytes = 0;
     const visit = async (directoryPath: string): Promise<void> => {
@@ -206,17 +226,14 @@ export class MacOsSourceAccess implements LocalSourceAccess {
           await visit(canonicalPath);
           continue;
         }
-        if (!stat.isFile() || sourceMediaType(name) !== "text/plain") continue;
+        if (!stat.isFile() || !include(name)) continue;
         totalBytes += stat.size;
-        if (totalBytes > MAX_SOURCE_VIEW_BYTES) {
-          throw new Error("This folder's supported files are too large for the read-only preview.");
-        }
-        const content = await this.dependencies.readFile(canonicalPath);
-        sections.push(`--- ${relativePath} ---\n${content.toString("utf8")}`);
+        if (totalBytes > MAX_SOURCE_VIEW_BYTES) throw new Error(tooLargeMessage);
+        files.push({ path: relativePath, content: await this.dependencies.readFile(canonicalPath) });
       }
     };
     await visit(canonicalRoot);
-    return sections.join("\n\n");
+    return files;
   }
 
   private async describePath(
@@ -305,6 +322,11 @@ function fingerprint(stat: FileStat, content?: string): SourceFingerprint {
     modifiedAtMs: stat.mtimeMs,
     ...(content === undefined ? {} : { contentHash: createHash("sha256").update(content).digest("hex") })
   };
+}
+
+function sameFingerprint(left: SourceFingerprint, right: SourceFingerprint): boolean {
+  return left.size === right.size && left.modifiedAtMs === right.modifiedAtMs
+    && left.contentHash === right.contentHash;
 }
 
 function sourceMediaType(name: string): AvailableLinkedSourceView["mediaType"] {
