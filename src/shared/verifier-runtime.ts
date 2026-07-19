@@ -51,6 +51,19 @@ export interface VerifierRuntime {
   run(request: VerifierRunRequest, signal?: AbortSignal): Promise<VerifierRunResult>;
 }
 
+export interface VerifierEnvironmentInspection {
+  installed: boolean;
+  installedBytes: number;
+  cleanupRequired: boolean;
+}
+
+export interface VerifierEnvironmentManager {
+  inspect(): Promise<VerifierEnvironmentInspection>;
+  remove(): Promise<{ reclaimedBytes: number }>;
+  install(): Promise<{ installedBytes: number }>;
+  cleanup(): Promise<{ installed: boolean; installedBytes: number }>;
+}
+
 const KNOWN_CLAIM = "For every natural number n, n + 0 = n.";
 
 export function formalizationForClaim(exactClaim: string): Formalization | null {

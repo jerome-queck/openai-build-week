@@ -95,6 +95,18 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
 }
 
 function ApplicationSettings({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+  const [confirmLeanRemoval, setConfirmLeanRemoval] = useState(false);
+  const [leanActionError, setLeanActionError] = useState<string | null>(null);
+  const environment = state.verifierEnvironment;
+  const storage = formatStorage(environment.installedBytes || environment.lastReclaimedBytes);
+  const updateEnvironment = async (action: LearnerAction) => {
+    setLeanActionError(null);
+    try {
+      onState(await window.quickStudy.submit(action));
+    } catch (error) {
+      setLeanActionError(error instanceof Error ? error.message : "The Lean environment could not be updated.");
+    }
+  };
   return (
     <section className="settings-card" aria-labelledby="application-settings-title">
       <p className="eyebrow">Settings</p>
@@ -111,8 +123,62 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
         Allow Personal Notes during artifact synthesis
       </label>
       <small>Enabled by default. Personal Notes remain excluded from ordinary Teaching Moves.</small>
+      <div className="verifier-environment" aria-labelledby="lean-environment-title">
+        <h3 id="lean-environment-title">Bundled Lean Runtime</h3>
+        <p aria-live="polite"><strong>{verifierEnvironmentLabel(environment.status)}</strong></p>
+        <p className="subtle">Default environment: {environment.environment.id}</p>
+        {leanActionError && <p className="failure-message" role="alert">{leanActionError}</p>}
+        {environment.status === "installed" && <>
+          <p>Formal checks are available. Installed storage: {storage}.</p>
+          <button className="secondary" onClick={() => setConfirmLeanRemoval(true)}>Remove Lean environment</button>
+        </>}
+        {environment.status === "absent" && <>
+          <p>New formal verification is unavailable. Existing Verifier Manifests, formal statements, proof logs, and historical labels remain unchanged.</p>
+          <p className="subtle">Available non-formal paths: reasoning review, source-grounded checking, and independent corroboration.</p>
+          {environment.lastReclaimedBytes > 0 && <p>Last removal reclaimed {formatStorage(environment.lastReclaimedBytes)}.</p>}
+          <button onClick={() => void updateEnvironment({ type: "installVerifierEnvironment" })}>
+            Reinstall supported Lean environment
+          </button>
+        </>}
+        {(environment.status === "installing" || environment.status === "removing")
+          && <p role="status">Do not quit Quick Study while this local environment operation completes.</p>}
+        {(environment.status === "installFailed" || environment.status === "removeFailed" || environment.status === "cleanupRequired") && <div role="alert">
+          <p>{environment.error ?? "The Lean environment needs recovery before it can be used."}</p>
+          {environment.status === "installFailed" && <button onClick={() => void updateEnvironment({ type: "installVerifierEnvironment" })}>Retry Lean installation</button>}
+          {environment.status === "removeFailed" && <button onClick={() => void updateEnvironment({ type: "removeVerifierEnvironment" })}>Retry Lean removal</button>}
+          <button className="secondary" onClick={() => void updateEnvironment({ type: "cleanupVerifierEnvironment" })}>Clean up Lean environment</button>
+        </div>}
+        {confirmLeanRemoval && <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-lean-removal-title">
+          <h4 id="confirm-lean-removal-title">Remove the Bundled Lean Runtime?</h4>
+          <p>This removes new formal verification capability until you reinstall the supported environment.</p>
+          <p>Quick Study will reclaim approximately {storage}. Historical verification evidence and labels will be preserved.</p>
+          <button onClick={() => {
+            setConfirmLeanRemoval(false);
+            void updateEnvironment({ type: "removeVerifierEnvironment" });
+          }}>Remove Lean and reclaim storage</button>
+          <button className="secondary" onClick={() => setConfirmLeanRemoval(false)}>Keep Lean installed</button>
+        </div>}
+      </div>
     </section>
   );
+}
+
+function verifierEnvironmentLabel(status: LearningApplicationState["verifierEnvironment"]["status"]): string {
+  return {
+    installed: "Installed and ready",
+    absent: "Not installed",
+    installing: "Installing and validating…",
+    removing: "Removing…",
+    installFailed: "Installation failed",
+    removeFailed: "Removal failed",
+    cleanupRequired: "Cleanup required"
+  }[status];
+}
+
+function formatStorage(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function SourcesPanel({ workspace, state, onState }: {
@@ -1065,7 +1131,8 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               }} />
             {workbenchError && <p className="failure-message" role="alert">{workbenchError}</p>}
             {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState}
-              verifierManifests={state.verifierManifests} modelAvailable={state.modelAccess.status === "available"} key={artifact.id} />)}
+              verifierManifests={state.verifierManifests} modelAvailable={state.modelAccess.status === "available"}
+              verifierAvailable={state.verifierEnvironment.status === "installed"} key={artifact.id} />)}
             {!session.consolidationDraft && <TrailDraft session={session} onAction={async (action) => {
               onState(await window.quickStudy.submit(action));
             }} onActivateSourceAnchor={async (sourceAnchorId) => {
@@ -1349,6 +1416,7 @@ function ConsolidatedOutcome({ state, session, onState }: {
           <PinnedLearningArtifact key={artifact.id} artifact={artifact} sessionId={session.id}
             verifierManifests={state.verifierManifests}
             modelAvailable={state.modelAccess.status === "available"}
+            verifierAvailable={state.verifierEnvironment.status === "installed"}
             statusLabel="Included in this Consolidated Session Outcome" onState={onState} />
         )) : <p>None included.</p>}
         <p className="subtle">Proof, source, note, Teaching Variant, and verification details appear above when they were retained in this Learning Session.</p>
@@ -1736,12 +1804,14 @@ function annotationAnchorLabel(anchor: LearningSession["sourceAnchors"][number])
   return `${anchor.selection.kind === "equation" ? "Equation" : "Text"} Source Anchor: ${anchor.selection.exactText}`;
 }
 
-function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifests = [], modelAvailable = false, statusLabel = "Pinned on the main canvas" }: {
+function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifests = [], modelAvailable = false,
+  verifierAvailable = true, statusLabel = "Pinned on the main canvas" }: {
   artifact: LearningArtifact;
   onState: StateHandler;
   sessionId?: string;
   verifierManifests?: LearningApplicationState["verifierManifests"];
   modelAvailable?: boolean;
+  verifierAvailable?: boolean;
   statusLabel?: string;
 }) {
   const [content, setContent] = useState(artifact.currentRevision.content);
@@ -1839,6 +1909,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
           onClick={() => runPortableAction(shareArtifact)}>Share export</button>
       </div>
       <ClaimTrust revision={artifact.currentRevision} revisionId={artifact.currentRevision.id}
+        verifierAvailable={verifierAvailable}
         verifierManifests={verifierManifests.filter((manifest) => manifest.target === "learningArtifact"
           && manifest.targetId === artifact.id)}
         onVerify={async (claimId, runId) => onState(await window.quickStudy.verifyClaim(originatingSessionId, {

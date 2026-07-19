@@ -9,6 +9,39 @@ import { App } from "./App";
 describe("anchored teaching workbench", () => {
   afterEach(cleanup);
 
+  it("confirms Lean removal with capability and storage impact, then offers reinstall", async () => {
+    const user = userEvent.setup();
+    const installed = workbenchState();
+    installed.screen = "dashboard";
+    installed.activeSessionId = null;
+    const absent = structuredClone(installed);
+    absent.verifierEnvironment = {
+      ...absent.verifierEnvironment,
+      status: "absent",
+      installedBytes: 0,
+      lastReclaimedBytes: 734_003_200
+    };
+    const api = quickStudyApi(installed);
+    vi.mocked(api.submit).mockImplementation(async (action) =>
+      action.type === "removeVerifierEnvironment" ? absent : installed
+    );
+    window.quickStudy = api;
+
+    render(<App />);
+    const settings = await screen.findByRole("region", { name: "Application settings" });
+    await user.click(within(settings).getByRole("button", { name: "Remove Lean environment" }));
+    const confirmation = screen.getByRole("alertdialog", { name: "Remove the Bundled Lean Runtime?" });
+    expect(confirmation.textContent).toContain("new formal verification capability");
+    expect(confirmation.textContent).toContain("700 MB");
+    expect(confirmation.textContent).toContain("Historical verification evidence and labels will be preserved");
+    await user.click(within(confirmation).getByRole("button", { name: "Remove Lean and reclaim storage" }));
+
+    expect(await within(settings).findByText("Not installed")).toBeTruthy();
+    expect(settings.textContent).toContain("reasoning review, source-grounded checking, and independent corroboration");
+    await user.click(within(settings).getByRole("button", { name: "Reinstall supported Lean environment" }));
+    expect(api.submit).toHaveBeenLastCalledWith({ type: "installVerifierEnvironment" });
+  });
+
   it("shows independent research egress controls and inspectable research receipts", async () => {
     const user = userEvent.setup();
     const state = workbenchState();
@@ -1061,6 +1094,16 @@ function workbenchState(): LearningApplicationState {
     sourceRevisions: [],
   reanchoringDecisions: [],
   verifierManifests: [],
+    verifierEnvironment: {
+      status: "installed",
+      environment: {
+        id: "lean-4.29.1-mathlib-4.29.1-quick-study-v1", checker: "Lean", leanVersion: "4.29.1",
+        mathlibVersion: "4.29.1", mathlibCommit: "5e932f97dd25535344f80f9dd8da3aab83df0fe6",
+        platform: "darwin", architecture: "arm64", sourceArchive: "lean.zip", sourceSha256: "fixture",
+        supportProfile: "Quick Study undergraduate foundations v1", mathlibModules: [], runtimeFormat: 8
+      },
+      installedBytes: 734_003_200, lastReclaimedBytes: 0, error: null
+    },
     activeSessionId: "session-1",
     resumeSessionId: "session-1",
     navigation: { workspaceId: "quick-study-workspace", missionId: "quick-study-unfiled-mission" },

@@ -16,7 +16,11 @@ import {
 } from "./learning-application";
 import { ModelAccessError, type ArtifactSynthesisRequest, type ModelAccessCause, type ModelRuntime, type RuntimeAccessRequest, type SessionProposal, type SpecialistAgentRequest, type SpecialistAgentResult, type TeachingRequest } from "./model-runtime";
 import type { CorroborationResearchEvidence, ExternalResearch, ExternalResearchRequest, ExternalResearchResult } from "./external-research";
-import { BUNDLED_LEAN_ENVIRONMENT, type VerifierRuntime } from "./verifier-runtime";
+import {
+  BUNDLED_LEAN_ENVIRONMENT,
+  type VerifierEnvironmentManager,
+  type VerifierRuntime
+} from "./verifier-runtime";
 
 describe("Learning Application", () => {
   const dataDirectories: string[] = [];
@@ -572,6 +576,128 @@ describe("Learning Application", () => {
     const relaunched = await LearningApplication.launch(dataDirectory);
     applications.push(relaunched);
     expect(relaunched.getState().verifierManifests).toEqual(checked.verifierManifests);
+  });
+
+  it("removes and reinstalls Lean without relabeling historical verification evidence", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check one arithmetic identity", scope: "One exact claim",
+      initialTeachingDirection: "Formalize the statement", requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const verifier: VerifierRuntime = {
+      run: vi.fn(async (request) => ({
+        outcome: "accepted" as const,
+        diagnostics: "Lean completed without diagnostics.",
+        evidenceLocation: join(request.evidenceDirectory, `${request.runId}.lean`),
+        command: "lean exact-claim.lean",
+        environment: BUNDLED_LEAN_ENVIRONMENT
+      }))
+    };
+    let installed = true;
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed, installedBytes: installed ? 734_003_200 : 0, cleanupRequired: false })),
+      remove: vi.fn(async () => {
+        installed = false;
+        return { reclaimedBytes: 734_003_200 };
+      }),
+      install: vi.fn(async () => {
+        installed = true;
+        return { installedBytes: 734_003_200 };
+      }),
+      cleanup: vi.fn(async () => ({ installed, installedBytes: installed ? 734_003_200 : 0 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, runtime, null, null, null, null, verifier, environmentManager
+    );
+    applications.push(application);
+    const { artifactId } = await createPinnedArtifact(application, runtime);
+    const artifact = application.getState().sessions[0].learningArtifacts[0];
+    await application.submit({
+      type: "editLearningArtifact", artifactId, content: artifact.currentRevision.content,
+      claimEdits: [{
+        claimId: artifact.currentRevision.claims[0].claimId,
+        statement: "For every natural number n, n + 0 = n."
+      }]
+    });
+    const current = application.getState().sessions[0].learningArtifacts[0];
+    const request = {
+      target: "learningArtifact" as const,
+      targetId: artifactId,
+      claimId: current.currentRevision.claims[0].claimId
+    };
+    await application.runFormalVerification(current.originatingSessionId, { runId: "before-removal", ...request });
+    const historicalManifest = structuredClone(application.getState().verifierManifests[0]);
+
+    const removed = await application.submit({ type: "removeVerifierEnvironment" });
+
+    expect(removed.verifierEnvironment).toMatchObject({
+      status: "absent", installedBytes: 0, lastReclaimedBytes: 734_003_200, error: null,
+      environment: BUNDLED_LEAN_ENVIRONMENT
+    });
+    expect(removed.verifierManifests[0]).toEqual(historicalManifest);
+    const unavailable = await application.runFormalVerification(
+      current.originatingSessionId, { runId: "while-absent", ...request }
+    );
+    expect(unavailable.verifierManifests.at(-1)).toMatchObject({
+      commandOutcome: "unavailable",
+      environment: BUNDLED_LEAN_ENVIRONMENT,
+      diagnostics: expect.stringContaining("removed")
+    });
+    expect(verifier.run).toHaveBeenCalledTimes(1);
+
+    const reinstalled = await application.submit({ type: "installVerifierEnvironment" });
+    expect(reinstalled.verifierEnvironment).toMatchObject({
+      status: "installed", installedBytes: 734_003_200, error: null,
+      environment: BUNDLED_LEAN_ENVIRONMENT
+    });
+    const checkedAgain = await application.runFormalVerification(
+      current.originatingSessionId, { runId: "after-reinstall", ...request }
+    );
+    expect(checkedAgain.verifierManifests.at(-1)).toMatchObject({
+      commandOutcome: "accepted", environment: BUNDLED_LEAN_ENVIRONMENT
+    });
+    expect(checkedAgain.verifierManifests[0]).toEqual(historicalManifest);
+    expect(verifier.run).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps failed environment operations recoverable without exposing a half-active checker", async () => {
+    let installed = true;
+    let installationAttempts = 0;
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed, installedBytes: installed ? 1024 : 0, cleanupRequired: false })),
+      remove: vi.fn(async () => {
+        installed = false;
+        throw new Error("Removal was interrupted after deactivation.");
+      }),
+      install: vi.fn(async () => {
+        installationAttempts += 1;
+        if (installationAttempts === 1) throw new Error("Downloaded environment failed validation.");
+        installed = true;
+        return { installedBytes: 2048 };
+      }),
+      cleanup: vi.fn(async () => ({ installed: false, installedBytes: 0 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    const failedRemoval = await application.submit({ type: "removeVerifierEnvironment" });
+    expect(failedRemoval.verifierEnvironment).toMatchObject({
+      status: "removeFailed", error: "Removal was interrupted after deactivation."
+    });
+    const cleaned = await application.submit({ type: "cleanupVerifierEnvironment" });
+    expect(cleaned.verifierEnvironment).toMatchObject({ status: "absent", installedBytes: 0, error: null });
+
+    const failedInstall = await application.submit({ type: "installVerifierEnvironment" });
+    expect(failedInstall.verifierEnvironment).toMatchObject({
+      status: "installFailed", error: "Downloaded environment failed validation."
+    });
+    const recovered = await application.submit({ type: "installVerifierEnvironment" });
+    expect(recovered.verifierEnvironment).toMatchObject({ status: "installed", installedBytes: 2048, error: null });
   });
 
   it("retains formalization and diagnostics for an incomplete run without calling the claim false", async () => {

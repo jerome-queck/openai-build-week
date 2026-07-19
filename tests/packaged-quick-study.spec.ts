@@ -83,6 +83,8 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   try {
     let page = await launch();
     await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Application settings" }))
+      .toContainText("Installed and ready", { timeout: 60_000 });
     const noteSynthesisPreference = page.getByRole("checkbox", { name: "Allow Personal Notes during artifact synthesis" });
     await expect(noteSynthesisPreference).toBeChecked();
     await noteSynthesisPreference.click();
@@ -339,6 +341,30 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(manifest).toContainText("lean-4.29.1-mathlib-4.29.1-quick-study-v1 · Lean 4.29.1 · mathlib 4.29.1");
     await expect(manifest).toContainText("theorem quickStudyNatAddZero (n : Nat) : n + 0 = n");
     await expect(manifest).toContainText("Exact statement statusFormally verified");
+    await page.getByRole("button", { name: "Leave session" }).click();
+    const settings = page.getByRole("region", { name: "Application settings" });
+    await settings.getByRole("button", { name: "Remove Lean environment" }).click();
+    const removalConfirmation = page.getByRole("alertdialog", { name: "Remove the Bundled Lean Runtime?" });
+    await expect(removalConfirmation).toContainText("new formal verification capability");
+    await expect(removalConfirmation).toContainText("Historical verification evidence and labels will be preserved");
+    await removalConfirmation.getByRole("button", { name: "Remove Lean and reclaim storage" }).click();
+    await expect(settings).toContainText("Not installed", { timeout: 30_000 });
+    await expect(settings).toContainText("reasoning review, source-grounded checking, and independent corroboration");
+
+    await page.getByRole("button", { name: "Resume Learning Session", exact: true }).click();
+    await expect(claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" })).toBeDisabled();
+    await expect(claimTrust).toContainText("Bundled Lean is not installed");
+    await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toContainText("accepted");
+    await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" }))
+      .toContainText("lean-4.29.1-mathlib-4.29.1-quick-study-v1");
+
+    await page.getByRole("button", { name: "Leave session" }).click();
+    await settings.getByRole("button", { name: "Reinstall supported Lean environment" }).click();
+    await expect(settings).toContainText("Installed and ready", { timeout: 30_000 });
+    await page.getByRole("button", { name: "Resume Learning Session", exact: true }).click();
+    await claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter");
+    await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toHaveCount(2, { timeout: 20_000 });
+    await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" }).nth(1)).toContainText("accepted");
     await reformulatedProof.getByRole("button", { name: /Synthesize Learning Artifact/ }).press("Enter");
     await expect(reformulatedProof).toContainText("My exact finite-choice insight.");
     await expect(reformulatedProof).toContainText("The learner connects the equation with a finite-choice insight.");

@@ -40,6 +40,7 @@ import {
   formalizationForClaim,
   type VerificationEnvironment,
   type VerifierCommandOutcome,
+  type VerifierEnvironmentManager,
   type VerifierRuntime
 } from "./verifier-runtime";
 export type { SessionAccessPolicy } from "./session-access";
@@ -856,6 +857,7 @@ export interface LearningApplicationState {
   sourceRevisions: SourceRevision[];
   reanchoringDecisions: ReanchoringDecision[];
   verifierManifests: VerifierManifest[];
+  verifierEnvironment: VerifierEnvironmentState;
   activeSessionId: string | null;
   resumeSessionId: string | null;
   navigation: {
@@ -883,6 +885,14 @@ export interface LearningApplicationState {
   sourceExcerptEgressPreference: {
     enabled: boolean;
   };
+}
+
+export interface VerifierEnvironmentState {
+  status: "installed" | "absent" | "installing" | "removing" | "installFailed" | "removeFailed" | "cleanupRequired";
+  environment: Readonly<VerificationEnvironment>;
+  installedBytes: number;
+  lastReclaimedBytes: number;
+  error: string | null;
 }
 
 export type LearnerAction =
@@ -959,6 +969,9 @@ export type LearnerAction =
   | { type: "setFullAccessConfirmation"; enabled: boolean }
   | { type: "setPersonalNoteSynthesis"; enabled: boolean }
   | { type: "setSourceExcerptEgressPreference"; enabled: boolean }
+  | { type: "removeVerifierEnvironment" }
+  | { type: "installVerifierEnvironment" }
+  | { type: "cleanupVerifierEnvironment" }
   | { type: "setResearchEgressPermission"; enabled: boolean }
   | { type: "researchWeb"; query: DerivedResearchQueryInput; sourceAnchorIds: string[] }
   | { type: "cancelExternalResearch"; researchActionId: string }
@@ -1034,7 +1047,8 @@ export class LearningApplication {
     private readonly artifactSharing: ArtifactSharing | null,
     private readonly externalResearch: ExternalResearch | null,
     private readonly formalVerificationAuthority: FormalVerificationAuthority | null,
-    private readonly verifierRuntime: VerifierRuntime | null
+    private readonly verifierRuntime: VerifierRuntime | null,
+    private readonly verifierEnvironmentManager: VerifierEnvironmentManager | null
   ) {
     this.statePath = join(dataDirectory, "learning-application.json");
     this.sourceIndexPath = join(dataDirectory, "source-index.json");
@@ -1049,10 +1063,12 @@ export class LearningApplication {
     artifactSharing: ArtifactSharing | null = null,
     externalResearch: ExternalResearch | null = null,
     formalVerificationAuthority: FormalVerificationAuthority | null = null,
-    verifierRuntime: VerifierRuntime | null = null
+    verifierRuntime: VerifierRuntime | null = null,
+    verifierEnvironmentManager: VerifierEnvironmentManager | null = null
   ): Promise<LearningApplication> {
     const application = new LearningApplication(
-      dataDirectory, modelRuntime, sourceAccess, artifactSharing, externalResearch, formalVerificationAuthority, verifierRuntime
+      dataDirectory, modelRuntime, sourceAccess, artifactSharing, externalResearch, formalVerificationAuthority,
+      verifierRuntime, verifierEnvironmentManager
     );
     try {
       const stored = JSON.parse(await readFile(application.statePath, "utf8")) as Record<string, unknown>;
@@ -1125,11 +1141,121 @@ export class LearningApplication {
       application.state.authentication = failedAuthentication(null, error);
       application.state.modelAccess = unavailableModelAccess(error);
     }
+    await application.synchronizeVerifierEnvironment();
     return application;
   }
 
   getState(): LearningApplicationState {
     return structuredClone(this.state);
+  }
+
+  private async synchronizeVerifierEnvironment(): Promise<void> {
+    if (!this.verifierEnvironmentManager) {
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: this.verifierRuntime ? "installed" : "absent",
+        error: null
+      };
+      return;
+    }
+    const priorStatus = this.state.verifierEnvironment.status;
+    try {
+      const inspection = await this.verifierEnvironmentManager.inspect();
+      const interrupted = priorStatus === "installing" || priorStatus === "removing";
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: interrupted || inspection.cleanupRequired ? "cleanupRequired"
+          : priorStatus === "installFailed" || priorStatus === "removeFailed" ? priorStatus
+            : inspection.installed ? "installed" : "absent",
+        installedBytes: inspection.installedBytes,
+        error: interrupted
+          ? "The previous Lean environment operation was interrupted. Clean up its staging files before retrying."
+          : inspection.cleanupRequired
+            ? "Lean environment staging files require cleanup before formal verification can resume."
+            : priorStatus === "installFailed" || priorStatus === "removeFailed"
+              ? this.state.verifierEnvironment.error
+              : null
+      };
+    } catch (error) {
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: "cleanupRequired",
+        error: usefulVerifierEnvironmentError(error)
+      };
+    }
+  }
+
+  private async removeVerifierEnvironment(): Promise<void> {
+    if (!this.verifierEnvironmentManager) {
+      this.state.verifierEnvironment.status = "removeFailed";
+      this.state.verifierEnvironment.error = "The Bundled Lean Runtime cannot be managed in this application build.";
+      return;
+    }
+    if (this.state.verifierEnvironment.status !== "installed" && this.state.verifierEnvironment.status !== "removeFailed") {
+      throw new Error("The Bundled Lean Runtime is not ready to remove.");
+    }
+    this.state.verifierEnvironment.status = "removing";
+    this.state.verifierEnvironment.error = null;
+    await this.publishAndPersist();
+    try {
+      const result = await this.verifierEnvironmentManager.remove();
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: "absent",
+        installedBytes: 0,
+        lastReclaimedBytes: result.reclaimedBytes,
+        error: null
+      };
+    } catch (error) {
+      this.state.verifierEnvironment.status = "removeFailed";
+      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+    }
+  }
+
+  private async installVerifierEnvironment(): Promise<void> {
+    if (!this.verifierEnvironmentManager) {
+      this.state.verifierEnvironment.status = "installFailed";
+      this.state.verifierEnvironment.error = "The Bundled Lean Runtime cannot be managed in this application build.";
+      return;
+    }
+    if (this.state.verifierEnvironment.status !== "absent" && this.state.verifierEnvironment.status !== "installFailed") {
+      throw new Error("Clean up the Bundled Lean Runtime before installing it.");
+    }
+    this.state.verifierEnvironment.status = "installing";
+    this.state.verifierEnvironment.error = null;
+    await this.publishAndPersist();
+    try {
+      const result = await this.verifierEnvironmentManager.install();
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: "installed",
+        installedBytes: result.installedBytes,
+        error: null
+      };
+    } catch (error) {
+      this.state.verifierEnvironment.status = "installFailed";
+      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+    }
+  }
+
+  private async cleanupVerifierEnvironment(): Promise<void> {
+    if (!this.verifierEnvironmentManager) {
+      this.state.verifierEnvironment.status = "cleanupRequired";
+      this.state.verifierEnvironment.error = "The Bundled Lean Runtime cannot be managed in this application build.";
+      return;
+    }
+    try {
+      const result = await this.verifierEnvironmentManager.cleanup();
+      this.state.verifierEnvironment = {
+        ...this.state.verifierEnvironment,
+        status: result.installed ? "installed" : "absent",
+        installedBytes: result.installedBytes,
+        error: null
+      };
+    } catch (error) {
+      this.state.verifierEnvironment.status = "cleanupRequired";
+      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+    }
   }
 
   async recordClaimCheck(sessionId: string, record: ClaimCheckRecord): Promise<LearningApplicationState> {
@@ -1259,7 +1385,7 @@ export class LearningApplication {
           command: "",
           environment: BUNDLED_LEAN_ENVIRONMENT
         }
-      : this.verifierRuntime
+      : this.verifierRuntime && this.state.verifierEnvironment.status === "installed"
         ? await this.verifierRuntime.run({
             runId,
             evidenceDirectory: this.verifierEvidenceDirectory,
@@ -1267,7 +1393,9 @@ export class LearningApplication {
           }, signal)
         : {
             outcome: "unavailable" as const,
-            diagnostics: "The Bundled Lean Runtime is unavailable; the formalization remains saved.",
+            diagnostics: this.state.verifierEnvironment.status === "absent"
+              ? "The Bundled Lean Runtime was removed. Reinstall it to run formal verification; the formalization remains saved."
+              : "The Bundled Lean Runtime is unavailable while its environment needs recovery; the formalization remains saved.",
             evidenceLocation: "",
             command: "",
             environment: BUNDLED_LEAN_ENVIRONMENT
@@ -2980,6 +3108,18 @@ export class LearningApplication {
       }
       case "setSourceExcerptEgressPreference": {
         this.state.sourceExcerptEgressPreference.enabled = action.enabled;
+        break;
+      }
+      case "removeVerifierEnvironment": {
+        await this.removeVerifierEnvironment();
+        break;
+      }
+      case "installVerifierEnvironment": {
+        await this.installVerifierEnvironment();
+        break;
+      }
+      case "cleanupVerifierEnvironment": {
+        await this.cleanupVerifierEnvironment();
         break;
       }
       case "setResearchEgressPermission": {
@@ -5506,6 +5646,12 @@ function usefulSourceError(error: unknown): string {
     : "The source is missing or access is no longer available.";
 }
 
+function usefulVerifierEnvironmentError(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : "The Bundled Lean Runtime operation failed. Review the environment state and retry.";
+}
+
 function sameFingerprint(left: SourceFingerprint, right: SourceFingerprint): boolean {
   return left.size === right.size && left.modifiedAtMs === right.modifiedAtMs
     && left.contentHash === right.contentHash;
@@ -5556,6 +5702,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.sourceRevisions = migrateSourceRevisions(stored.sourceRevisions, current.sources);
     current.reanchoringDecisions = migrateReanchoringDecisions(stored.reanchoringDecisions);
     current.verifierManifests = migrateVerifierManifests(stored.verifierManifests);
+    current.verifierEnvironment = migrateVerifierEnvironmentState(stored.verifierEnvironment);
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
@@ -7865,6 +8012,7 @@ function initialState(): LearningApplicationState {
     sourceRevisions: [],
     reanchoringDecisions: [],
     verifierManifests: [],
+    verifierEnvironment: defaultVerifierEnvironmentState(),
     activeSessionId: null,
     resumeSessionId: null,
     navigation: {
@@ -7884,6 +8032,30 @@ function initialState(): LearningApplicationState {
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true },
     sourceExcerptEgressPreference: { enabled: false }
+  };
+}
+
+function defaultVerifierEnvironmentState(): VerifierEnvironmentState {
+  return {
+    status: "absent",
+    environment: BUNDLED_LEAN_ENVIRONMENT,
+    installedBytes: 0,
+    lastReclaimedBytes: 0,
+    error: null
+  };
+}
+
+function migrateVerifierEnvironmentState(value: unknown): VerifierEnvironmentState {
+  if (!isRecord(value)) return defaultVerifierEnvironmentState();
+  const status = ["installed", "absent", "installing", "removing", "installFailed", "removeFailed", "cleanupRequired"]
+    .includes(String(value.status)) ? value.status as VerifierEnvironmentState["status"] : "cleanupRequired";
+  return {
+    status,
+    environment: BUNDLED_LEAN_ENVIRONMENT,
+    installedBytes: typeof value.installedBytes === "number" && value.installedBytes >= 0 ? value.installedBytes : 0,
+    lastReclaimedBytes: typeof value.lastReclaimedBytes === "number" && value.lastReclaimedBytes >= 0
+      ? value.lastReclaimedBytes : 0,
+    error: typeof value.error === "string" ? value.error : null
   };
 }
 

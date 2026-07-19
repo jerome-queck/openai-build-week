@@ -15,10 +15,11 @@ export interface ClaimTrustRevision {
   claims?: ClaimVerificationState[];
 }
 
-export function ClaimTrust({ revision, revisionId, verifierManifests = [], onVerify, onCancel }: {
+export function ClaimTrust({ revision, revisionId, verifierManifests = [], verifierAvailable = true, onVerify, onCancel }: {
   revision: ClaimTrustRevision;
   revisionId?: string;
   verifierManifests?: VerifierManifest[];
+  verifierAvailable?: boolean;
   onVerify?: (claimId: string, runId: string) => Promise<void>;
   onCancel?: (runId: string) => Promise<void>;
 }) {
@@ -83,11 +84,13 @@ export function ClaimTrust({ revision, revisionId, verifierManifests = [], onVer
           <p><strong>Assumptions:</strong> {formalization.assumptions.join(", ")}</p>
           <p className="subtle">A successful run applies only to this exact formal statement, not the surrounding explanation or unformalized steps.</p>
         </> : <p className="subtle">No supported formal translation exists for this exact claim. Recording the attempt will preserve an inspectable unsupported outcome.</p>}
-        {onVerify && <button className="secondary" disabled={runningClaimId !== null}
+        {onVerify && <button className="secondary" disabled={runningClaimId !== null || !verifierAvailable}
           aria-label={`Check exact claim ${index + 1} with bundled Lean`}
           onClick={() => void verify(claim.claimId)}>
           {runningClaimId === claim.claimId ? "Checking with bundled Lean…" : "Check exact claim with bundled Lean"}
         </button>}
+        {!verifierAvailable && <p role="status">Bundled Lean is not installed. Reinstall it in Application settings to run this formal check.</p>}
+        {!verifierAvailable && <p className="subtle">You can still use reasoning review, source-grounded checking, or independent corroboration.</p>}
         {runningClaimId === claim.claimId && runningRunId && onCancel && <button className="secondary"
           aria-label={`Cancel exact claim ${index + 1} Lean check`}
           onClick={() => void onCancel(runningRunId)}>Cancel Lean check</button>}

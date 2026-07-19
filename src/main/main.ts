@@ -18,7 +18,7 @@ import { MacOsSourceAccess } from "./source-access";
 import { MacOsArtifactSharing } from "./artifact-sharing";
 import { BrowserExternalResearch } from "./browser-external-research";
 import { LeanVerifierRuntime } from "./lean-verifier";
-import { BUNDLED_LEAN_ENVIRONMENT } from "../shared/verifier-runtime";
+import { LeanEnvironmentManager } from "./lean-environment-manager";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
@@ -94,6 +94,9 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "discardPendingQuestion":
     case "submitPendingQuestion":
     case "returnToPrerequisiteOrigin":
+    case "removeVerifierEnvironment":
+    case "installVerifierEnvironment":
+    case "cleanupVerifierEnvironment":
       return true;
     case "requestSpecialistReview":
       return !("coordination" in action) || action.coordination === undefined
@@ -240,6 +243,7 @@ function isDerivedResearchQueryInput(value: unknown): boolean {
 }
 
 function registerLearningApplicationHandlers(): void {
+  const verifierRuns = new Map<string, AbortController>();
   learningApplication.subscribe((state) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send("learning:stateChanged", state);
   });
@@ -257,6 +261,9 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("learning:submit", async (event, action: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (!isLearnerAction(action)) throw new Error("Invalid learner action.");
+    if (action.type === "removeVerifierEnvironment" && verifierRuns.size > 0) {
+      throw new Error("Cancel the active Lean check before removing the Bundled Lean Runtime.");
+    }
     if (action.type === "refreshAuthentication" && !learningApplication.getState().runtimeAvailable) {
       try {
         const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
@@ -302,7 +309,6 @@ function registerLearningApplicationHandlers(): void {
     }
     return learningApplication.shareLearningArtifact(sessionId, artifactId);
   });
-  const verifierRuns = new Map<string, AbortController>();
   ipcMain.handle("verifier:run", async (event, sessionId: unknown, request: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof sessionId !== "string" || !isFormalVerificationRequest(request)) {
@@ -429,13 +435,14 @@ function isFormalVerificationRequest(value: unknown): value is import("../shared
     && typeof request.targetId === "string" && typeof request.claimId === "string";
 }
 
-function bundledLeanPath(): string {
-  const root = app.isPackaged ? process.resourcesPath : join(process.cwd(), "dist");
-  return join(root, "verifiers", BUNDLED_LEAN_ENVIRONMENT.id, "bin", "lean");
-}
-
 void app.whenReady().then(async () => {
   const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+  const seedRegistry = app.isPackaged ? join(process.resourcesPath, "verifiers") : join(process.cwd(), "dist", "verifiers");
+  const verifierEnvironmentManager = new LeanEnvironmentManager(join(dataDirectory, "verifiers"), seedRegistry);
+  const installDefaultVerifier = await verifierEnvironmentManager.defaultInstallationNeeded().catch((error) => {
+    console.error("The default Lean environment could not be inspected:", error);
+    return false;
+  });
   try {
     modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
   } catch (error) {
@@ -450,8 +457,14 @@ void app.whenReady().then(async () => {
       ? async () => undefined
       : (url) => shell.openExternal(url)),
     null,
-    new LeanVerifierRuntime(process.env.QUICK_STUDY_LEAN_PATH ?? bundledLeanPath())
+    new LeanVerifierRuntime(process.env.QUICK_STUDY_LEAN_PATH ?? verifierEnvironmentManager.executablePath()),
+    verifierEnvironmentManager
   );
+  if (installDefaultVerifier) {
+    void learningApplication.submit({ type: "installVerifierEnvironment" }).catch((error) => {
+      console.error("The default Lean environment could not be installed:", error);
+    });
+  }
   registerLearningApplicationHandlers();
   createWindow();
 
