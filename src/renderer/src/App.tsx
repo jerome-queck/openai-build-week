@@ -2050,7 +2050,8 @@ function ExternalResearchPanel({ state, session, onState }: {
       {researchHistory.length > 0 && (
         <section aria-label="External research history">
           {researchHistory.map((research) => (
-            <article key={research.id} className="research-receipt" aria-label="External research receipt">
+            <article key={research.id} className="research-receipt"
+              aria-label={`External research receipt for ${research.query.text}`}>
               <p className="eyebrow">Derived Research Query</p>
               <strong>{research.query.text}</strong>
               <dl>
@@ -2060,13 +2061,15 @@ function ExternalResearchPanel({ state, session, onState }: {
                 <div><dt>Source Excerpts sent</dt><dd>{research.excerpts.length}</dd></div>
                 <div><dt>Status</dt><dd role="status">{research.status}</dd></div>
               </dl>
-              <button className="secondary" onClick={() => void window.quickStudy.openExternal(research.destination)}>
+              <button className="secondary" aria-label={`Inspect destination used for ${research.query.text}`}
+                onClick={() => void window.quickStudy.openExternal(research.destination)}>
                 Inspect destination used
               </button>
               {research.status === "running" && (
-                <button className="secondary" onClick={() => void submit({
+                <button className="secondary" aria-label={`Stop external research for ${research.query.text}`}
+                  onClick={() => void submit({
                   type: "cancelExternalResearch", researchActionId: research.id
-                })}>Stop external research</button>
+                  })}>Stop external research</button>
               )}
               {research.result && <><h3>{research.result.title}</h3><p>{research.result.summary}</p></>}
               {research.error && <p className="failure-message" role="alert">{research.error}</p>}

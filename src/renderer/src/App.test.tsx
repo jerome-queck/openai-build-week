@@ -53,6 +53,15 @@ describe("anchored teaching workbench", () => {
     expect(panel.textContent).toContain("Research Egress Permission was revoked");
     expect(within(panel).getByText("Source Excerpt Egress: Granted")).toBeTruthy();
     expect(within(panel).getAllByText(/https:\/\/duckduckgo\.com\//)).toHaveLength(2);
+    expect(within(panel).getByRole("article", {
+      name: "External research receipt for Cauchy's theorem"
+    })).toBeTruthy();
+    await user.click(within(panel).getByRole("button", {
+      name: "Inspect destination used for Heine-Borel theorem; compact subset"
+    }));
+    expect(api.openExternal).toHaveBeenCalledWith(
+      "https://duckduckgo.com/?q=Heine-Borel+theorem%3B+compact+subset"
+    );
 
     await user.type(within(panel).getByLabelText("Theorem names"), "Orbit-stabilizer theorem");
     await user.type(within(panel).getByLabelText("Assumptions"), "G acts on X");
