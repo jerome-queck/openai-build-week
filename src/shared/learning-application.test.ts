@@ -198,7 +198,8 @@ describe("Learning Application", () => {
 
     state = await application.submit({
       type: "submitSessionIntake",
-      mathematics: "Prove the tube lemma using compactness in the second factor."
+      mathematics: "Prove the tube lemma using compactness in the second factor.",
+      ignoreLearnerModel: true
     });
     const target = state.sessions.find((session) => session.id === state.activeSessionId)!;
     expect(target.evidenceTransfers).toHaveLength(1);
@@ -212,14 +213,20 @@ describe("Learning Application", () => {
       sourceContext: matchingContext,
       targetContext: matchingContext
     });
+    expect(target.ignoreLearnerModel).toBe(true);
+    expect(runtime.teachingRequests.at(-1)?.learnerModelGuidance).toBeUndefined();
+
+    runtime.emitTeaching("Initial teaching omitted the Learner Model.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    state = await application.submit({ type: "setSessionLearnerModelIgnored", ignored: false });
+    await application.submit({ type: "submitQuestion", text: "Now use qualified prior evidence." });
     expect(runtime.teachingRequests.at(-1)?.learnerModelGuidance).toEqual({
       evidenceTransfers: [expect.objectContaining({
         learnerModelEntryId: state.learnerModel.entries[0].id,
         origin: "transferred"
       })]
     });
-
-    runtime.emitTeaching("Transfer applied.");
     runtime.completeTeaching();
     await application.waitForModelWork();
     state = await application.submit({ type: "setSessionLearnerModelIgnored", ignored: true });

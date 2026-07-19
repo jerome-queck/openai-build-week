@@ -1057,8 +1057,8 @@ export interface RegisteredVerifierEnvironment {
 }
 
 export type LearnerAction =
-  | { type: "startQuickStudy"; mathematics: string; location?: StudyLocation }
-  | { type: "submitSessionIntake"; mathematics: string; location?: StudyLocation }
+  | { type: "startQuickStudy"; mathematics: string; location?: StudyLocation; ignoreLearnerModel?: boolean }
+  | { type: "submitSessionIntake"; mathematics: string; location?: StudyLocation; ignoreLearnerModel?: boolean }
   | { type: "confirmSessionProposal" }
   | { type: "cancelModelWork" }
   | { type: "cancelSessionModelWork"; sessionId: string }
@@ -3218,6 +3218,7 @@ export class LearningApplication {
           proposal: defaultAcceptedProposal(),
           accessPolicy: location.accessPolicy
         });
+        session.ignoreLearnerModel = action.ignoreLearnerModel ?? false;
         refreshAskBarContext(this.state, session);
         this.state.sessions.push(session);
         this.state.activeSessionId = session.id;
@@ -3305,6 +3306,7 @@ export class LearningApplication {
           },
           accessPolicy: location.accessPolicy
         });
+        session.ignoreLearnerModel = action.ignoreLearnerModel ?? false;
         this.attachEligibleEvidenceTransfers(session, proposal.evidenceTransferContext ?? null);
         refreshAskBarContext(this.state, session);
         this.agentWorkLogs[session.id] = pendingLog;

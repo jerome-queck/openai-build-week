@@ -893,6 +893,7 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
 
 function Intake({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [mathematics, setMathematics] = useState("");
+  const [ignoreLearnerModel, setIgnoreLearnerModel] = useState(false);
   const modelAvailable = state.modelAccess.status === "available";
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
@@ -905,6 +906,7 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
     onState(await window.quickStudy.submit({
       type: modelAvailable ? "submitSessionIntake" : "startQuickStudy",
       mathematics,
+      ignoreLearnerModel,
       ...(location ? { location } : {})
     }));
   };
@@ -921,6 +923,11 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
           onChange={(event) => setMathematics(event.target.value)}
           placeholder="What would you like to understand?"
         />
+        <label className="confirmation-preference">
+          <input type="checkbox" checked={ignoreLearnerModel}
+            onChange={(event) => setIgnoreLearnerModel(event.target.checked)} />
+          Ignore the Learner Model for this new Learning Session
+        </label>
         <div className="intake-actions">
           <span>{modelAvailable ? `${initialAccess} · ${location ? `${workspace.name} · ${mission!.name}` : "no workspace setup required"}` : `Local Working Mode · ${initialAccess}`}</span>
           <button className="primary" disabled={!mathematics.trim()}>{modelAvailable ? "Propose Learning Session" : "Start local Learning Session"}</button>
