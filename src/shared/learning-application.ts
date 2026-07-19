@@ -623,6 +623,7 @@ export interface DelayedTransferOffer {
 export interface DelayedTransferCheck {
   id: string;
   relatedSessionId: string;
+  relatedLearningSessionGoal: string;
   originatingSessionTarget: string;
   originatingConcepts: string[];
   intendedTransferGoal: string;
@@ -1041,7 +1042,7 @@ export interface LearningSession {
 }
 
 export interface LearningApplicationState {
-  screen: "dashboard" | "workbench";
+  screen: "dashboard" | "workbench" | "followUps";
   quickStudy: QuickStudyHome;
   workspaces: StudyWorkspace[];
   missions: StudyMission[];
@@ -1204,6 +1205,8 @@ export type LearnerAction =
   | { type: "scheduleDelayedTransfer"; sessionId: string; intendedTransferGoal: string; dueAt: string }
   | { type: "rescheduleDelayedTransfer"; checkId: string; dueAt: string }
   | { type: "cancelDelayedTransfer"; checkId: string }
+  | { type: "openFollowUpQueue" }
+  | { type: "closeFollowUpQueue" }
   | { type: "continueSession"; sessionId: string }
   | { type: "retrySessionModelStop"; sessionId: string }
   | { type: "selectSessionAccessPolicy"; policy: SessionAccessPolicy }
@@ -3162,7 +3165,8 @@ export class LearningApplication {
           targetDisposition,
           trailItems: structuredClone(session.trailDraft.items)
         };
-        if (targetDisposition === "addressed" && session.delayedTransferOffer === null) {
+        if (targetDisposition === "addressed" && session.delayedTransferOffer === null
+          && delayedTransferConcepts(session).length > 0) {
           const offeredAt = new Date().toISOString();
           session.delayedTransferOffer = {
             status: "pending",
@@ -3197,8 +3201,9 @@ export class LearningApplication {
         this.state.delayedTransferChecks.push({
           id: crypto.randomUUID(),
           relatedSessionId: session.id,
+          relatedLearningSessionGoal: session.learningGoal,
           originatingSessionTarget: session.sessionTarget,
-          originatingConcepts: [...new Set(session.evidenceTransferContext?.concepts ?? [])],
+          originatingConcepts: delayedTransferConcepts(session),
           intendedTransferGoal: requiredText(action.intendedTransferGoal, "Intended transfer goal"),
           scheduledAt: timestamp,
           updatedAt: timestamp,
@@ -3223,6 +3228,20 @@ export class LearningApplication {
         if (session.delayedTransferOffer?.status === "scheduled") {
           session.delayedTransferOffer.status = "cancelled";
         }
+        if (!this.state.delayedTransferChecks.some((candidate) => candidate.status === "scheduled")) {
+          this.state.screen = "dashboard";
+        }
+        break;
+      }
+      case "openFollowUpQueue": {
+        if (!this.state.delayedTransferChecks.some((check) => check.status === "scheduled")) {
+          throw new Error("Schedule a Delayed Transfer Check before opening the Follow-up Queue.");
+        }
+        this.state.screen = "followUps";
+        break;
+      }
+      case "closeFollowUpQueue": {
+        this.state.screen = "dashboard";
         break;
       }
       case "continueSession": {
@@ -5648,6 +5667,12 @@ function requiredText(value: string, subject: string): string {
   const text = value.trim();
   if (!text) throw new Error(`${subject} text is required.`);
   return text;
+}
+
+function delayedTransferConcepts(session: LearningSession): string[] {
+  return isCompleteEvidenceTransferContext(session.evidenceTransferContext)
+    ? [...new Set(session.evidenceTransferContext.concepts.map((concept) => concept.trim()))]
+    : [];
 }
 
 function requiredFutureIsoDate(value: string, subject: string, relativeTo: string): string {
@@ -8573,9 +8598,11 @@ function migrateDelayedTransferChecks(value: unknown): DelayedTransferCheck[] {
 
 function validDelayedTransferCheck(value: unknown): value is DelayedTransferCheck {
   return isRecord(value)
-    && [value.id, value.relatedSessionId, value.originatingSessionTarget, value.intendedTransferGoal]
+    && [value.id, value.relatedSessionId, value.relatedLearningSessionGoal,
+      value.originatingSessionTarget, value.intendedTransferGoal]
       .every((item) => typeof item === "string" && Boolean(item.trim()))
     && Array.isArray(value.originatingConcepts)
+    && value.originatingConcepts.length > 0
     && value.originatingConcepts.every((concept) => typeof concept === "string" && Boolean(concept.trim()))
     && new Set(value.originatingConcepts).size === value.originatingConcepts.length
     && [value.scheduledAt, value.updatedAt, value.dueAt].every(validIsoTimestamp)
@@ -8656,6 +8683,13 @@ function validateDelayedTransferReferences(state: LearningApplicationState): voi
     if (!session || session.status !== "consolidated"
       || session.consolidatedOutcome?.targetDisposition !== "addressed") {
       throw new Error("Stored Delayed Transfer Check references an ineligible Learning Session.");
+    }
+    const originatingConcepts = delayedTransferConcepts(session);
+    if (check.relatedLearningSessionGoal !== session.learningGoal
+      || check.originatingSessionTarget !== session.sessionTarget
+      || check.originatingConcepts.length !== originatingConcepts.length
+      || check.originatingConcepts.some((concept, index) => concept !== originatingConcepts[index])) {
+      throw new Error("Stored Delayed Transfer Check origin does not match its Learning Session.");
     }
     if (check.status === "scheduled") {
       if (scheduledSessionIds.has(session.id)) {

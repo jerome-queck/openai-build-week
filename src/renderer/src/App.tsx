@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   AgentWorkLogEvidence,
   AnnotationPurpose,
@@ -26,6 +26,7 @@ import { AnnotationInspector } from "./AnnotationInspector";
 import { ReanchoringReview } from "./ReanchoringReview";
 import { AdaptiveTeaching } from "./AdaptiveTeaching";
 import { LearnerModelLedger } from "./LearnerModelLedger";
+import { toDateTimeLocal } from "./date-time";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -39,6 +40,7 @@ export function App() {
   }, []);
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
+  if (state.screen === "followUps") return <FollowUpQueue state={state} onState={setState} />;
   if (state.screen === "workbench" && state.activeSessionId) {
     return <Workbench
       key={state.activeSessionId}
@@ -86,7 +88,8 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
           <ModelAccessPanel state={state} onState={onState} />
           <ApplicationSettings state={state} onState={onState} />
           <LearnerModelLedger state={state} session={null} onState={onState} />
-          {pendingDelayedTransfer && <DelayedTransferPrompt session={pendingDelayedTransfer} onState={onState} />}
+          {pendingDelayedTransfer && <DelayedTransferPrompt key={pendingDelayedTransfer.id}
+            session={pendingDelayedTransfer} onState={onState} />}
           <FollowUpsCard state={state} onState={onState} />
           {resumeSession ? <ResumeCard state={state} session={resumeSession} onState={onState} /> : <EmptyResume />}
           <Intake state={state} onState={onState} />
@@ -108,8 +111,6 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
   );
   const [dueAt, setDueAt] = useState(toDateTimeLocal(offer.proposedDueAt));
   const [error, setError] = useState<string | null>(null);
-  const defaultChoice = useRef<HTMLInputElement>(null);
-  useEffect(() => { defaultChoice.current?.focus(); }, []);
 
   const save = async () => {
     setError(null);
@@ -130,13 +131,13 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
   };
 
   return (
-    <section className="history-card" role="alertdialog" aria-labelledby="delayed-transfer-title">
+    <section className="history-card" aria-label="Delayed Transfer follow-up">
       <p className="eyebrow">Optional follow-up</p>
-      <h2 id="delayed-transfer-title">Check this understanding later?</h2>
+      <h2>Check this understanding later?</h2>
       <p>You marked <strong>{session.sessionTarget}</strong> Addressed. This is not a mastery claim, and no follow-up is selected by default.</p>
       <fieldset>
         <legend>Delayed Transfer choice</legend>
-        <label><input ref={defaultChoice} type="radio" name="delayed-transfer-choice" checked={choice === "off"}
+        <label><input type="radio" name="delayed-transfer-choice" checked={choice === "off"}
           onChange={() => setChoice("off")} />No follow-up</label>
         <label><input type="radio" name="delayed-transfer-choice" checked={choice === "later"}
           onChange={() => setChoice("later")} />Check me later</label>
@@ -165,27 +166,44 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
 }
 
 function FollowUpsCard({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
-  const [open, setOpen] = useState(false);
   const checks = state.delayedTransferChecks
     .filter((check) => check.status === "scheduled")
     .sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt));
+  const now = useFollowUpClock(checks.map((check) => check.dueAt));
   if (checks.length === 0) return null;
-  const ready = checks.filter((check) => Date.parse(check.dueAt) <= Date.now()).length;
+  const ready = checks.filter((check) => Date.parse(check.dueAt) <= now).length;
   return (
     <section className="history-card" aria-labelledby="follow-ups-title">
       <p className="eyebrow">Optional delayed work</p>
       <h2 id="follow-ups-title">Follow-ups</h2>
       <p>{ready} ready · {checks.length} scheduled. Follow-ups never block other work.</p>
-      <button className="secondary" aria-expanded={open} aria-controls="follow-up-queue"
-        aria-label={`${open ? "Close" : "Open"} Follow-up Queue with ${checks.length} scheduled item${checks.length === 1 ? "" : "s"}`}
-        onClick={() => setOpen((current) => !current)}>{open ? "Close Follow-up Queue" : "Open Follow-up Queue"}</button>
-      {open && <section id="follow-up-queue" aria-labelledby="follow-up-queue-title">
-        <h3 id="follow-up-queue-title">Follow-up Queue</h3>
-        <p className="subtle">Only timing and the intended transfer goal are shown before the due check.</p>
-        <ul>{checks.map((check) => <FollowUpQueueItem key={check.id} check={check} onState={onState} />)}</ul>
-      </section>}
+      <button className="secondary"
+        aria-label={`Open Follow-up Queue with ${checks.length} scheduled item${checks.length === 1 ? "" : "s"}`}
+        onClick={() => void window.quickStudy.submit({ type: "openFollowUpQueue" }).then(onState)}>
+        Open Follow-up Queue
+      </button>
     </section>
   );
+}
+
+function FollowUpQueue({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
+  const checks = state.delayedTransferChecks
+    .filter((check) => check.status === "scheduled")
+    .sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt));
+  return <main className="shell">
+    <Brand />
+    <section className="dashboard-content" aria-label="Follow-up Queue">
+      <p className="eyebrow">Learner-selected delayed work</p>
+      <h1>Follow-up Queue</h1>
+      <p>This optional view keeps Delayed Transfer Checks away from active-session Resume Cards and ordinary navigation.</p>
+      <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "closeFollowUpQueue" }).then(onState)}>
+        Return to dashboard
+      </button>
+      <p className="subtle">Only timing, origin, and the intended transfer goal are shown before a check is due.</p>
+      {checks.length === 0 ? <p>No Delayed Transfer Checks are scheduled.</p>
+        : <ul>{checks.map((check) => <FollowUpQueueItem key={check.id} check={check} onState={onState} />)}</ul>}
+    </section>
+  </main>;
 }
 
 function FollowUpQueueItem({ check, onState }: {
@@ -194,9 +212,19 @@ function FollowUpQueueItem({ check, onState }: {
 }) {
   const [dueAt, setDueAt] = useState(toDateTimeLocal(check.dueAt));
   const [error, setError] = useState<string | null>(null);
+  const reschedule = async () => {
+    setError(null);
+    try {
+      const nextDueAt = new Date(dueAt).toISOString();
+      onState(await window.quickStudy.submit({ type: "rescheduleDelayedTransfer", checkId: check.id, dueAt: nextDueAt }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The follow-up could not be rescheduled.");
+    }
+  };
   return <li>
     <strong>{check.originatingSessionTarget}</strong>
     {check.originatingConcepts.length > 0 && <p>Originating concepts: {check.originatingConcepts.join(", ")}</p>}
+    <p>Related Learning Session: {check.relatedLearningSessionGoal}</p>
     <p>Intended transfer goal: {check.intendedTransferGoal}</p>
     <p>Due {new Date(check.dueAt).toLocaleString()}</p>
     <label htmlFor={`reschedule-${check.id}`}>Reschedule {check.originatingSessionTarget}</label>
@@ -204,11 +232,7 @@ function FollowUpQueueItem({ check, onState }: {
       onChange={(event) => setDueAt(event.target.value)} />
     <div className="resume-actions">
       <button className="secondary" aria-label={`Save new time for ${check.originatingSessionTarget}`}
-        onClick={() => void window.quickStudy.submit({
-          type: "rescheduleDelayedTransfer", checkId: check.id, dueAt: new Date(dueAt).toISOString()
-        }).then(onState).catch((cause: unknown) => setError(
-          cause instanceof Error ? cause.message : "The follow-up could not be rescheduled."
-        ))}>Save new time</button>
+        disabled={!dueAt} onClick={() => void reschedule()}>Save new time</button>
       <button className="text-button" aria-label={`Cancel follow-up for ${check.originatingSessionTarget}`}
         onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransfer", checkId: check.id })
           .then(onState).catch((cause: unknown) => setError(
@@ -219,9 +243,15 @@ function FollowUpQueueItem({ check, onState }: {
   </li>;
 }
 
-function toDateTimeLocal(value: string): string {
-  const date = new Date(value);
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+function useFollowUpClock(dueTimes: string[]): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const nextDueAt = dueTimes.map(Date.parse).filter((dueAt) => dueAt > now).sort((left, right) => left - right)[0];
+    if (nextDueAt === undefined) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.min(nextDueAt - now + 1, 2_147_483_647));
+    return () => window.clearTimeout(timer);
+  }, [dueTimes.join("\n"), now]);
+  return now;
 }
 
 function ApplicationSettings({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {

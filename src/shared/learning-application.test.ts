@@ -2119,11 +2119,13 @@ describe("Learning Application", () => {
   });
 
   it("offers Delayed Transfer once only after an Addressed Session Target and defaults to no follow-up", async () => {
-    const { application } = await launch();
-    await application.submit({
-      type: "startQuickStudy",
+    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+    const { application } = await launchWithRuntime(runtime);
+    let state = await application.submit({
+      type: "submitSessionIntake",
       mathematics: "Show that every convergent sequence is bounded."
     });
+    const addressedSessionId = state.activeSessionId!;
     await application.submit({ type: "beginSessionConsolidation" });
     await application.submit({
       type: "reviseSessionConsolidation",
@@ -2131,23 +2133,6 @@ describe("Learning Application", () => {
       learningProgress: "I can split the sequence into a finite prefix and a controlled tail.",
       unresolvedQuestions: [],
       nextStep: "Write the bound explicitly.",
-      includedArtifactIds: [],
-      targetDisposition: "deferred"
-    });
-    let state = await application.submit({ type: "consolidateSession" });
-
-    expect(state.sessions[0].delayedTransferOffer).toBeNull();
-    expect(state.delayedTransferChecks).toEqual([]);
-
-    state = await application.submit({ type: "continueSession", sessionId: state.sessions[0].id });
-    const addressedSessionId = state.activeSessionId!;
-    await application.submit({ type: "beginSessionConsolidation" });
-    await application.submit({
-      type: "reviseSessionConsolidation",
-      centralInsight: "Convergence controls the tail while a finite prefix is bounded.",
-      learningProgress: "I can now construct the full bound.",
-      unresolvedQuestions: [],
-      nextStep: "Apply the same split to another sequence property.",
       includedArtifactIds: [],
       targetDisposition: "addressed"
     });
@@ -2165,12 +2150,46 @@ describe("Learning Application", () => {
     expect(state.delayedTransferChecks).toEqual([]);
     await expect(application.submit({ type: "declineDelayedTransfer", sessionId: addressedSessionId }))
       .rejects.toThrow("already been decided");
+
+    const { application: unsuitable } = await launch();
+    await unsuitable.submit({ type: "startQuickStudy", mathematics: "Review my general study plan." });
+    await unsuitable.submit({ type: "beginSessionConsolidation" });
+    await unsuitable.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "The plan needs a smaller next step.", learningProgress: "", unresolvedQuestions: [],
+      nextStep: "Choose a mathematical target.", includedArtifactIds: [], targetDisposition: "addressed"
+    });
+    expect((await unsuitable.submit({ type: "consolidateSession" })).sessions[0].delayedTransferOffer).toBeNull();
+  });
+
+  it("does not offer Delayed Transfer for Deferred, Unresolved, or merely Paused work", async () => {
+    for (const disposition of ["deferred", "unresolved"] as const) {
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      const { application } = await launchWithRuntime(runtime);
+      await application.submit({ type: "submitSessionIntake", mathematics: "Explain a finite-subcover proof." });
+      await application.submit({ type: "beginSessionConsolidation" });
+      await application.submit({
+        type: "reviseSessionConsolidation",
+        centralInsight: "Compactness makes the choice finite.", learningProgress: "", unresolvedQuestions: [],
+        nextStep: "Return to the proof.", includedArtifactIds: [], targetDisposition: disposition
+      });
+      const state = await application.submit({ type: "consolidateSession" });
+      expect(state.sessions[0].delayedTransferOffer).toBeNull();
+      expect(state.delayedTransferChecks).toEqual([]);
+    }
+    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Explain a finite-subcover proof." });
+    const paused = await application.submit({ type: "leaveSession" });
+    expect(paused.sessions[0].status).toBe("paused");
+    expect(paused.sessions[0].delayedTransferOffer).toBeNull();
   });
 
   it("schedules one durable Delayed Transfer Check and supports rescheduling and cancellation", async () => {
-    const { application, dataDirectory } = await launch();
+    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
     let state = await application.submit({
-      type: "startQuickStudy",
+      type: "submitSessionIntake",
       mathematics: "Prove that every finite subgroup of the multiplicative group of a field is cyclic."
     });
     const sessionId = state.activeSessionId!;
@@ -2198,7 +2217,9 @@ describe("Learning Application", () => {
     const scheduled = state.delayedTransferChecks[0];
     expect(scheduled).toMatchObject({
       relatedSessionId: sessionId,
+      relatedLearningSessionGoal: state.sessions[0].learningGoal,
       originatingSessionTarget: state.sessions[0].sessionTarget,
+      originatingConcepts: ["finite subcover"],
       intendedTransferGoal: "Recognize and reuse the root-counting structure in a fresh proof.",
       dueAt,
       status: "scheduled"
@@ -2212,6 +2233,11 @@ describe("Learning Application", () => {
       intendedTransferGoal: "Create a duplicate.",
       dueAt
     })).rejects.toThrow("already has a Delayed Transfer Check");
+
+    state = await application.submit({ type: "openFollowUpQueue" });
+    expect(state.screen).toBe("followUps");
+    state = await application.submit({ type: "closeFollowUpQueue" });
+    expect(state.screen).toBe("dashboard");
 
     const rescheduledDueAt = new Date(Date.parse(dueAt) + 4 * 24 * 60 * 60 * 1_000).toISOString();
     state = await application.submit({
@@ -7098,6 +7124,26 @@ async function createPinnedArtifact(application: LearningApplication, runtime: D
   });
   const artifact = state.sessions[0].learningArtifacts[0];
   return { artifactId: artifact.id, revision: structuredClone(artifact.currentRevision) };
+}
+
+function transferableSessionProposal(): SessionProposal {
+  return {
+    learningGoal: "Understand the finite-subcover strategy",
+    scope: "Explain the finite-subcover step",
+    initialTeachingDirection: "Start from pointwise choices",
+    requiresConfirmation: false,
+    confirmationReason: null,
+    evidenceTransferContext: {
+      concepts: ["finite subcover"],
+      mathematicalStructures: ["compact topological space"],
+      prerequisiteRelationships: [{
+        prerequisiteConcept: "open cover",
+        supportsConcept: "finite subcover",
+        relationship: "requiredFor"
+      }],
+      taskDemands: ["apply a finite-subcover proof strategy"]
+    }
+  };
 }
 
 async function createCorroboratedPinnedArtifact(

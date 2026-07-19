@@ -99,6 +99,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "cleanupVerifierEnvironment":
     case "beginSessionConsolidation":
     case "consolidateSession":
+    case "openFollowUpQueue":
+    case "closeFollowUpQueue":
       return true;
     case "requestSpecialistReview":
       return !("coordination" in action) || action.coordination === undefined

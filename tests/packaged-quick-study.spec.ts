@@ -406,7 +406,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(consolidation).toBeVisible();
     await consolidation.getByRole("radio", { name: "Addressed" }).click();
     await consolidation.getByRole("button", { name: "Create Consolidated Session Outcome" }).press("Enter");
-    const delayedTransfer = page.getByRole("alertdialog", { name: "Check this understanding later?" });
+    const delayedTransfer = page.getByRole("region", { name: "Delayed Transfer follow-up" });
     await expect(delayedTransfer.getByRole("radio", { name: "No follow-up" })).toBeChecked();
     await expect(page.getByRole("region", { name: "Follow-ups" })).toHaveCount(0);
     await delayedTransfer.getByRole("radio", { name: "Check me later" }).click();
@@ -420,6 +420,10 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(page.getByRole("region", { name: "Follow-up Queue" })).toContainText(
       "Apply the finite-choice proof structure to a fresh mathematical setting."
     );
+    await expect(page.getByRole("region", { name: "Follow-up Queue" })).toContainText(
+      "Related Learning Session:"
+    );
+    await page.getByRole("button", { name: "Return to dashboard" }).press("Enter");
 
     await quit();
     page = await launch();
