@@ -169,7 +169,7 @@ export interface AgentBudget {
   model: "runtimeDefault" | string;
   reasoningEffort: ReasoningEffort;
   tools: ["checkpointSpecialistResult"];
-  maxOutputTokens: number;
+  maxTokens: number;
   maxLatencyMs: number;
 }
 

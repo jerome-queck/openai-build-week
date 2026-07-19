@@ -236,10 +236,9 @@ export class CodexAppServerRuntime implements ModelRuntime {
     onRuntimeEvent?: (event: ModelRuntimeEvent) => void;
     onAccessRequest?: TeachingRequest["onAccessRequest"];
     onSpecialistCheckpoint?: SpecialistAgentRequest["onPartialResult"];
-    specialistMaxOutputTokens?: number;
+    specialistMaxTokens?: number;
     lastSpecialistCheckpoint: string;
-    outputBytes: number;
-    outputBudgetExceeded: boolean;
+    budgetExceeded: boolean;
   }>();
   private readonly earlyTurnNotifications = new Map<string, ProtocolMessage[]>();
   private readonly turnRegistrationWaiters = new Map<string, () => void>();
@@ -292,6 +291,10 @@ export class CodexAppServerRuntime implements ModelRuntime {
       })));
       cursor = response.nextCursor ?? null;
     } while (cursor !== null);
+    if (new Set(models.map((model) => model.model)).size !== models.length
+      || models.filter((model) => model.isDefault).length !== 1) {
+      throw new Error("Codex returned an ambiguous model catalog.");
+    }
     return { models };
   }
 
@@ -413,7 +416,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         const content = await this.runTurn(
           [
             "Act as one task-scoped mathematical review Specialist Agent.",
-            `Keep the entire response within the ${request.budget.maxOutputTokens}-token ceiling. Identify a hidden assumption in the supplied evidence, or confirm concisely that none is needed for the stated step. Do not claim independent or formal verification.`,
+            `Keep total task token use, including input, output, and reasoning, within the ${request.budget.maxTokens}-token limit. Identify a hidden assumption in the supplied evidence, or confirm concisely that none is needed for the stated step. Do not claim independent or formal verification.`,
             "Call checkpoint_specialist_result after each useful self-contained conclusion and before returning the same final structured JSON. Every later checkpoint must include all earlier checkpoint content as a prefix. Only checkpoint content suitable for the learner-facing Teaching Card.",
             `Purpose: ${request.purpose}`,
             `Agent Brief: ${JSON.stringify(request.brief)}`,
@@ -432,7 +435,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
           request
         );
         if (request.signal.aborted) throw new Error("Specialist Agent work was stopped.");
-        return parseSpecialistAgentResult(content, request.budget.maxOutputTokens);
+        return parseSpecialistAgentResult(content);
       } catch (error) {
         request.onRuntimeEvent?.({ type: "turnFailed", workKind: "specialist", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
         throw error;
@@ -585,10 +588,9 @@ export class CodexAppServerRuntime implements ModelRuntime {
         onRuntimeEvent,
         onAccessRequest: teachingRequest?.onAccessRequest,
         onSpecialistCheckpoint: specialistRequest?.onPartialResult,
-        specialistMaxOutputTokens: specialistRequest?.budget.maxOutputTokens,
+        specialistMaxTokens: specialistRequest?.budget.maxTokens,
         lastSpecialistCheckpoint: "",
-        outputBytes: 0,
-        outputBudgetExceeded: false
+        budgetExceeded: false
       });
       this.turnRegistrationWaiters.get(turnResponse.turn.id)?.();
       if (sessionId) this.activeTeachingTurns.set(sessionId, {
@@ -609,16 +611,12 @@ export class CodexAppServerRuntime implements ModelRuntime {
     if (isRecord(params) && params.tool === "checkpoint_specialist_result") {
       const call = parseSpecialistCheckpointToolCall(params);
       const turn = await this.awaitRegisteredTurn(call.turnId);
-      if (!turn?.onSpecialistCheckpoint || !turn.specialistMaxOutputTokens) {
+      if (!turn?.onSpecialistCheckpoint || !turn.specialistMaxTokens) {
         throw new Error("This turn cannot checkpoint a Specialist Agent result.");
       }
-      const checkpoint = parseSpecialistAgentResult(JSON.stringify(call.checkpoint), turn.specialistMaxOutputTokens);
+      const checkpoint = parseSpecialistAgentResult(JSON.stringify(call.checkpoint));
       if (turn.lastSpecialistCheckpoint && !checkpoint.content.startsWith(turn.lastSpecialistCheckpoint)) {
         throw new Error("Specialist Agent checkpoints must retain all earlier useful conclusions.");
-      }
-      const checkpointBytes = Buffer.byteLength(JSON.stringify(checkpoint), "utf8");
-      if (!this.reserveSpecialistOutput(call.turnId, turn, checkpointBytes)) {
-        throw new Error("Specialist Agent output exceeded its token budget.");
       }
       turn.lastSpecialistCheckpoint = checkpoint.content;
       turn.onSpecialistCheckpoint(checkpoint.content);
@@ -663,33 +661,38 @@ export class CodexAppServerRuntime implements ModelRuntime {
     return this.turns.get(turnId);
   }
 
-  private reserveSpecialistOutput(turnId: string, turn: {
+  private enforceSpecialistTokenBudget(turnId: string, turn: {
     threadId: string;
-    specialistMaxOutputTokens?: number;
-    outputBytes: number;
-    outputBudgetExceeded: boolean;
+    specialistMaxTokens?: number;
+    budgetExceeded: boolean;
     onRuntimeEvent?: (event: ModelRuntimeEvent) => void;
     reject(error: Error): void;
-  }, bytes: number): boolean {
-    if (turn.outputBudgetExceeded) return false;
-    if (!turn.specialistMaxOutputTokens || turn.outputBytes + bytes <= turn.specialistMaxOutputTokens) {
-      turn.outputBytes += bytes;
-      return true;
-    }
-    turn.outputBudgetExceeded = true;
+  }, totalTokens: number): void {
+    if (turn.budgetExceeded || !turn.specialistMaxTokens || totalTokens <= turn.specialistMaxTokens) return;
+    turn.budgetExceeded = true;
     turn.onRuntimeEvent?.({
       type: "turnFailed",
       workKind: "specialist",
       threadId: turn.threadId,
       turnId,
-      detail: "Specialist Agent output exceeded its conservative token ceiling."
+      detail: `Specialist Agent used ${totalTokens} tokens and exceeded its ${turn.specialistMaxTokens}-token limit.`
     });
     void this.client.request("turn/interrupt", { threadId: turn.threadId, turnId }).catch(() => undefined);
-    turn.reject(new Error("Specialist Agent output exceeded its token budget. Retry to request a shorter review."));
-    return false;
+    turn.reject(new Error("Specialist Agent exceeded its token budget. Retry with a smaller task or a larger budget."));
   }
 
   private receiveNotification(message: ProtocolMessage): void {
+    if (message.method === "thread/tokenUsage/updated") {
+      const usage = parseTokenUsageUpdate(message.params);
+      if (!usage) return;
+      const turn = this.turns.get(usage.turnId);
+      if (!turn) {
+        this.bufferEarlyTurnNotification(usage.turnId, message);
+        return;
+      }
+      this.enforceSpecialistTokenBudget(usage.turnId, turn, usage.totalTokens);
+      return;
+    }
     if (message.method === "item/agentMessage/delta") {
       const params = message.params as { turnId: string; delta: string };
       const turn = this.turns.get(params.turnId);
@@ -697,9 +700,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
         this.bufferEarlyTurnNotification(params.turnId, message);
         return;
       }
-      if (turn.outputBudgetExceeded) return;
-      const deltaBytes = Buffer.byteLength(params.delta, "utf8");
-      if (!this.reserveSpecialistOutput(params.turnId, turn, deltaBytes)) return;
+      if (turn.budgetExceeded) return;
       turn.content += params.delta;
       turn.onDelta?.(params.delta);
       turn.onRuntimeEvent?.({
@@ -931,6 +932,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function parseTokenUsageUpdate(value: unknown): { turnId: string; totalTokens: number } | null {
+  if (!isRecord(value) || typeof value.turnId !== "string" || !isRecord(value.tokenUsage)
+    || !isRecord(value.tokenUsage.total) || !Number.isInteger(value.tokenUsage.total.totalTokens)
+    || (value.tokenUsage.total.totalTokens as number) < 0) return null;
+  return { turnId: value.turnId, totalTokens: value.tokenUsage.total.totalTokens as number };
+}
+
 function isModelListResponse(value: unknown): value is {
   data: Array<{
     model: string;
@@ -1139,7 +1147,7 @@ function parseArtifactSynthesis(content: string): ArtifactSynthesisResult {
   return value as unknown as ArtifactSynthesisResult;
 }
 
-function parseSpecialistAgentResult(content: string, maxOutputTokens: number): SpecialistAgentResult {
+function parseSpecialistAgentResult(content: string): SpecialistAgentResult {
   let value: unknown;
   try {
     value = JSON.parse(content);
@@ -1147,9 +1155,7 @@ function parseSpecialistAgentResult(content: string, maxOutputTokens: number): S
     throw new Error("Codex returned a malformed Specialist Agent result. Retry to request a fresh review.");
   }
   if (!isRecord(value) || typeof value.title !== "string" || !value.title.trim()
-    || typeof value.content !== "string" || !value.content.trim()
-    // Every encoded token contains at least one byte, so this conservative byte ceiling is a hard token upper bound.
-    || Buffer.byteLength(value.content, "utf8") > maxOutputTokens) {
+    || typeof value.content !== "string" || !value.content.trim()) {
     throw new Error("Codex returned a malformed Specialist Agent result. Retry to request a fresh review.");
   }
   return value as unknown as SpecialistAgentResult;

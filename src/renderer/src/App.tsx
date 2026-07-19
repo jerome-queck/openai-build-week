@@ -2015,7 +2015,7 @@ function AgentTaskStatusCard({ task, modelAvailable, onState }: {
           <div><dt>Model</dt><dd>{task.budget.model === "runtimeDefault" ? "Automatic runtime default" : task.budget.model}</dd></div>
           <div><dt>Reasoning effort</dt><dd>{task.budget.reasoningEffort}</dd></div>
           <div><dt>Tool access</dt><dd>{task.budget.tools.join(", ") || "None"}</dd></div>
-          <div><dt>Token use limit</dt><dd>{task.budget.maxOutputTokens} output tokens (conservative ceiling)</dd></div>
+          <div><dt>Token use limit</dt><dd>{task.budget.maxTokens} total input, output, and reasoning tokens</dd></div>
           <div><dt>Latency limit</dt><dd>{task.budget.maxLatencyMs / 1000} seconds</dd></div>
         </dl>
       </details>

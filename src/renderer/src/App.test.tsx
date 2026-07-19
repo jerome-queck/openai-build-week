@@ -217,9 +217,14 @@ describe("anchored teaching workbench", () => {
         learningGoal: session.learningGoal, sourceAnchors: [], constraints: ["Review one card."], learnerEvidence: [],
         expectedOutput: "One concise card.", verificationNeeds: ["Identify hidden assumptions."]
       },
+      specialistBriefs: [{
+        learningGoal: session.learningGoal, sourceAnchors: [], constraints: ["Review one card."], learnerEvidence: [],
+        expectedOutput: "One concise card.", verificationNeeds: ["Identify hidden assumptions."]
+      }],
+      coordination: "single",
       budget: {
         agentCount: 1, concurrency: 1, model: "runtimeDefault", reasoningEffort: "medium",
-        tools: ["checkpointSpecialistResult"], maxOutputTokens: 512, maxLatencyMs: 120_000
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
       },
       integratedTeachingCard: {
         title: "Specialist review", status: "streaming", content: "", error: null, retryable: false

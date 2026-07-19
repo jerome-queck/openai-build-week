@@ -36,6 +36,26 @@ describe("Codex app-server contract", () => {
     }));
   });
 
+  it("rejects duplicate or ambiguous runtime model catalogs", async () => {
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "model/list") {
+        const model = {
+          model: "duplicate", displayName: "Duplicate", isDefault: true,
+          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Balanced" }]
+        };
+        transport.respond(message.id, { data: [model, model], nextCursor: null });
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    await expect(runtime.getCapabilities()).rejects.toThrow("ambiguous model catalog");
+  });
+
   it("initializes once and supports both Codex-owned authentication paths", async () => {
     let account: null | { type: "chatgpt"; email: string; planType: string } | { type: "apiKey" } = null;
     const transport = new ScriptedTransport((message) => {
@@ -456,7 +476,7 @@ describe("Codex app-server contract", () => {
       },
       budget: {
         agentCount: 1, concurrency: 1, model: "codex-deep", reasoningEffort: "high",
-        tools: ["checkpointSpecialistResult"], maxOutputTokens: 512, maxLatencyMs: 120_000
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
       },
       signal: new AbortController().signal,
       onStatus: (status) => statuses.push(status),
@@ -533,7 +553,7 @@ describe("Codex app-server contract", () => {
       },
       budget: {
         agentCount: 1, concurrency: 1, model: "runtimeDefault", reasoningEffort: "medium",
-        tools: ["checkpointSpecialistResult"], maxOutputTokens: 512, maxLatencyMs: 120_000
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
       },
       signal: new AbortController().signal,
       onStatus: () => undefined,
@@ -547,7 +567,7 @@ describe("Codex app-server contract", () => {
     ]);
   });
 
-  it("interrupts Specialist Agent output at its conservative token ceiling", async () => {
+  it("interrupts Specialist Agent work when Codex reports total token use beyond its limit", async () => {
     const transport = new ScriptedTransport((message) => {
       if (!("id" in message)) return;
       if (message.method === "initialize") {
@@ -558,11 +578,14 @@ describe("Codex app-server contract", () => {
       if (message.method === "thread/start") transport.respond(message.id, { thread: { id: "budget-thread" } });
       if (message.method === "turn/start") {
         transport.respond(message.id, { turn: { id: "budget-turn" } });
-        transport.request(703, "item/tool/call", {
-          threadId: "budget-thread", turnId: "budget-turn", callId: "oversized-checkpoint",
-          namespace: null, tool: "checkpoint_specialist_result",
-          arguments: { title: "x".repeat(513), content: "Useful conclusion." }
-        });
+        queueMicrotask(() => transport.notify("thread/tokenUsage/updated", {
+          threadId: "budget-thread", turnId: "budget-turn",
+          tokenUsage: {
+            total: { inputTokens: 300, cachedInputTokens: 0, outputTokens: 120, reasoningOutputTokens: 100, totalTokens: 520 },
+            last: { inputTokens: 300, cachedInputTokens: 0, outputTokens: 120, reasoningOutputTokens: 100, totalTokens: 520 },
+            modelContextWindow: 100_000
+          }
+        }));
       }
       if (message.method === "turn/interrupt") transport.respond(message.id, {});
     });
@@ -576,7 +599,7 @@ describe("Codex app-server contract", () => {
       },
       budget: {
         agentCount: 1, concurrency: 1, model: "runtimeDefault", reasoningEffort: "medium",
-        tools: ["checkpointSpecialistResult"], maxOutputTokens: 512, maxLatencyMs: 120_000
+        tools: ["checkpointSpecialistResult"], maxTokens: 512, maxLatencyMs: 120_000
       },
       signal: new AbortController().signal, onStatus: () => undefined, onPartialResult: () => undefined
     })).rejects.toThrow("exceeded its token budget");
