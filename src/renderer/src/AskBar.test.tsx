@@ -160,6 +160,7 @@ function questionSession(): LearningSession {
     trailDraft: { items: [] },
     consolidationDraft: null, consolidatedOutcome: null, continuationOf: null, modelStopConfirmation: null,
     conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null,
+    agentTasks: [], activeAgentTaskId: null,
     learningArtifacts: [], learningSlice: null
   };
 }

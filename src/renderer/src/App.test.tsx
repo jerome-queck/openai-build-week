@@ -656,6 +656,8 @@ function workbenchState(): LearningApplicationState {
       pendingConceptPeek: null,
       prerequisiteBranchProposals: [],
       prerequisiteBranch: null,
+      agentTasks: [],
+      activeAgentTaskId: null,
       learningArtifacts: [{
         id: "artifact-1",
         title: "Explain compact subset",

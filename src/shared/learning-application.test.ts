@@ -11,7 +11,7 @@ import {
   type SourceIndexExtractionResult,
   type SourceFingerprint
 } from "./learning-application";
-import { ModelAccessError, type ArtifactSynthesisRequest, type ModelAccessCause, type ModelRuntime, type RuntimeAccessRequest, type SessionProposal, type TeachingRequest } from "./model-runtime";
+import { ModelAccessError, type ArtifactSynthesisRequest, type ModelAccessCause, type ModelRuntime, type RuntimeAccessRequest, type SessionProposal, type SpecialistAgentRequest, type SpecialistAgentResult, type TeachingRequest } from "./model-runtime";
 
 describe("Learning Application", () => {
   const dataDirectories: string[] = [];
@@ -649,7 +649,7 @@ describe("Learning Application", () => {
       requiresConfirmation: false,
       confirmationReason: null
     }, true);
-    const { application } = await launchWithRuntime(runtime);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
     let state = await application.submit({
       type: "submitSessionIntake",
       mathematics: "Every compact subset of a Hausdorff space is closed."
@@ -3064,6 +3064,167 @@ describe("Learning Application", () => {
     expect(persisted.agentWorkLogs[state.sessions[0].id]).not.toHaveLength(0);
   });
 
+  it("dispatches one bounded Specialist Agent only for a completed learner-relevant Teaching Card", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand why compact subsets are closed",
+      scope: "Find the hidden separation assumption",
+      initialTeachingDirection: "Inspect the complement argument",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Prove compact subsets are closed." });
+
+    await expect(application.submit({ type: "requestSpecialistReview" })).rejects.toThrow(
+      "Complete a Teaching Card before requesting a Specialist Agent review."
+    );
+    expect(runtime.specialistRequests).toEqual([]);
+
+    runtime.emitTeaching("For each exterior point, choose disjoint neighbourhoods from every point of the compact set.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    const working = await application.submit({ type: "requestSpecialistReview" });
+
+    expect(runtime.specialistRequests).toHaveLength(1);
+    expect(runtime.specialistRequests[0].brief).toEqual({
+      learningGoal: "Understand why compact subsets are closed",
+      sourceAnchors: [],
+      constraints: ["Review only the current learner-facing Teaching Card.", "Do not inspect other Learning Session history or local files."],
+      learnerEvidence: ["For each exterior point, choose disjoint neighbourhoods from every point of the compact set."],
+      expectedOutput: "One concise correction or confirmation integrated as a Teaching Card.",
+      verificationNeeds: ["Identify any hidden mathematical assumption and explain whether the argument depends on it."]
+    });
+    expect(runtime.specialistRequests[0]).not.toHaveProperty("mathematics");
+    expect(working.sessions[0].agentTasks).toEqual([
+      expect.objectContaining({
+        purpose: "Review the current Teaching Card for a hidden mathematical assumption",
+        status: "working",
+        integratedTeachingCard: expect.objectContaining({ status: "streaming", content: "" })
+      })
+    ]);
+
+    runtime.completeSpecialist({
+      title: "Specialist review · separation assumption",
+      content: "The argument requires the Hausdorff property so the chosen neighbourhoods can be disjoint."
+    });
+    await application.waitForModelWork();
+    const complete = application.getState().sessions[0].agentTasks[0];
+    expect(complete).toMatchObject({
+      status: "complete",
+      integratedTeachingCard: {
+        status: "completed",
+        title: "Specialist review · separation assumption",
+        content: "The argument requires the Hausdorff property so the chosen neighbourhoods can be disjoint."
+      },
+      agentWorkLogReference: { sessionId: expect.any(String), fromSequence: expect.any(Number), toSequence: expect.any(Number) }
+    });
+
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().sessions[0].agentTasks[0]).toEqual(complete);
+  });
+
+  it("keeps useful partial Specialist Agent output when later work waits and fails", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check a compactness argument",
+      scope: "Inspect one assumption",
+      initialTeachingDirection: "Read the current explanation",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Review this compactness proof." });
+    runtime.emitTeaching("The proof chooses disjoint neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    await application.submit({ type: "requestSpecialistReview" });
+
+    runtime.waitSpecialist("Waiting for the bounded review result.");
+    expect(application.getState().sessions[0].agentTasks[0]).toMatchObject({
+      status: "waiting",
+      statusMessage: "Waiting for the bounded review result."
+    });
+    runtime.emitSpecialistPartial("The disjoint-neighbourhood step uses Hausdorff separation.");
+    runtime.failSpecialist(new Error("The specialist could not finish the final review."));
+    await application.waitForModelWork();
+
+    const failed = application.getState().sessions[0].agentTasks[0];
+    expect(failed).toMatchObject({
+      status: "failed",
+      integratedTeachingCard: {
+        status: "failed",
+        content: "The disjoint-neighbourhood step uses Hausdorff separation.",
+        error: "The specialist could not finish the final review.",
+        retryable: true
+      }
+    });
+  });
+
+  it("rejects malformed Specialist Agent output and exposes only sanitized audit evidence", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check a proof step",
+      scope: "Inspect one assumption",
+      initialTeachingDirection: "Read the current explanation",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Review this proof." });
+    runtime.emitTeaching("Assume the chosen neighbourhoods are disjoint.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    let state = await application.submit({ type: "requestSpecialistReview" });
+    runtime.completeSpecialist({ title: "", content: "raw malformed output" });
+    await application.waitForModelWork();
+
+    state = application.getState();
+    const task = state.sessions[0].agentTasks[0];
+    expect(task).toMatchObject({
+      status: "failed",
+      integratedTeachingCard: {
+        status: "failed",
+        error: "Codex returned a malformed Specialist Agent result. Retry to request a fresh review.",
+        retryable: true
+      }
+    });
+    const reference = task.agentWorkLogReference!;
+    const evidence = application.getAgentWorkLogEvidence(reference.sessionId, reference.fromSequence, reference.toSequence);
+    expect(evidence).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "turnStarted", summary: "Specialist Agent turn started." }),
+      expect.objectContaining({ type: "turnCompleted", summary: "Specialist Agent turn completed." })
+    ]));
+    expect(JSON.stringify(evidence)).not.toContain("raw malformed output");
+    expect(state.sessions[0]).not.toHaveProperty("agentWorkLog");
+  });
+
+  it("stops one visible Agent Task without discarding its partial integrated result", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check one proof step", scope: "Inspect one assumption",
+      initialTeachingDirection: "Read the current explanation", requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Review this proof." });
+    runtime.emitTeaching("The proof chooses disjoint neighbourhoods.");
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+    await application.submit({ type: "requestSpecialistReview" });
+    runtime.emitSpecialistPartial("This step uses separation.");
+
+    const stopped = await application.submit({ type: "cancelModelWork" });
+    await application.waitForModelWork();
+
+    expect(runtime.canceledSessionIds).toContain(stopped.sessions[0].id);
+    expect(stopped.sessions[0].agentTasks[0]).toMatchObject({
+      status: "stopped",
+      statusMessage: "Specialist work stopped. Retry when ready.",
+      integratedTeachingCard: {
+        status: "stopped",
+        content: "This step uses separation.",
+        retryable: true
+      }
+    });
+  });
+
   it("supports ChatGPT and API-key authentication without retaining credentials in application state", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Unused",
@@ -4160,11 +4321,14 @@ function textExtraction(text: string): SourceIndexExtraction {
 
 class DeterministicModelRuntime implements ModelRuntime {
   readonly teachingRequests: TeachingRequest[] = [];
+  readonly specialistRequests: SpecialistAgentRequest[] = [];
   readonly artifactSynthesisRequests: ArtifactSynthesisRequest[] = [];
   readonly conceptPeekRequests: Parameters<ModelRuntime["createConceptPeek"]>[0][] = [];
   readonly canceledSessionIds: string[] = [];
   private readonly teachingCompletions = new Map<TeachingRequest, () => void>();
   private readonly teachingFailures = new Map<TeachingRequest, (error: Error) => void>();
+  private specialistCompletion: ((result: SpecialistAgentResult) => void) | null = null;
+  private specialistFailure: ((error: Error) => void) | null = null;
   authentication: Awaited<ReturnType<ModelRuntime["getAuthentication"]>> = {
     status: "signedIn",
     method: "chatgpt",
@@ -4237,6 +4401,18 @@ class DeterministicModelRuntime implements ModelRuntime {
     }
   }
 
+  async runSpecialistAgent(request: SpecialistAgentRequest): Promise<SpecialistAgentResult> {
+    this.specialistRequests.push(request);
+    request.onStatus("working", null);
+    request.onRuntimeEvent?.({ type: "threadStarted", workKind: "specialist", threadId: "specialist-thread", turnId: null, detail: "Specialist thread started." });
+    request.onRuntimeEvent?.({ type: "turnStarted", workKind: "specialist", threadId: "specialist-thread", turnId: "specialist-turn", detail: "Specialist turn started." });
+    request.onRuntimeEvent?.({ type: "inputSubmitted", workKind: "specialist", threadId: "specialist-thread", turnId: "specialist-turn", detail: JSON.stringify(request.brief) });
+    return new Promise<SpecialistAgentResult>((resolve, reject) => {
+      this.specialistCompletion = resolve;
+      this.specialistFailure = reject;
+    });
+  }
+
   async synthesizeArtifact(request: ArtifactSynthesisRequest) {
     this.artifactSynthesisRequests.push(request);
     if (this.artifactSynthesisError) throw this.artifactSynthesisError;
@@ -4294,10 +4470,35 @@ class DeterministicModelRuntime implements ModelRuntime {
     if (request) this.teachingFailures.get(request)?.(error);
   }
 
+  completeSpecialist(result: SpecialistAgentResult) {
+    this.specialistRequests.at(-1)?.onRuntimeEvent?.({
+      type: "turnCompleted", workKind: "specialist", threadId: "specialist-thread", turnId: "specialist-turn", detail: "Specialist turn completed."
+    });
+    this.specialistCompletion?.(result);
+  }
+
+  waitSpecialist(message: string) {
+    this.specialistRequests.at(-1)?.onStatus("waiting", message);
+  }
+
+  emitSpecialistPartial(content: string) {
+    const request = this.specialistRequests.at(-1);
+    request?.onPartialResult(content);
+    request?.onRuntimeEvent?.({ type: "outputDelta", workKind: "specialist", threadId: "specialist-thread", turnId: "specialist-turn", detail: content });
+  }
+
+  failSpecialist(error: Error) {
+    this.specialistRequests.at(-1)?.onRuntimeEvent?.({
+      type: "turnFailed", workKind: "specialist", threadId: "specialist-thread", turnId: "specialist-turn", detail: error.message
+    });
+    this.specialistFailure?.(error);
+  }
+
   async cancelTeaching(sessionId: string) {
     this.canceledSessionIds.push(sessionId);
     if (this.cancelError) throw this.cancelError;
     if (this.completeTeachingOnCancel) this.completeTeaching(sessionId);
+    this.specialistCompletion?.({ title: "Stopped", content: "Stopped" });
   }
 
   async shutdown() {}

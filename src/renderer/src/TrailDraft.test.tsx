@@ -105,6 +105,7 @@ function trailSession(): LearningSession {
       revisions: [], variants: [], artifactId: "artifact-1"
     }],
     activeTeachingCardId: "card-1",
+    agentTasks: [], activeAgentTaskId: null,
     learningArtifacts: [{
       id: "artifact-1", title: "Compactness walkthrough",
       kind: "learningArtifact", originatingSessionId: "session-1",

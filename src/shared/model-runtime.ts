@@ -133,8 +133,37 @@ export interface ArtifactSynthesisResult {
   }>;
 }
 
+export interface AgentBrief {
+  learningGoal: string;
+  sourceAnchors: Array<{
+    sourceAnchorId: string;
+    sourceId: string;
+    selection: SourceAnchorSelection;
+  }>;
+  constraints: string[];
+  learnerEvidence: string[];
+  expectedOutput: string;
+  verificationNeeds: string[];
+}
+
+export interface SpecialistAgentRequest {
+  sessionId: string;
+  purpose: string;
+  brief: AgentBrief;
+  signal: AbortSignal;
+  onStatus(status: "working" | "waiting", message: string | null): void;
+  onPartialResult(content: string): void;
+  onRuntimeEvent?(event: ModelRuntimeEvent): void;
+}
+
+export interface SpecialistAgentResult {
+  title: string;
+  content: string;
+}
+
 export interface ModelRuntimeEvent {
   type: "threadStarted" | "turnStarted" | "inputSubmitted" | "outputDelta" | "turnCompleted" | "turnFailed";
+  workKind?: "teaching" | "specialist";
   threadId: string;
   turnId: string | null;
   detail: string;
@@ -147,6 +176,7 @@ export interface ModelRuntime {
   proposeSession(mathematics: string, onRuntimeEvent?: (event: ModelRuntimeEvent) => void): Promise<SessionProposal>;
   createConceptPeek(request: ConceptPeekRequest): Promise<string>;
   synthesizeArtifact(request: ArtifactSynthesisRequest): Promise<ArtifactSynthesisResult>;
+  runSpecialistAgent(request: SpecialistAgentRequest): Promise<SpecialistAgentResult>;
   streamTeaching(request: TeachingRequest): Promise<void>;
   cancelTeaching(sessionId: string): Promise<void>;
   shutdown(): Promise<void>;

@@ -7,6 +7,8 @@ import { ModelAccessError, type
   ModelRuntime,
   ModelRuntimeEvent,
   SessionProposal,
+  SpecialistAgentRequest,
+  SpecialistAgentResult,
   TeachingRequest
 } from "../shared/model-runtime";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -383,6 +385,40 @@ export class CodexAppServerRuntime implements ModelRuntime {
     }
   }
 
+  async runSpecialistAgent(request: SpecialistAgentRequest): Promise<SpecialistAgentResult> {
+    let resolveStart!: () => void;
+    const start = new Promise<void>((resolve) => {
+      resolveStart = resolve;
+    });
+    this.teachingStartSignals.set(request.sessionId, { promise: start, resolve: resolveStart });
+    try {
+      if (request.signal.aborted) throw new Error("Specialist Agent work was stopped.");
+      request.onStatus("working", null);
+      const content = await this.runTurn(
+        [
+          "Act as one task-scoped mathematical review Specialist Agent.",
+          "Return only the requested JSON. Identify a hidden assumption in the supplied learner evidence, or confirm concisely that none is needed for the stated step. Do not claim independent or formal verification.",
+          `Purpose: ${request.purpose}`,
+          `Agent Brief: ${JSON.stringify(request.brief)}`
+        ].join("\n\n"),
+        SPECIALIST_AGENT_RESULT_SCHEMA,
+        undefined,
+        request.sessionId,
+        (event) => request.onRuntimeEvent?.({ ...event, workKind: "specialist" }),
+        undefined,
+        "You are one bounded Specialist Agent. Use only the supplied Agent Brief. Do not inspect local files, session history, apps, tools, or the network. Return one structured result for the Teaching Orchestrator to integrate; never produce an agent transcript."
+      );
+      if (request.signal.aborted) throw new Error("Specialist Agent work was stopped.");
+      return parseSpecialistAgentResult(content);
+    } catch (error) {
+      resolveStart();
+      request.onRuntimeEvent?.({ type: "turnFailed", workKind: "specialist", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
+      throw error;
+    } finally {
+      this.teachingStartSignals.delete(request.sessionId);
+    }
+  }
+
   async streamTeaching(request: TeachingRequest): Promise<void> {
     let resolveStart!: () => void;
     const start = new Promise<void>((resolve) => {
@@ -438,7 +474,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
     onDelta?: (delta: string) => void,
     sessionId?: string,
     onRuntimeEvent?: (event: ModelRuntimeEvent) => void,
-    teachingRequest?: TeachingRequest
+    teachingRequest?: TeachingRequest,
+    baseInstructionsOverride?: string
   ): Promise<string> {
     const accessPolicy = teachingRequest?.accessScope.policy ?? "focused";
     const anchoredFocus = Boolean(teachingRequest?.focus);
@@ -463,13 +500,13 @@ export class CodexAppServerRuntime implements ModelRuntime {
         mcp_servers: {},
         web_search: "disabled"
       },
-      baseInstructions: anchoredFocus
+      baseInstructions: baseInstructionsOverride ?? (anchoredFocus
         ? "You are the bounded teaching runtime for an anchored Teaching Card. Use only the supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Produce only learner-facing mathematical teaching output."
         : contextualQuestion
         ? "You are the bounded teaching runtime for a Question Card. Use only the learner-approved Ask Bar context and supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Revise one coherent Question Card rather than producing a chat transcript."
         : fullAccessTools
         ? "You are the bounded teaching runtime for Quick Study. Full Access permits read-only local inspection for this Learning Session. Never modify or delete source files. Produce only learner-facing mathematical teaching output."
-        : "You are the bounded teaching runtime for Quick Study. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output."
+        : "You are the bounded teaching runtime for Quick Study. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output.")
     }) as { thread: { id: string } };
     onRuntimeEvent?.({
       type: "threadStarted",
@@ -902,6 +939,16 @@ const ARTIFACT_SYNTHESIS_SCHEMA = {
   }
 } as const;
 
+const SPECIALIST_AGENT_RESULT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "content"],
+  properties: {
+    title: { type: "string" },
+    content: { type: "string" }
+  }
+} as const;
+
 function parseSessionProposal(content: string): SessionProposal {
   let value: unknown;
   try {
@@ -944,6 +991,20 @@ function parseArtifactSynthesis(content: string): ArtifactSynthesisResult {
     throw new Error("Codex returned a malformed Learning Artifact synthesis. Retry to request a fresh synthesis.");
   }
   return value as unknown as ArtifactSynthesisResult;
+}
+
+function parseSpecialistAgentResult(content: string): SpecialistAgentResult {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new Error("Codex returned a malformed Specialist Agent result. Retry to request a fresh review.");
+  }
+  if (!isRecord(value) || typeof value.title !== "string" || !value.title.trim()
+    || typeof value.content !== "string" || !value.content.trim()) {
+    throw new Error("Codex returned a malformed Specialist Agent result. Retry to request a fresh review.");
+  }
+  return value as unknown as SpecialistAgentResult;
 }
 
 function validArgumentRoadmapProposal(value: unknown): boolean {

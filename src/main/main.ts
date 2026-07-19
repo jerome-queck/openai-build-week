@@ -79,12 +79,15 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "confirmSessionProposal":
     case "cancelModelWork":
     case "retryModelWork":
+    case "requestSpecialistReview":
     case "startChatGptLogin":
     case "refreshAuthentication":
     case "discardPendingQuestion":
     case "submitPendingQuestion":
     case "returnToPrerequisiteOrigin":
       return true;
+    case "retryAgentTask":
+      return "taskId" in action && typeof action.taskId === "string";
     case "resumeSession":
     case "cancelSessionModelWork":
       return "sessionId" in action && typeof action.sessionId === "string";

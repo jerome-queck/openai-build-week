@@ -380,6 +380,69 @@ describe("Codex app-server contract", () => {
     expect(JSON.stringify(synthesisTurn.params)).toContain("authorized only for this artifact synthesis");
   });
 
+  it("runs one Specialist Agent with tools disabled and only the supplied Agent Brief", async () => {
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") transport.respond(message.id, { thread: { id: "specialist-thread" } });
+      if (message.method === "turn/start") {
+        transport.respond(message.id, { turn: { id: "specialist-turn" } });
+        queueMicrotask(() => {
+          transport.notify("item/agentMessage/delta", {
+            threadId: "specialist-thread", turnId: "specialist-turn", itemId: "specialist-result",
+            delta: JSON.stringify({
+              title: "Specialist review · separation assumption",
+              content: "The step depends on Hausdorff separation."
+            })
+          });
+          transport.notify("turn/completed", {
+            threadId: "specialist-thread", turn: { id: "specialist-turn", status: "completed", error: null }
+          });
+        });
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    const events: string[] = [];
+
+    await expect(runtime.runSpecialistAgent({
+      sessionId: "session-1",
+      purpose: "Review one hidden assumption",
+      brief: {
+        learningGoal: "Understand compactness",
+        sourceAnchors: [],
+        constraints: ["Review only the current Teaching Card."],
+        learnerEvidence: ["Choose disjoint neighbourhoods."],
+        expectedOutput: "One concise integrated Teaching Card.",
+        verificationNeeds: ["Identify hidden assumptions."]
+      },
+      signal: new AbortController().signal,
+      onStatus: () => undefined,
+      onPartialResult: () => undefined,
+      onRuntimeEvent: (event) => events.push(`${event.workKind}:${event.type}`)
+    })).resolves.toEqual({
+      title: "Specialist review · separation assumption",
+      content: "The step depends on Hausdorff separation."
+    });
+
+    const threadStart = transport.messages.find((message) => message.method === "thread/start")!;
+    expect(threadStart).toMatchObject({
+      params: {
+        sandbox: "read-only",
+        dynamicTools: [],
+        config: { features: { apps: false, multi_agent: false, shell_tool: false, unified_exec: false } }
+      }
+    });
+    expect(JSON.stringify(threadStart.params)).toContain("Use only the supplied Agent Brief");
+    const turnStart = transport.messages.find((message) => message.method === "turn/start")!;
+    expect(JSON.stringify(turnStart.params)).toContain("Choose disjoint neighbourhoods.");
+    expect(JSON.stringify(turnStart.params)).not.toContain("/workspace");
+    expect(events).toContain("specialist:turnCompleted");
+  });
+
   it("interrupts active teaching and shuts down the stdio transport", async () => {
     const transport = new ScriptedTransport((message) => {
       if (!("id" in message)) return;
