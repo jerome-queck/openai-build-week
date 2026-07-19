@@ -610,6 +610,32 @@ describe("Learning Application", () => {
     };
   }
 
+  async function scheduleDelayedTransfer(application: LearningApplication, dueAt: string) {
+    let state = await application.submit({
+      type: "submitSessionIntake",
+      mathematics: "Show that a compact subset of a Hausdorff space is closed."
+    });
+    const sessionId = state.activeSessionId!;
+    await application.submit({ type: "beginSessionConsolidation" });
+    await application.submit({
+      type: "reviseSessionConsolidation",
+      centralInsight: "Compactness reduces pointwise choices to finitely many.",
+      learningProgress: "I can identify the finite-subcover step.",
+      unresolvedQuestions: [],
+      nextStep: "Apply the structure after a delay.",
+      includedArtifactIds: [],
+      targetDisposition: "addressed"
+    });
+    await application.submit({ type: "consolidateSession" });
+    state = await application.submit({
+      type: "scheduleDelayedTransfer",
+      sessionId,
+      intendedTransferGoal: "Apply the finite-subcover structure to a new argument.",
+      dueAt
+    });
+    return { sessionId, checkId: state.delayedTransferChecks.at(-1)!.id };
+  }
+
   async function launchWithSourceAccess(sourceAccess: LocalSourceAccess) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
     dataDirectories.push(dataDirectory);
@@ -2224,8 +2250,17 @@ describe("Learning Application", () => {
       dueAt,
       status: "scheduled"
     });
-    expect(scheduled).not.toHaveProperty("task");
+    expect(scheduled.task).toBeNull();
     expect(scheduled).not.toHaveProperty("question");
+    expect(scheduled.relevantSourceAnchorId).toBeNull();
+    const transferContextPoint = state.sessions[0].consolidatedOutcome!.trailItems.find((item) =>
+      item.id === scheduled.relevantTrailItemId);
+    expect(transferContextPoint).toMatchObject({
+      kind: "reasoningStep",
+      curationKey: `delayed-transfer-context:${sessionId}`
+    });
+    expect(transferContextPoint?.content).toContain("finite subcover");
+    expect(transferContextPoint?.content).toContain("Try the same structural idea");
     expect(state.sessions[0].delayedTransferOffer?.status).toBe("scheduled");
     const persistedScheduled = JSON.parse(await readFile(join(dataDirectory, "learning-application.json"), "utf8"));
     persistedScheduled.delayedTransferChecks = [];
@@ -2266,6 +2301,424 @@ describe("Learning Application", () => {
     await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow(
       "Stored Delayed Transfer offer does not match its check state"
     );
+  });
+
+  it("generates an unseen Delayed Transfer task only when a due check is launched", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-03T12:00:00.000Z"));
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      runtime.delayedTransferTask = {
+        prompt: "Let (U_i) cover a compact space K and suppose each U_i is paired with an open set V_i satisfying a local separation condition. Explain how to obtain one finite global construction.",
+        concept: "finite subcover",
+        taskDemand: "transfer the finite-subcover strategy to a new separation construction",
+        structuralComparison: "The task preserves the local-choice-to-finite-global-step structure without repeating the original theorem.",
+        mathematicalContext: delayedTaskContext("transfer the finite-subcover strategy to a new separation construction")
+      };
+      const { application } = await launchWithRuntime(runtime);
+      let state = await application.submit({
+        type: "submitSessionIntake",
+        mathematics: "Show that a compact subset of a Hausdorff space is closed."
+      });
+      const sessionId = state.activeSessionId!;
+      await application.submit({ type: "beginSessionConsolidation" });
+      await application.submit({
+        type: "reviseSessionConsolidation",
+        centralInsight: "Compactness turns pointwise choices into finitely many choices.",
+        learningProgress: "I can identify the finite-subcover step.",
+        unresolvedQuestions: [],
+        nextStep: "Transfer the structure to a new proof.",
+        includedArtifactIds: [],
+        targetDisposition: "addressed"
+      });
+      state = await application.submit({ type: "consolidateSession" });
+      const futureDueAt = new Date(Date.now() + 60_000).toISOString();
+      state = await application.submit({
+        type: "scheduleDelayedTransfer",
+        sessionId,
+        intendedTransferGoal: "Reuse the finite-subcover structure in a fresh proof.",
+        dueAt: futureDueAt
+      });
+      const checkId = state.delayedTransferChecks[0].id;
+
+      expect(runtime.delayedTransferTaskRequests).toEqual([]);
+      expect(state.delayedTransferChecks[0].task).toBeNull();
+      await expect(application.submit({ type: "startDelayedTransferCheck", checkId }))
+        .rejects.toThrow("not due yet");
+      expect(runtime.delayedTransferTaskRequests).toEqual([]);
+
+      vi.setSystemTime(new Date(Date.parse(futureDueAt) + 1));
+      state = await application.submit({ type: "startDelayedTransferCheck", checkId });
+
+      expect(runtime.delayedTransferTaskRequests).toHaveLength(1);
+      expect(runtime.delayedTransferTaskRequests[0]).toMatchObject({
+        checkId,
+        originatingSessionTarget: "Explain the finite-subcover step",
+        originatingConcepts: ["finite subcover"],
+        intendedTransferGoal: "Reuse the finite-subcover structure in a fresh proof."
+      });
+      expect(state.screen).toBe("delayedTransfer");
+      expect(state.activeDelayedTransferCheckId).toBe(checkId);
+      expect(state.delayedTransferChecks[0]).toMatchObject({
+        status: "inProgress",
+        task: runtime.delayedTransferTask,
+        taskError: null
+      });
+      expect(state.delayedTransferChecks[0].task?.prompt).not.toContain(
+        "Show that a compact subset of a Hausdorff space is closed."
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exposes cancellable task preparation without allowing competing queue actions", async () => {
+    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+    runtime.holdDelayedTransferTask = true;
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    const { checkId } = await scheduleDelayedTransfer(
+      application,
+      new Date(Date.now() + 50).toISOString()
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
+    for (let attempt = 0; attempt < 100 && (application.getState().delayedTransferChecks[0].status !== "preparing"
+      || runtime.delayedTransferTaskRequests.length === 0); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    expect(application.getState().delayedTransferChecks[0]).toMatchObject({ status: "preparing", task: null });
+    const recovered = await LearningApplication.launch(
+      dataDirectory,
+      new DeterministicModelRuntime(transferableSessionProposal(), false)
+    );
+    applications.push(recovered);
+    expect(recovered.getState().delayedTransferChecks[0]).toMatchObject({
+      status: "scheduled",
+      task: null,
+      taskError: expect.stringContaining("stopped when Quick Study closed")
+    });
+    await expect(application.submit({ type: "skipDelayedTransferCheck", checkId }))
+      .rejects.toThrow("Choose an active Delayed Transfer Check");
+    await expect(application.submit({ type: "cancelDelayedTransfer", checkId }))
+      .rejects.toThrow("Choose a scheduled Delayed Transfer Check");
+
+    const cancelled = await application.submit({ type: "cancelDelayedTransferPreparation", checkId });
+    await starting;
+    expect(runtime.canceledSessionIds).toContain(checkId);
+    expect(cancelled.delayedTransferChecks[0]).toMatchObject({
+      status: "scheduled",
+      task: null,
+      taskError: null
+    });
+    expect(cancelled.activeDelayedTransferCheckId).toBeNull();
+  });
+
+  it("keeps an honest stopping state when task interruption is not confirmed", async () => {
+    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+    runtime.holdDelayedTransferTask = true;
+    runtime.ignoreDelayedTransferAbort = true;
+    runtime.cancelError = new Error("turn interruption unavailable");
+    const { application } = await launchWithRuntime(runtime);
+    const { checkId } = await scheduleDelayedTransfer(application, new Date(Date.now() + 50).toISOString());
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
+    for (let attempt = 0; attempt < 100 && runtime.delayedTransferTaskRequests.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    await expect(application.submit({ type: "cancelDelayedTransferPreparation", checkId }))
+      .rejects.toThrow("could not confirm that task preparation stopped");
+    expect(application.getState().delayedTransferChecks[0]).toMatchObject({
+      status: "stopping",
+      task: null,
+      taskError: expect.stringContaining("Retry the stop action")
+    });
+
+    runtime.completeDelayedTransferTaskPreparation();
+    await starting;
+    expect(application.getState().delayedTransferChecks[0]).toMatchObject({
+      status: "scheduled",
+      task: null,
+      taskError: null
+    });
+  });
+
+  it("rejects a superficial rewrite that preserves the originating task conditions", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-07T12:00:00.000Z"));
+      const proposal = transferableSessionProposal();
+      const runtime = new DeterministicModelRuntime(proposal, false);
+      runtime.delayedTransferTask = {
+        prompt: "Prove, in other words, that a compact subset of a Hausdorff space is closed under uniform bounded estimates.",
+        concept: "finite subcover",
+        taskDemand: "apply a finite-subcover proof strategy",
+        structuralComparison: "Only the wording has changed.",
+        mathematicalContext: {
+          concepts: ["finite subcover"],
+          mathematicalStructures: [" COMPACT   TOPOLOGICAL SPACE ", "uniform bounded estimates"],
+          prerequisiteRelationships: structuredClone(proposal.evidenceTransferContext!.prerequisiteRelationships),
+          taskDemands: ["apply a finite-subcover proof strategy", "use uniform bounded estimates"]
+        }
+      };
+      const { application } = await launchWithRuntime(runtime);
+      const { checkId } = await scheduleDelayedTransfer(
+        application,
+        new Date(Date.now() + 1_000).toISOString()
+      );
+      vi.setSystemTime(new Date(Date.now() + 2_000));
+
+      const state = await application.submit({ type: "startDelayedTransferCheck", checkId });
+
+      expect(state.delayedTransferChecks[0]).toMatchObject({ status: "scheduled", task: null });
+      expect(state.delayedTransferChecks[0].taskError).toContain("invalid Delayed Transfer task");
+      expect(state.activeDelayedTransferCheckId).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records nuanced Delayed Transfer Evidence and governed Learner Model context", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-10T12:00:00.000Z"));
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      runtime.delayedTransferTask = {
+        prompt: "A family of local estimates covers a compact parameter space. Explain how to choose finitely many estimates and combine them into one uniform bound.",
+        concept: "finite subcover",
+        taskDemand: "apply the local-to-finite-global proof structure",
+        structuralComparison: "The task transfers the finite-subcover step from separation to uniform control.",
+        mathematicalContext: delayedTaskContext("apply the local-to-finite-global proof structure")
+      };
+      runtime.delayedTransferClarification = "Describe which sets form the open cover; you still need to choose and justify the finite reduction yourself.";
+      runtime.delayedTransferAssessment = {
+        result: "partial",
+        reasoningQuality: "developing",
+        confidenceCalibration: "aligned",
+        misconceptionOrStrength: "The learner identifies compactness but does not yet justify why the finite maximum is uniform.",
+        recommendedNextAction: "Review the finite-maximum step and then retry on another uniform-bound problem.",
+        refresherGoal: "Connect the finite subcover to the construction of one uniform bound."
+      };
+      const { application, dataDirectory } = await launchWithRuntime(runtime);
+      let state = await application.submit({
+        type: "submitSessionIntake",
+        mathematics: "Show that a compact subset of a Hausdorff space is closed."
+      });
+      const sessionId = state.activeSessionId!;
+      await application.submit({ type: "beginSessionConsolidation" });
+      await application.submit({
+        type: "reviseSessionConsolidation",
+        centralInsight: "Compactness reduces pointwise choices to finitely many.",
+        learningProgress: "I can locate the compactness step.",
+        unresolvedQuestions: [],
+        nextStep: "Apply the structure after a delay.",
+        includedArtifactIds: [],
+        targetDisposition: "addressed"
+      });
+      state = await application.submit({ type: "consolidateSession" });
+      state = await application.submit({
+        type: "scheduleDelayedTransfer",
+        sessionId,
+        intendedTransferGoal: "Apply the finite-subcover structure to a new argument.",
+        dueAt: new Date(Date.now() + 1_000).toISOString()
+      });
+      const checkId = state.delayedTransferChecks[0].id;
+      vi.setSystemTime(new Date(Date.now() + 2_000));
+      await application.submit({ type: "startDelayedTransferCheck", checkId });
+      state = await application.submit({
+        type: "saveDelayedTransferDraft",
+        checkId,
+        work: "Choose a finite subcover and take the maximum of the corresponding local bounds.",
+        reasoning: "Compactness makes the local family finite, so a maximum can be selected.",
+        confidence: "medium"
+      });
+      expect(state.delayedTransferChecks[0].draft).toMatchObject({
+        work: "Choose a finite subcover and take the maximum of the corresponding local bounds.",
+        reasoning: "Compactness makes the local family finite, so a maximum can be selected.",
+        confidence: "medium"
+      });
+
+      state = await application.submit({
+        type: "requestDelayedTransferClarification",
+        checkId,
+        question: "What objects should form the cover?"
+      });
+      expect(runtime.delayedTransferClarificationRequests).toHaveLength(1);
+      expect(state.delayedTransferChecks[0].draft.clarifications).toEqual([{
+        question: "What objects should form the cover?",
+        response: runtime.delayedTransferClarification,
+        requestedAt: expect.any(String)
+      }]);
+
+      const historicalOrigin = structuredClone(state.sessions.find((session) => session.id === sessionId));
+      state = await application.submit({ type: "completeDelayedTransferCheck", checkId });
+      const completed = state.delayedTransferChecks[0];
+      expect(completed.status).toBe("completed");
+      expect(completed.evidence).toMatchObject({
+        checkId,
+        originatingSessionId: sessionId,
+        dueAt: expect.any(String),
+        completedAt: expect.any(String),
+        task: runtime.delayedTransferTask,
+        mathematicalContext: runtime.delayedTransferTask.mathematicalContext,
+        work: "Choose a finite subcover and take the maximum of the corresponding local bounds.",
+        reasoning: "Compactness makes the local family finite, so a maximum can be selected.",
+        confidence: "medium",
+        assistanceUsed: true,
+        result: "partial",
+        reasoningQuality: "developing",
+        confidenceCalibration: "aligned",
+        misconceptionOrStrength: runtime.delayedTransferAssessment.misconceptionOrStrength,
+        recommendedNextAction: runtime.delayedTransferAssessment.recommendedNextAction
+      });
+      expect(completed.result).toEqual({
+        evidenceId: completed.evidence!.id,
+        refresherOffer: {
+          status: "pending",
+          goal: runtime.delayedTransferAssessment.refresherGoal,
+          refresherSessionId: null
+        }
+      });
+      expect(state.learnerModel.entries).toContainEqual(expect.objectContaining({
+        kind: "understandingEvidence",
+        inference: "delayed transfer shows developing reasoning",
+        sourceEvidence: expect.objectContaining({ sessionId, sourceRecordId: completed.evidence!.id }),
+        mathematicalContext: runtime.delayedTransferTask.mathematicalContext,
+        confidence: "medium",
+        status: "active"
+      }));
+      expect(state.sessions.find((session) => session.id === sessionId)).toEqual(historicalOrigin);
+
+      const relaunched = await LearningApplication.launch(dataDirectory);
+      applications.push(relaunched);
+      expect(relaunched.getState().delayedTransferChecks[0]).toEqual(completed);
+      expect(relaunched.getState().learnerModel.entries).toEqual(state.learnerModel.entries);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records skipped and dismissed due checks without negative Understanding Evidence", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-20T12:00:00.000Z"));
+      for (const actionType of ["skipDelayedTransferCheck", "dismissDueDelayedTransferCheck"] as const) {
+        const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+        const { application } = await launchWithRuntime(runtime);
+        const { checkId } = await scheduleDelayedTransfer(application, new Date(Date.now() + 1_000).toISOString());
+        vi.setSystemTime(new Date(Date.now() + 2_000));
+        const state = await application.submit({ type: actionType, checkId });
+        expect(state.delayedTransferChecks[0]).toMatchObject({
+          status: actionType === "skipDelayedTransferCheck" ? "skipped" : "dismissed",
+          task: null,
+          evidence: null,
+          result: null
+        });
+        expect(state.learnerModel.entries).toEqual([]);
+        expect(state.screen).toBe("dashboard");
+        expect(runtime.delayedTransferTaskRequests).toEqual([]);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts or declines an optional Refresher Session without rewriting the delayed result", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-25T12:00:00.000Z"));
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      runtime.delayedTransferAssessment = {
+        result: "difficulty",
+        reasoningQuality: "developing",
+        confidenceCalibration: "overconfident",
+        misconceptionOrStrength: "The response chooses a finite family but does not show that it covers the full compact set.",
+        recommendedNextAction: "Review how the open cover is constructed.",
+        refresherGoal: "Justify that the local neighbourhoods form an open cover before taking a finite subcover."
+      };
+      const { application } = await launchWithRuntime(runtime);
+      const { sessionId, checkId } = await scheduleDelayedTransfer(
+        application,
+        new Date(Date.now() + 1_000).toISOString()
+      );
+      vi.setSystemTime(new Date(Date.now() + 2_000));
+      await application.submit({ type: "startDelayedTransferCheck", checkId });
+      await application.submit({
+        type: "saveDelayedTransferDraft",
+        checkId,
+        work: "Select several local neighbourhoods.",
+        reasoning: "Compactness means finitely many are enough.",
+        confidence: "high"
+      });
+      let state = await application.submit({ type: "completeDelayedTransferCheck", checkId });
+      const historicalEvidence = structuredClone(state.delayedTransferChecks[0].evidence);
+      const historicalResult = structuredClone(state.delayedTransferChecks[0].result);
+      const historicalOrigin = structuredClone(state.sessions.find((session) => session.id === sessionId));
+
+      state = await application.submit({ type: "acceptDelayedTransferRefresher", checkId });
+      const refresher = state.sessions.find((session) => session.id === state.activeSessionId)!;
+      expect(refresher).toMatchObject({
+        workspaceId: historicalOrigin!.workspaceId,
+        missionId: historicalOrigin!.missionId,
+        learningGoal: runtime.delayedTransferAssessment.refresherGoal,
+        status: "active",
+        refresherOf: {
+          checkId,
+          evidenceId: historicalEvidence!.id,
+          originatingSessionId: sessionId,
+          sourceAnchorId: null,
+          trailItemId: expect.any(String)
+        }
+      });
+      expect(refresher.askBarContext.items).toContainEqual(expect.objectContaining({
+        id: `refresher-trail-item:${refresher.refresherOf!.trailItemId}`,
+        typeLabel: "Linked Learning Trail point"
+      }));
+      expect(refresher.id).not.toBe(sessionId);
+      expect(state.delayedTransferChecks[0].evidence).toEqual(historicalEvidence);
+      expect(state.delayedTransferChecks[0].result).toEqual({
+        ...historicalResult,
+        refresherOffer: {
+          ...historicalResult!.refresherOffer,
+          status: "accepted",
+          refresherSessionId: refresher.id
+        }
+      });
+      expect(state.sessions.find((session) => session.id === sessionId)).toEqual(historicalOrigin);
+
+      const secondRuntime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      secondRuntime.delayedTransferAssessment = structuredClone(runtime.delayedTransferAssessment);
+      const { application: declineApplication } = await launchWithRuntime(secondRuntime);
+      const scheduled = await scheduleDelayedTransfer(
+        declineApplication,
+        new Date(Date.now() + 1_000).toISOString()
+      );
+      vi.setSystemTime(new Date(Date.now() + 2_000));
+      await declineApplication.submit({ type: "startDelayedTransferCheck", checkId: scheduled.checkId });
+      await declineApplication.submit({
+        type: "saveDelayedTransferDraft",
+        checkId: scheduled.checkId,
+        work: "Choose finitely many sets.",
+        reasoning: "Use compactness.",
+        confidence: null
+      });
+      const completed = await declineApplication.submit({
+        type: "completeDelayedTransferCheck",
+        checkId: scheduled.checkId
+      });
+      const evidenceBeforeDecline = structuredClone(completed.delayedTransferChecks[0].evidence);
+      const declined = await declineApplication.submit({
+        type: "declineDelayedTransferRefresher",
+        checkId: scheduled.checkId
+      });
+      expect(declined.delayedTransferChecks[0].result?.refresherOffer).toMatchObject({ status: "declined" });
+      expect(declined.delayedTransferChecks[0].evidence).toEqual(evidenceBeforeDecline);
+      expect(declined.sessions).toHaveLength(1);
+      expect(declined.screen).toBe("dashboard");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets the learner begin Session Consolidation while teaching is in flight", async () => {
@@ -7158,6 +7611,17 @@ function transferableSessionProposal(): SessionProposal {
   };
 }
 
+function delayedTaskContext(taskDemand = "derive a uniform bound from finitely many local bounds") {
+  return {
+    concepts: ["finite subcover"],
+    mathematicalStructures: ["compact parameter space with local bounds"],
+    prerequisiteRelationships: [{
+      prerequisiteConcept: "open cover", supportsConcept: "finite subcover", relationship: "requiredFor" as const
+    }],
+    taskDemands: [taskDemand]
+  };
+}
+
 async function createCorroboratedPinnedArtifact(
   application: LearningApplication,
   runtime: DeterministicModelRuntime
@@ -7358,6 +7822,25 @@ class DeterministicModelRuntime implements ModelRuntime {
   readonly specialistRequests: SpecialistAgentRequest[] = [];
   readonly artifactSynthesisRequests: ArtifactSynthesisRequest[] = [];
   readonly conceptPeekRequests: Parameters<ModelRuntime["createConceptPeek"]>[0][] = [];
+  readonly delayedTransferTaskRequests: Parameters<ModelRuntime["createDelayedTransferTask"]>[0][] = [];
+  delayedTransferTask: Awaited<ReturnType<ModelRuntime["createDelayedTransferTask"]>> = {
+    prompt: "A compact parameter space has local bounds. Use a finite subcover to obtain one uniform bound.",
+    concept: "finite subcover",
+    taskDemand: "derive a uniform bound from finitely many local bounds",
+    structuralComparison: "This task preserves the structure while changing the surface problem.",
+    mathematicalContext: delayedTaskContext()
+  };
+  readonly delayedTransferClarificationRequests: Parameters<ModelRuntime["clarifyDelayedTransferTask"]>[0][] = [];
+  delayedTransferClarification = "Clarify the structure while leaving the proof step to the learner.";
+  readonly delayedTransferAssessmentRequests: Parameters<ModelRuntime["assessDelayedTransferWork"]>[0][] = [];
+  delayedTransferAssessment: Awaited<ReturnType<ModelRuntime["assessDelayedTransferWork"]>> = {
+    result: "demonstrated",
+    reasoningQuality: "strong",
+    confidenceCalibration: "aligned",
+    misconceptionOrStrength: "The learner transfers the structure correctly.",
+    recommendedNextAction: "Continue with a more distant application.",
+    refresherGoal: null
+  };
   readonly canceledSessionIds: string[] = [];
   private readonly teachingCompletions = new Map<TeachingRequest, () => void>();
   private readonly teachingFailures = new Map<TeachingRequest, (error: Error) => void>();
@@ -7385,6 +7868,9 @@ class DeterministicModelRuntime implements ModelRuntime {
   teachingDeltaOnStart: string | null = null;
   holdConceptPeek = false;
   holdArtifactSynthesis = false;
+  holdDelayedTransferTask = false;
+  ignoreDelayedTransferAbort = false;
+  private delayedTransferTaskCompletion: (() => void) | null = null;
 
   constructor(private readonly proposal: SessionProposal, private readonly holdTeaching = false) {}
 
@@ -7432,6 +7918,35 @@ class DeterministicModelRuntime implements ModelRuntime {
       return "The product topology is generated by products of open sets, with only finitely many factors restricted in a basic neighbourhood. This makes the diagonal criterion a statement about separating distinct coordinate pairs.";
     }
     return `Use the defining property of ${request.prerequisite} at this Source Anchor before continuing the argument.`;
+  }
+
+  async createDelayedTransferTask(request: Parameters<ModelRuntime["createDelayedTransferTask"]>[0]) {
+    this.delayedTransferTaskRequests.push(request);
+    if (this.holdDelayedTransferTask) {
+      if (request.signal.aborted) throw new Error("Delayed Transfer task preparation aborted.");
+      await new Promise<void>((resolve, reject) => {
+        this.delayedTransferTaskCompletion = resolve;
+        if (!this.ignoreDelayedTransferAbort) request.signal.addEventListener(
+          "abort", () => reject(new Error("Delayed Transfer task preparation aborted.")), { once: true }
+        );
+      });
+    }
+    return structuredClone(this.delayedTransferTask);
+  }
+
+  completeDelayedTransferTaskPreparation() {
+    this.delayedTransferTaskCompletion?.();
+    this.delayedTransferTaskCompletion = null;
+  }
+
+  async clarifyDelayedTransferTask(request: Parameters<ModelRuntime["clarifyDelayedTransferTask"]>[0]) {
+    this.delayedTransferClarificationRequests.push(request);
+    return this.delayedTransferClarification;
+  }
+
+  async assessDelayedTransferWork(request: Parameters<ModelRuntime["assessDelayedTransferWork"]>[0]) {
+    this.delayedTransferAssessmentRequests.push(request);
+    return structuredClone(this.delayedTransferAssessment);
   }
 
   async streamTeaching(request: TeachingRequest): Promise<void> {

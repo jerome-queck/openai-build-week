@@ -167,7 +167,7 @@ function questionSession(): LearningSession {
     sourceAnchors: [], sourceAnchorRequests: [], annotations: [], activeSourceAnchorId: "anchor-1", anchoredTeachingCards: [], activeTeachingCardId: null,
     trailDraft: { items: [] },
     consolidationDraft: null, consolidatedOutcome: null, delayedTransferOffer: null,
-    continuationOf: null, modelStopConfirmation: null,
+    continuationOf: null, refresherOf: null, modelStopConfirmation: null,
     conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null,
     agentTasks: [], activeAgentTaskId: null,
     reasoningPreference: "balanced", runtimeOverride: null, verifierEnvironmentPinId: null,

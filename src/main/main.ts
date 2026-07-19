@@ -101,6 +101,7 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "consolidateSession":
     case "openFollowUpQueue":
     case "closeFollowUpQueue":
+    case "closeDelayedTransferCheck":
       return true;
     case "requestSpecialistReview":
       return !("coordination" in action) || action.coordination === undefined
@@ -125,7 +126,24 @@ function isLearnerAction(value: unknown): value is LearnerAction {
       return "checkId" in action && typeof action.checkId === "string"
         && "dueAt" in action && typeof action.dueAt === "string";
     case "cancelDelayedTransfer":
+    case "startDelayedTransferCheck":
+    case "completeDelayedTransferCheck":
+    case "skipDelayedTransferCheck":
+    case "dismissDueDelayedTransferCheck":
+    case "acceptDelayedTransferRefresher":
+    case "declineDelayedTransferRefresher":
+    case "openDelayedTransferCheck":
+    case "cancelDelayedTransferPreparation":
       return "checkId" in action && typeof action.checkId === "string";
+    case "saveDelayedTransferDraft":
+      return "checkId" in action && typeof action.checkId === "string"
+        && "work" in action && typeof action.work === "string"
+        && "reasoning" in action && typeof action.reasoning === "string"
+        && "confidence" in action && (action.confidence === null
+          || ["low", "medium", "high"].includes(String(action.confidence)));
+    case "requestDelayedTransferClarification":
+      return "checkId" in action && typeof action.checkId === "string"
+        && "question" in action && typeof action.question === "string";
     case "addSourceToSession":
       return "sourceId" in action && typeof action.sourceId === "string";
     case "startQuickStudy":

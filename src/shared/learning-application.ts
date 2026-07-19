@@ -9,6 +9,8 @@ import {
   type AgentBrief,
   type AgentBudget,
   type AuthenticationState,
+  type DelayedTransferAssessment,
+  type DelayedTransferTask,
   type ModelAccessCause,
   type ModelRuntime,
   type ModelRuntimeCapabilities,
@@ -630,12 +632,64 @@ export interface DelayedTransferCheck {
   scheduledAt: string;
   updatedAt: string;
   dueAt: string;
-  status: "scheduled" | "cancelled";
+  status: "scheduled" | "preparing" | "stopping" | "inProgress" | "completed" | "skipped" | "dismissed" | "cancelled";
+  relevantSourceAnchorId: string | null;
+  relevantTrailItemId: string | null;
+  task: DelayedTransferTask | null;
+  taskError: string | null;
+  draft: DelayedTransferDraft;
+  evidence: DelayedTransferEvidence | null;
+  result: DelayedCheckResult | null;
+}
+
+export interface DelayedTransferDraft {
+  work: string;
+  reasoning: string;
+  confidence: LearnerModelConfidence | null;
+  clarifications: Array<{ question: string; response: string; requestedAt: string }>;
+}
+
+export interface DelayedTransferEvidence {
+  id: string;
+  checkId: string;
+  originatingSessionId: string;
+  dueAt: string;
+  completedAt: string;
+  scheduledDelayMs: number;
+  completionDelayMs: number;
+  task: DelayedTransferTask;
+  mathematicalContext: EvidenceTransferContext;
+  work: string;
+  reasoning: string;
+  confidence: LearnerModelConfidence | null;
+  assistanceUsed: boolean;
+  result: DelayedTransferAssessment["result"];
+  reasoningQuality: DelayedTransferAssessment["reasoningQuality"];
+  confidenceCalibration: DelayedTransferAssessment["confidenceCalibration"];
+  misconceptionOrStrength: string;
+  recommendedNextAction: string;
+}
+
+export interface DelayedCheckResult {
+  evidenceId: string;
+  refresherOffer: null | {
+    status: "pending" | "accepted" | "declined";
+    goal: string;
+    refresherSessionId: string | null;
+  };
 }
 
 export interface ContinuationLink {
   sessionId: string;
   outcomeId: string;
+}
+
+export interface RefresherLink {
+  checkId: string;
+  evidenceId: string;
+  originatingSessionId: string;
+  sourceAnchorId: string | null;
+  trailItemId: string | null;
 }
 
 export interface ModelStopConfirmation {
@@ -1028,6 +1082,7 @@ export interface LearningSession {
   consolidatedOutcome: ConsolidatedSessionOutcome | null;
   delayedTransferOffer: DelayedTransferOffer | null;
   continuationOf: ContinuationLink | null;
+  refresherOf: RefresherLink | null;
   modelStopConfirmation: ModelStopConfirmation | null;
   learningSlice: LearningSlice | null;
   conceptPeeks: ConceptPeek[];
@@ -1042,7 +1097,7 @@ export interface LearningSession {
 }
 
 export interface LearningApplicationState {
-  screen: "dashboard" | "workbench" | "followUps";
+  screen: "dashboard" | "workbench" | "followUps" | "delayedTransfer";
   quickStudy: QuickStudyHome;
   workspaces: StudyWorkspace[];
   missions: StudyMission[];
@@ -1055,6 +1110,7 @@ export interface LearningApplicationState {
   verifierManifests: VerifierManifest[];
   verifierEnvironment: VerifierEnvironmentState;
   delayedTransferChecks: DelayedTransferCheck[];
+  activeDelayedTransferCheckId: string | null;
   activeSessionId: string | null;
   resumeSessionId: string | null;
   navigation: {
@@ -1205,6 +1261,23 @@ export type LearnerAction =
   | { type: "scheduleDelayedTransfer"; sessionId: string; intendedTransferGoal: string; dueAt: string }
   | { type: "rescheduleDelayedTransfer"; checkId: string; dueAt: string }
   | { type: "cancelDelayedTransfer"; checkId: string }
+  | { type: "startDelayedTransferCheck"; checkId: string }
+  | {
+      type: "saveDelayedTransferDraft";
+      checkId: string;
+      work: string;
+      reasoning: string;
+      confidence: LearnerModelConfidence | null;
+    }
+  | { type: "requestDelayedTransferClarification"; checkId: string; question: string }
+  | { type: "completeDelayedTransferCheck"; checkId: string }
+  | { type: "skipDelayedTransferCheck"; checkId: string }
+  | { type: "dismissDueDelayedTransferCheck"; checkId: string }
+  | { type: "acceptDelayedTransferRefresher"; checkId: string }
+  | { type: "declineDelayedTransferRefresher"; checkId: string }
+  | { type: "openDelayedTransferCheck"; checkId: string }
+  | { type: "closeDelayedTransferCheck" }
+  | { type: "cancelDelayedTransferPreparation"; checkId: string }
   | { type: "openFollowUpQueue" }
   | { type: "closeFollowUpQueue" }
   | { type: "continueSession"; sessionId: string }
@@ -3159,6 +3232,24 @@ export class LearningApplication {
         const draft = session.consolidationDraft;
         if (!draft) throw new Error("Review the Session Consolidation before creating its outcome.");
         const targetDisposition = requireTargetDisposition(draft.targetDisposition);
+        const transferConcepts = delayedTransferConcepts(session);
+        const delayedTransferContextKey = `delayed-transfer-context:${session.id}`;
+        if (targetDisposition === "addressed" && transferConcepts.length > 0
+          && !session.trailDraft.items.some((item) => item.curationKey === delayedTransferContextKey)) {
+          session.trailDraft.items.push({
+            id: crypto.randomUUID(),
+            kind: "reasoningStep",
+            content: [
+              draft.centralInsight,
+              `Transfer concepts: ${transferConcepts.join(", ")}.`,
+              `Intended next step: ${draft.nextStep}`
+            ].join(" "),
+            required: false,
+            origin: "teachingAgent",
+            links: { sourceAnchorIds: [], teachingCardIds: [], learningArtifactIds: [], understandingEvidenceIds: [] },
+            curationKey: delayedTransferContextKey
+          });
+        }
         session.consolidatedOutcome = {
           id: crypto.randomUUID(),
           ...structuredClone(draft),
@@ -3166,7 +3257,7 @@ export class LearningApplication {
           trailItems: structuredClone(session.trailDraft.items)
         };
         if (targetDisposition === "addressed" && session.delayedTransferOffer === null
-          && delayedTransferConcepts(session).length > 0) {
+          && transferConcepts.length > 0) {
           const offeredAt = new Date().toISOString();
           session.delayedTransferOffer = {
             status: "pending",
@@ -3208,7 +3299,15 @@ export class LearningApplication {
           scheduledAt: timestamp,
           updatedAt: timestamp,
           dueAt,
-          status: "scheduled"
+          status: "scheduled",
+          relevantSourceAnchorId: null,
+          relevantTrailItemId: session.consolidatedOutcome?.trailItems.find((item) =>
+            item.curationKey === `delayed-transfer-context:${session.id}`)?.id ?? null,
+          task: null,
+          taskError: null,
+          draft: emptyDelayedTransferDraft(),
+          evidence: null,
+          result: null
         });
         session.delayedTransferOffer!.status = "scheduled";
         break;
@@ -3233,8 +3332,280 @@ export class LearningApplication {
         }
         break;
       }
+      case "startDelayedTransferCheck": {
+        const check = this.requireScheduledDelayedTransferCheck(action.checkId);
+        const timestamp = new Date().toISOString();
+        if (Date.parse(check.dueAt) > Date.parse(timestamp)) {
+          throw new Error("This Delayed Transfer Check is not due yet.");
+        }
+        this.requireModelAccess();
+        const origin = this.requireSession(check.relatedSessionId);
+        check.status = "preparing";
+        check.taskError = null;
+        check.updatedAt = timestamp;
+        await this.publishAndPersist();
+        if (check.status !== "preparing") break;
+        try {
+          const task = await this.runDelayedTransferModelWork(check.id, (signal, onRuntimeEvent) =>
+            this.modelRuntime!.createDelayedTransferTask({
+              checkId: check.id,
+              originatingSessionId: origin.id,
+              originatingLearningGoal: origin.learningGoal,
+              originatingSessionTarget: origin.sessionTarget,
+              originatingConcepts: [...check.originatingConcepts],
+              intendedTransferGoal: check.intendedTransferGoal,
+              originatingMathematics: origin.mathematics,
+              signal,
+              onRuntimeEvent
+            }));
+          if ((check.status as DelayedTransferCheck["status"]) === "stopping") {
+            check.status = "scheduled";
+            check.taskError = null;
+            check.updatedAt = new Date().toISOString();
+            break;
+          }
+          if (check.status !== "preparing") break;
+          check.task = validatedDelayedTransferTask(
+            task,
+            origin.mathematics,
+            origin.evidenceTransferContext,
+            check.originatingConcepts
+          );
+          check.taskError = null;
+          check.status = "inProgress";
+          check.updatedAt = timestamp;
+          this.state.activeDelayedTransferCheckId = check.id;
+          this.state.screen = "delayedTransfer";
+        } catch (error) {
+          if ((check.status as DelayedTransferCheck["status"]) === "stopping") {
+            check.status = "scheduled";
+            check.taskError = null;
+            check.updatedAt = new Date().toISOString();
+          } else if (check.status === "preparing") {
+            check.status = "scheduled";
+            check.taskError = usefulRuntimeError(error);
+            this.recordModelAccessLoss(error);
+          }
+        }
+        break;
+      }
+      case "cancelDelayedTransferPreparation": {
+        const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === action.checkId);
+        if (!check || (check.status !== "preparing" && check.status !== "stopping")) {
+          throw new Error("Choose a Delayed Transfer task that is being prepared.");
+        }
+        check.status = "stopping";
+        check.taskError = null;
+        check.updatedAt = new Date().toISOString();
+        await this.publishAndPersist();
+        const work = this.modelWorks.get(check.id);
+        work?.controller.abort();
+        if (work) {
+          try {
+            await this.modelRuntime?.cancelTeaching(check.id);
+          } catch (error) {
+            if (this.modelWorks.has(check.id)) {
+              check.taskError = `Quick Study could not confirm that task preparation stopped. Retry the stop action. ${usefulRuntimeError(error)}`;
+              check.updatedAt = new Date().toISOString();
+              this.recordModelAccessLoss(error);
+              await this.publishAndPersist();
+              throw new Error(check.taskError);
+            }
+          }
+        }
+        if (check.status === "stopping") {
+          check.status = "scheduled";
+          check.taskError = null;
+          check.updatedAt = new Date().toISOString();
+        }
+        break;
+      }
+      case "saveDelayedTransferDraft": {
+        const check = this.requireInProgressDelayedTransferCheck(action.checkId);
+        check.draft = {
+          ...check.draft,
+          work: action.work.trim(),
+          reasoning: action.reasoning.trim(),
+          confidence: requiredDelayedTransferConfidence(action.confidence)
+        };
+        check.updatedAt = new Date().toISOString();
+        break;
+      }
+      case "requestDelayedTransferClarification": {
+        const check = this.requireInProgressDelayedTransferCheck(action.checkId);
+        this.requireModelAccess();
+        const question = requiredText(action.question, "Delayed Transfer clarification question");
+        try {
+          const response = requiredText(await this.runDelayedTransferModelWork(check.id, (signal, onRuntimeEvent) =>
+            this.modelRuntime!.clarifyDelayedTransferTask({
+              checkId: check.id,
+              task: check.task!,
+              question,
+              signal,
+              onRuntimeEvent
+            })), "Delayed Transfer clarification");
+          check.draft.clarifications.push({ question, response, requestedAt: new Date().toISOString() });
+          check.updatedAt = new Date().toISOString();
+        } catch (error) {
+          this.recordModelAccessLoss(error);
+          throw error;
+        }
+        break;
+      }
+      case "completeDelayedTransferCheck": {
+        const check = this.requireInProgressDelayedTransferCheck(action.checkId);
+        if (!check.draft.work && !check.draft.reasoning) {
+          throw new Error("Add work or explain your reasoning before completing this Delayed Transfer Check.");
+        }
+        this.requireModelAccess();
+        let assessment: DelayedTransferAssessment;
+        try {
+          assessment = validatedDelayedTransferAssessment(await this.runDelayedTransferModelWork(
+            check.id,
+            (signal, onRuntimeEvent) => this.modelRuntime!.assessDelayedTransferWork({
+              checkId: check.id,
+              task: check.task!,
+              work: check.draft.work,
+              reasoning: check.draft.reasoning,
+              confidence: check.draft.confidence,
+              clarifications: check.draft.clarifications.map(({ question, response }) => ({ question, response })),
+              signal,
+              onRuntimeEvent
+            })
+          ));
+        } catch (error) {
+          this.recordModelAccessLoss(error);
+          throw error;
+        }
+        const completedAt = new Date().toISOString();
+        const evidence: DelayedTransferEvidence = {
+          id: crypto.randomUUID(),
+          checkId: check.id,
+          originatingSessionId: check.relatedSessionId,
+          dueAt: check.dueAt,
+          completedAt,
+          scheduledDelayMs: Date.parse(check.dueAt) - Date.parse(check.scheduledAt),
+          completionDelayMs: Math.max(0, Date.parse(completedAt) - Date.parse(check.dueAt)),
+          task: structuredClone(check.task!),
+          mathematicalContext: structuredClone(check.task!.mathematicalContext),
+          work: check.draft.work,
+          reasoning: check.draft.reasoning,
+          confidence: check.draft.confidence,
+          assistanceUsed: check.draft.clarifications.length > 0,
+          result: assessment.result,
+          reasoningQuality: assessment.reasoningQuality,
+          confidenceCalibration: assessment.confidenceCalibration,
+          misconceptionOrStrength: assessment.misconceptionOrStrength,
+          recommendedNextAction: assessment.recommendedNextAction
+        };
+        check.evidence = evidence;
+        check.result = {
+          evidenceId: evidence.id,
+          refresherOffer: assessment.refresherGoal ? {
+            status: "pending",
+            goal: assessment.refresherGoal,
+            refresherSessionId: null
+          } : null
+        };
+        check.status = "completed";
+        check.updatedAt = completedAt;
+        const origin = this.requireSession(check.relatedSessionId);
+        this.state.learnerModel.entries.push(delayedTransferLedgerEntry(origin, check, evidence));
+        break;
+      }
+      case "skipDelayedTransferCheck":
+      case "dismissDueDelayedTransferCheck": {
+        const check = this.requireDueDelayedTransferCheck(action.checkId);
+        check.status = action.type === "skipDelayedTransferCheck" ? "skipped" : "dismissed";
+        check.updatedAt = new Date().toISOString();
+        if (this.state.activeDelayedTransferCheckId === check.id) {
+          this.state.activeDelayedTransferCheckId = null;
+        }
+        this.state.screen = "dashboard";
+        break;
+      }
+      case "acceptDelayedTransferRefresher": {
+        const check = this.requirePendingRefresherOffer(action.checkId);
+        const origin = this.requireSession(check.relatedSessionId);
+        if (this.state.activeSessionId) {
+          const active = this.requireSession(this.state.activeSessionId);
+          if (this.modelWorks.has(active.id) && !await this.stopModelWork(active)) {
+            throw new Error("Codex did not confirm interruption. The active Learning Session remains open.");
+          }
+          this.pauseActiveSession();
+        }
+        const offer = check.result!.refresherOffer!;
+        const relevantSourceAnchor = check.relevantSourceAnchorId
+          ? origin.sourceAnchors.find((anchor) => anchor.id === check.relevantSourceAnchorId) ?? null
+          : null;
+        const refresher = createLearningSession({
+          id: crypto.randomUUID(),
+          workspaceId: origin.workspaceId,
+          missionId: origin.missionId,
+          mathematics: origin.mathematics,
+          sourceIds: [...origin.sourceIds],
+          learningGoal: offer.goal,
+          sessionTarget: offer.goal,
+          status: "active",
+          activityOrder: this.nextActivityOrder(),
+          returnContext: {
+            label: `Refresher for ${origin.sessionTarget}`,
+            nextAction: check.evidence!.recommendedNextAction
+          },
+          proposal: {
+            scope: offer.goal,
+            initialTeachingDirection: check.evidence!.recommendedNextAction,
+            status: "accepted",
+            confirmationReason: null
+          },
+          currentTeachingInput: { kind: "sessionIntake", text: check.evidence!.recommendedNextAction },
+          accessPolicy: origin.accessPolicy,
+          sourceAnchors: relevantSourceAnchor ? [structuredClone(relevantSourceAnchor)] : [],
+          activeSourceAnchorId: relevantSourceAnchor?.id ?? null,
+          refresherOf: {
+            checkId: check.id,
+            evidenceId: check.evidence!.id,
+            originatingSessionId: origin.id,
+            sourceAnchorId: check.relevantSourceAnchorId,
+            trailItemId: check.relevantTrailItemId
+          }
+        });
+        this.state.sessions.push(refresher);
+        offer.status = "accepted";
+        offer.refresherSessionId = refresher.id;
+        this.state.activeDelayedTransferCheckId = null;
+        this.state.activeSessionId = refresher.id;
+        this.state.resumeSessionId = refresher.id;
+        this.state.navigation = { workspaceId: refresher.workspaceId, missionId: refresher.missionId };
+        this.state.screen = "workbench";
+        refreshAskBarContext(this.state, refresher);
+        break;
+      }
+      case "declineDelayedTransferRefresher": {
+        const check = this.requirePendingRefresherOffer(action.checkId);
+        check.result!.refresherOffer!.status = "declined";
+        check.updatedAt = new Date().toISOString();
+        this.state.activeDelayedTransferCheckId = null;
+        this.state.screen = "dashboard";
+        break;
+      }
+      case "openDelayedTransferCheck": {
+        const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === action.checkId);
+        if (!check || (check.status !== "inProgress" && check.status !== "completed")) {
+          throw new Error("Choose an active or completed Delayed Transfer Check.");
+        }
+        this.state.activeDelayedTransferCheckId = check.id;
+        this.state.screen = "delayedTransfer";
+        break;
+      }
+      case "closeDelayedTransferCheck": {
+        this.state.activeDelayedTransferCheckId = null;
+        this.state.screen = "dashboard";
+        break;
+      }
       case "openFollowUpQueue": {
-        if (!this.state.delayedTransferChecks.some((check) => check.status === "scheduled")) {
+        if (!this.state.delayedTransferChecks.some((check) =>
+          !["cancelled", "skipped", "dismissed"].includes(check.status))) {
           throw new Error("Schedule a Delayed Transfer Check before opening the Follow-up Queue.");
         }
         this.state.screen = "followUps";
@@ -5283,6 +5654,58 @@ export class LearningApplication {
     return check;
   }
 
+  private requireInProgressDelayedTransferCheck(checkId: string): DelayedTransferCheck {
+    const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === checkId);
+    if (!check || check.status !== "inProgress" || !check.task) {
+      throw new Error("Launch a due Delayed Transfer Check before working on it.");
+    }
+    return check;
+  }
+
+  private requireDueDelayedTransferCheck(checkId: string): DelayedTransferCheck {
+    const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === checkId);
+    if (!check || (check.status !== "scheduled" && check.status !== "inProgress")) {
+      throw new Error("Choose an active Delayed Transfer Check.");
+    }
+    if (Date.parse(check.dueAt) > Date.now()) throw new Error("This Delayed Transfer Check is not due yet.");
+    return check;
+  }
+
+  private requirePendingRefresherOffer(checkId: string): DelayedTransferCheck {
+    const check = this.state.delayedTransferChecks.find((candidate) => candidate.id === checkId);
+    if (check?.status !== "completed" || !check.evidence
+      || check.result?.refresherOffer?.status !== "pending") {
+      throw new Error("Choose a completed Delayed Check Result with an optional refresher.");
+    }
+    return check;
+  }
+
+  private async runDelayedTransferModelWork<Result>(
+    checkId: string,
+    run: (signal: AbortSignal, onRuntimeEvent: (event: ModelRuntimeEvent) => void) => Promise<Result>
+  ): Promise<Result> {
+    if (this.modelWorks.has(checkId)) throw new Error("This Delayed Transfer Check already has model work underway.");
+    const controller = new AbortController();
+    const log = this.agentWorkLogs[checkId] ?? [];
+    this.agentWorkLogs[checkId] = log;
+    const onRuntimeEvent = (event: ModelRuntimeEvent) => {
+      if (!controller.signal.aborted) log.push({ ...event, sequence: log.length + 1 });
+    };
+    const promise = Promise.resolve().then(() => run(controller.signal, onRuntimeEvent));
+    this.modelWorks.set(checkId, {
+      controller,
+      promise,
+      stop: () => undefined,
+      markUnconfirmed: () => undefined,
+      restart: async () => undefined
+    });
+    try {
+      return await promise;
+    } finally {
+      if (this.modelWorks.get(checkId)?.promise === promise) this.modelWorks.delete(checkId);
+    }
+  }
+
   private requireNamedWorkspace(workspaceId: string): StudyWorkspace {
     const workspace = this.state.workspaces.find((candidate) => candidate.id === workspaceId);
     if (!workspace || workspace.kind !== "named") throw new Error("Choose a named Study Workspace.");
@@ -6376,6 +6799,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.verifierManifests = migrateVerifierManifests(stored.verifierManifests);
     current.verifierEnvironment = migrateVerifierEnvironmentState(stored.verifierEnvironment, current.verifierManifests);
     current.delayedTransferChecks = migrateDelayedTransferChecks(stored.delayedTransferChecks);
+    current.activeDelayedTransferCheckId = typeof stored.activeDelayedTransferCheckId === "string"
+      ? stored.activeDelayedTransferCheckId : null;
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
@@ -6433,6 +6858,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       consolidatedOutcome: migrateConsolidatedSessionOutcome(session.consolidatedOutcome),
       delayedTransferOffer: migrateDelayedTransferOffer(session.delayedTransferOffer),
       continuationOf: migrateContinuationLink(session.continuationOf),
+      refresherOf: migrateRefresherLink(session.refresherOf),
       modelStopConfirmation: migrateModelStopConfirmation(session.modelStopConfirmation),
       learningSlice: migrateLearningSlice(session.learningSlice),
       conceptPeeks: migrateConceptPeeks(session.conceptPeeks),
@@ -6445,6 +6871,8 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       runtimeOverride: migrateRuntimeOverride(session.runtimeOverride),
       verifierEnvironmentPinId: typeof session.verifierEnvironmentPinId === "string" ? session.verifierEnvironmentPinId : null
     }));
+    ensureDelayedTransferContextLinks(current);
+    recoverInterruptedDelayedTransferPreparations(current);
     if (needsLegacyLearnerModel) current.learnerModel = migrateLegacyLearnerModel(current.sessions);
     addLegacyUnresolvedReanchoringDecisions(current);
     attachManagedSourcesToLegacySessions(current);
@@ -7283,6 +7711,22 @@ function refreshAskBarContext(state: LearningApplicationState, session: Learning
       });
     }
   }
+  if (session.refresherOf?.trailItemId) {
+    const origin = state.sessions.find((candidate) => candidate.id === session.refresherOf?.originatingSessionId);
+    const trailItem = origin?.consolidatedOutcome?.trailItems.find((item) => item.id === session.refresherOf?.trailItemId);
+    if (trailItem) {
+      items.push({
+        id: `refresher-trail-item:${trailItem.id}`,
+        kind: "sessionContext",
+        typeLabel: "Linked Learning Trail point",
+        identity: trailItem.content,
+        location: "Originating Delayed Check Learning Session",
+        preview: trailItem.content,
+        sourceId: null,
+        sourceAnchorId: null
+      });
+    }
+  }
   const workspace = state.workspaces.find((candidate) => candidate.id === session.workspaceId);
   const availableSourceIds = session.accessPolicy === "focused"
     ? session.sourceIds
@@ -7405,12 +7849,16 @@ function emptyTrailDraft(): TrailDraft {
   return { items: [] };
 }
 
+function emptyDelayedTransferDraft(): DelayedTransferDraft {
+  return { work: "", reasoning: "", confidence: null, clarifications: [] };
+}
+
 type NewLearningSession = Pick<LearningSession,
   | "id" | "workspaceId" | "missionId" | "mathematics" | "sourceIds" | "learningGoal" | "sessionTarget"
   | "status" | "activityOrder" | "returnContext" | "proposal" | "accessPolicy"
 > & Partial<Pick<LearningSession,
   | "currentTeachingInput" | "sourceAnchors" | "activeSourceAnchorId" | "learningSlice" | "prerequisiteBranch"
-  | "continuationOf"
+  | "continuationOf" | "refresherOf"
 >>;
 
 function createLearningSession(details: NewLearningSession): LearningSession {
@@ -7452,6 +7900,7 @@ function createLearningSession(details: NewLearningSession): LearningSession {
     trailDraft: emptyTrailDraft(),
     ...emptySessionLifecycle(),
     continuationOf: details.continuationOf ?? null,
+    refresherOf: details.refresherOf ?? null,
     learningSlice: details.learningSlice ?? null,
     conceptPeeks: [],
     pendingConceptPeek: null,
@@ -7525,6 +7974,37 @@ function understandingEvidenceLedgerEntry(
     governanceHistory: [],
     createdAt: timestamp,
     lastUpdatedAt: timestamp
+  };
+}
+
+function delayedTransferLedgerEntry(
+  session: LearningSession,
+  check: DelayedTransferCheck,
+  evidence: DelayedTransferEvidence
+): LearnerModelLedgerEntry {
+  return {
+    id: crypto.randomUUID(),
+    kind: "understandingEvidence",
+    inference: `delayed transfer shows ${evidence.reasoningQuality} reasoning`,
+    sourceEvidence: {
+      sessionId: session.id,
+      sourceRecordId: evidence.id,
+      evidenceIds: [evidence.id],
+      summary: evidence.misconceptionOrStrength
+    },
+    mathematicalContext: structuredClone(evidence.mathematicalContext),
+    scope: {
+      workspaceId: session.workspaceId,
+      missionId: session.missionId,
+      sessionId: session.id,
+      sessionTarget: session.sessionTarget
+    },
+    confidence: evidence.result === "demonstrated" && !evidence.assistanceUsed ? "high" : "medium",
+    status: "active",
+    correction: null,
+    governanceHistory: [],
+    createdAt: evidence.completedAt,
+    lastUpdatedAt: evidence.completedAt
   };
 }
 
@@ -7887,13 +8367,14 @@ function isSessionLevelTrailItem(item: TrailItem): boolean {
 }
 
 function emptySessionLifecycle(): Pick<LearningSession,
-  "consolidationDraft" | "consolidatedOutcome" | "delayedTransferOffer" | "continuationOf" | "modelStopConfirmation"
+  "consolidationDraft" | "consolidatedOutcome" | "delayedTransferOffer" | "continuationOf" | "refresherOf" | "modelStopConfirmation"
 > {
   return {
     consolidationDraft: null,
     consolidatedOutcome: null,
     delayedTransferOffer: null,
     continuationOf: null,
+    refresherOf: null,
     modelStopConfirmation: null
   };
 }
@@ -8593,7 +9074,17 @@ function migrateDelayedTransferChecks(value: unknown): DelayedTransferCheck[] {
     || new Set(value.map((check) => (check as DelayedTransferCheck).id)).size !== value.length) {
     throw new Error("Stored Delayed Transfer Checks are invalid.");
   }
-  return structuredClone(value) as DelayedTransferCheck[];
+  return (structuredClone(value) as Array<Partial<DelayedTransferCheck> & Omit<DelayedTransferCheck,
+    "task" | "taskError" | "draft" | "evidence" | "result">>).map((check) => ({
+    ...check,
+    relevantSourceAnchorId: check.relevantSourceAnchorId ?? null,
+    relevantTrailItemId: check.relevantTrailItemId ?? null,
+    task: check.task ?? null,
+    taskError: check.taskError ?? null,
+    draft: check.draft ?? emptyDelayedTransferDraft(),
+    evidence: check.evidence ?? null,
+    result: check.result ?? null
+  }));
 }
 
 function validDelayedTransferCheck(value: unknown): value is DelayedTransferCheck {
@@ -8607,7 +9098,160 @@ function validDelayedTransferCheck(value: unknown): value is DelayedTransferChec
     && new Set(value.originatingConcepts).size === value.originatingConcepts.length
     && [value.scheduledAt, value.updatedAt, value.dueAt].every(validIsoTimestamp)
     && Date.parse(value.dueAt as string) > Date.parse(value.scheduledAt as string)
-    && (value.status === "scheduled" || value.status === "cancelled");
+    && ["scheduled", "preparing", "stopping", "inProgress", "completed", "skipped", "dismissed", "cancelled"].includes(String(value.status))
+    && (value.relevantSourceAnchorId === undefined || value.relevantSourceAnchorId === null
+      || typeof value.relevantSourceAnchorId === "string")
+    && (value.relevantTrailItemId === undefined || value.relevantTrailItemId === null
+      || typeof value.relevantTrailItemId === "string")
+    && (value.task === undefined || value.task === null || validDelayedTransferTask(value.task))
+    && (value.taskError === undefined || value.taskError === null || typeof value.taskError === "string")
+    && (value.draft === undefined || validDelayedTransferDraft(value.draft))
+    && (value.evidence === undefined || value.evidence === null || validDelayedTransferEvidence(value.evidence))
+    && (value.result === undefined || value.result === null || validDelayedCheckResult(value.result))
+    && (value.status !== "inProgress" || validDelayedTransferTask(value.task))
+    && (value.status !== "completed" || (validDelayedTransferEvidence(value.evidence) && validDelayedCheckResult(value.result)));
+}
+
+function validDelayedTransferDraft(value: unknown): value is DelayedTransferDraft {
+  return isRecord(value) && typeof value.work === "string" && typeof value.reasoning === "string"
+    && (value.confidence === null || ["low", "medium", "high"].includes(String(value.confidence)))
+    && Array.isArray(value.clarifications) && value.clarifications.every((entry) => isRecord(entry)
+      && typeof entry.question === "string" && Boolean(entry.question.trim())
+      && typeof entry.response === "string" && Boolean(entry.response.trim())
+      && validIsoTimestamp(entry.requestedAt));
+}
+
+function validDelayedTransferEvidence(value: unknown): value is DelayedTransferEvidence {
+  return isRecord(value) && [value.id, value.checkId, value.originatingSessionId, value.misconceptionOrStrength,
+    value.recommendedNextAction].every((field) => typeof field === "string" && Boolean(field.trim()))
+    && validIsoTimestamp(value.dueAt) && validIsoTimestamp(value.completedAt)
+    && typeof value.scheduledDelayMs === "number" && value.scheduledDelayMs > 0
+    && typeof value.completionDelayMs === "number" && value.completionDelayMs >= 0
+    && validDelayedTransferTask(value.task)
+    && isCompleteEvidenceTransferContext(value.mathematicalContext)
+    && typeof value.work === "string" && typeof value.reasoning === "string"
+    && (value.confidence === null || ["low", "medium", "high"].includes(String(value.confidence)))
+    && typeof value.assistanceUsed === "boolean"
+    && ["demonstrated", "partial", "difficulty"].includes(String(value.result))
+    && ["strong", "developing", "unclear"].includes(String(value.reasoningQuality))
+    && ["aligned", "overconfident", "underconfident", "notExpressed"].includes(String(value.confidenceCalibration));
+}
+
+function validDelayedCheckResult(value: unknown): value is DelayedCheckResult {
+  return isRecord(value) && typeof value.evidenceId === "string" && Boolean(value.evidenceId)
+    && (value.refresherOffer === null || (isRecord(value.refresherOffer)
+      && ["pending", "accepted", "declined"].includes(String(value.refresherOffer.status))
+      && typeof value.refresherOffer.goal === "string" && Boolean(value.refresherOffer.goal.trim())
+      && (value.refresherOffer.refresherSessionId === null || typeof value.refresherOffer.refresherSessionId === "string")));
+}
+
+function validDelayedTransferTask(value: unknown): value is DelayedTransferTask {
+  return isRecord(value) && [value.prompt, value.concept, value.taskDemand, value.structuralComparison]
+    .every((field) => typeof field === "string" && Boolean(field.trim()))
+    && isCompleteEvidenceTransferContext(value.mathematicalContext)
+    && value.mathematicalContext.concepts.includes(value.concept as string)
+    && value.mathematicalContext.taskDemands.includes(value.taskDemand as string);
+}
+
+function validatedDelayedTransferTask(
+  value: unknown,
+  originatingMathematics: string,
+  originatingContext: EvidenceTransferContext | null,
+  originatingConcepts: string[]
+): DelayedTransferTask {
+  const sharesUnderlyingConcept = validDelayedTransferTask(value)
+    && value.mathematicalContext.concepts.some((concept) => originatingConcepts.some((originatingConcept) =>
+      normalizedSemanticText(concept) === normalizedSemanticText(originatingConcept)));
+  const novelConditions = validDelayedTransferTask(value) && originatingContext
+    ? [
+        ...materiallyNovelDescriptions(
+          value.mathematicalContext.mathematicalStructures,
+          originatingContext.mathematicalStructures
+        ),
+        ...materiallyNovelDescriptions(value.mathematicalContext.taskDemands, originatingContext.taskDemands)
+      ]
+    : validDelayedTransferTask(value) ? [value.structuralComparison] : [];
+  const changesGroundedConditions = validDelayedTransferTask(value)
+    && novelConditions.some((description) => descriptionGroundedInPrompt(description, value.prompt));
+  const repeatsOriginalWording = validDelayedTransferTask(value)
+    && (normalizedSemanticText(value.prompt) === normalizedSemanticText(originatingMathematics)
+      || normalizedSemanticText(value.prompt).includes(normalizedSemanticText(originatingMathematics))
+      || value.prompt.toLocaleLowerCase().includes(originatingMathematics.trim().toLocaleLowerCase())
+      || semanticTokenSimilarity(value.prompt, originatingMathematics) >= 0.8
+      || semanticTokenContainment(value.prompt, originatingMathematics) >= 0.75);
+  if (!validDelayedTransferTask(value)
+    || !sharesUnderlyingConcept
+    || !changesGroundedConditions
+    || repeatsOriginalWording) {
+    throw new Error("Codex returned an invalid Delayed Transfer task. Retry to request a fresh task.");
+  }
+  return structuredClone(value);
+}
+
+function materiallyNovelDescriptions(candidate: string[], originating: string[]): string[] {
+  const normalizedOriginating = new Set(originating.map(normalizedSemanticText));
+  return candidate.filter((description) => !normalizedOriginating.has(normalizedSemanticText(description)));
+}
+
+function normalizedSemanticText(value: string): string {
+  return value.toLocaleLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+
+const DELAYED_TRANSFER_GENERIC_WORDS = new Set([
+  "apply", "argument", "derive", "fresh", "global", "mathematical", "method", "problem", "proof", "strategy",
+  "structure", "task", "transfer", "using"
+]);
+
+function semanticTokens(value: string): Set<string> {
+  return new Set(normalizedSemanticText(value).split(" ")
+    .filter((token) => token.length >= 4 && !DELAYED_TRANSFER_GENERIC_WORDS.has(token))
+    .map((token) => token === "finitely" ? "finite" : token.slice(0, 5)));
+}
+
+function descriptionGroundedInPrompt(description: string, prompt: string): boolean {
+  const descriptionTokens = semanticTokens(description);
+  if (descriptionTokens.size === 0) return false;
+  const promptTokens = semanticTokens(prompt);
+  const matches = [...descriptionTokens].filter((token) => promptTokens.has(token)).length;
+  return matches >= Math.min(2, descriptionTokens.size);
+}
+
+function semanticTokenSimilarity(left: string, right: string): number {
+  const leftTokens = semanticTokens(left);
+  const rightTokens = semanticTokens(right);
+  const union = new Set([...leftTokens, ...rightTokens]);
+  if (union.size === 0) return normalizedSemanticText(left) === normalizedSemanticText(right) ? 1 : 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return intersection / union.size;
+}
+
+function semanticTokenContainment(candidate: string, originating: string): number {
+  const candidateTokens = semanticTokens(candidate);
+  const originatingTokens = semanticTokens(originating);
+  if (originatingTokens.size === 0) {
+    return normalizedSemanticText(candidate).includes(normalizedSemanticText(originating)) ? 1 : 0;
+  }
+  return [...originatingTokens].filter((token) => candidateTokens.has(token)).length / originatingTokens.size;
+}
+
+function requiredDelayedTransferConfidence(
+  value: LearnerModelConfidence | null
+): LearnerModelConfidence | null {
+  if (value === null || value === "low" || value === "medium" || value === "high") return value;
+  throw new Error("Choose low, medium, or high confidence, or leave confidence unexpressed.");
+}
+
+function validatedDelayedTransferAssessment(value: unknown): DelayedTransferAssessment {
+  if (!isRecord(value)
+    || !["demonstrated", "partial", "difficulty"].includes(String(value.result))
+    || !["strong", "developing", "unclear"].includes(String(value.reasoningQuality))
+    || !["aligned", "overconfident", "underconfident", "notExpressed"].includes(String(value.confidenceCalibration))
+    || typeof value.misconceptionOrStrength !== "string" || !value.misconceptionOrStrength.trim()
+    || typeof value.recommendedNextAction !== "string" || !value.recommendedNextAction.trim()
+    || !(value.refresherGoal === null || (typeof value.refresherGoal === "string" && Boolean(value.refresherGoal.trim())))) {
+    throw new Error("Codex returned an invalid Delayed Check Result. Retry the assessment.");
+  }
+  return structuredClone(value) as unknown as DelayedTransferAssessment;
 }
 
 function validSessionConsolidation(value: unknown, allowsMissingDisposition: boolean): boolean {
@@ -8629,6 +9273,18 @@ function migrateContinuationLink(value: unknown): ContinuationLink | null {
     throw new Error("Stored Continuation Session link is invalid.");
   }
   return value as unknown as ContinuationLink;
+}
+
+function migrateRefresherLink(value: unknown): RefresherLink | null {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || [value.checkId, value.evidenceId, value.originatingSessionId]
+    .some((field) => typeof field !== "string" || !field)
+    || !(value.sourceAnchorId === null || typeof value.sourceAnchorId === "string")
+    || !(value.trailItemId === null || typeof value.trailItemId === "string")
+    || (value.sourceAnchorId === null && value.trailItemId === null)) {
+    throw new Error("Stored Refresher Session link is invalid.");
+  }
+  return value as unknown as RefresherLink;
 }
 
 function migrateModelStopConfirmation(value: unknown): ModelStopConfirmation | null {
@@ -8673,6 +9329,19 @@ function validateSessionLifecycleReferences(state: LearningApplicationState): vo
         throw new Error("Stored Continuation Session link is invalid.");
       }
     }
+    if (session.refresherOf) {
+      const check = state.delayedTransferChecks.find((candidate) => candidate.id === session.refresherOf?.checkId);
+      if (!check?.evidence || check.evidence.id !== session.refresherOf.evidenceId
+        || check.relatedSessionId !== session.refresherOf.originatingSessionId
+        || check.relevantSourceAnchorId !== session.refresherOf.sourceAnchorId
+        || check.relevantTrailItemId !== session.refresherOf.trailItemId
+        || check.result?.refresherOffer?.status !== "accepted"
+        || check.result.refresherOffer.refresherSessionId !== session.id
+        || (session.refresherOf.sourceAnchorId !== null
+          && !session.sourceAnchors.some((anchor) => anchor.id === session.refresherOf?.sourceAnchorId))) {
+        throw new Error("Stored Refresher Session link is invalid.");
+      }
+    }
   }
 }
 
@@ -8691,7 +9360,23 @@ function validateDelayedTransferReferences(state: LearningApplicationState): voi
       || check.originatingConcepts.some((concept, index) => concept !== originatingConcepts[index])) {
       throw new Error("Stored Delayed Transfer Check origin does not match its Learning Session.");
     }
-    if (check.status === "scheduled") {
+    if ((check.relevantSourceAnchorId === null && check.relevantTrailItemId === null)
+      || (check.relevantSourceAnchorId !== null
+        && !session.sourceAnchors.some((anchor) => anchor.id === check.relevantSourceAnchorId))
+      || (check.relevantTrailItemId !== null
+        && !session.consolidatedOutcome.trailItems.some((item) => item.id === check.relevantTrailItemId))) {
+      throw new Error("Stored Delayed Transfer Check context link is invalid.");
+    }
+    if (check.status === "completed" && check.evidence && check.result
+      && (check.evidence.checkId !== check.id
+        || check.evidence.originatingSessionId !== check.relatedSessionId
+        || check.evidence.dueAt !== check.dueAt
+        || check.result.evidenceId !== check.evidence.id
+        || JSON.stringify(check.evidence.task) !== JSON.stringify(check.task)
+        || JSON.stringify(check.evidence.mathematicalContext) !== JSON.stringify(check.task?.mathematicalContext))) {
+      throw new Error("Stored Delayed Transfer Evidence does not match its check.");
+    }
+    if (check.status === "scheduled" || check.status === "preparing" || check.status === "stopping" || check.status === "inProgress") {
       if (scheduledSessionIds.has(session.id)) {
         throw new Error("Stored Delayed Transfer Checks contain a duplicate addressed Session Target.");
       }
@@ -8711,10 +9396,60 @@ function validateDelayedTransferReferences(state: LearningApplicationState): voi
     }
     const matchingChecks = state.delayedTransferChecks.filter((check) => check.relatedSessionId === session.id);
     const offerStatus = session.delayedTransferOffer?.status;
-    if ((offerStatus === "scheduled" || offerStatus === "cancelled")
-      && (matchingChecks.length !== 1 || matchingChecks[0].status !== offerStatus)) {
+    const checkMatchesOffer = offerStatus === "scheduled"
+      ? matchingChecks.length === 1 && ["scheduled", "preparing", "stopping", "inProgress", "completed", "skipped", "dismissed"]
+        .includes(matchingChecks[0].status)
+      : offerStatus === "cancelled"
+        ? matchingChecks.length === 1 && matchingChecks[0].status === "cancelled"
+        : true;
+    if (!checkMatchesOffer) {
       throw new Error("Stored Delayed Transfer offer does not match its check state.");
     }
+  }
+  if (state.activeDelayedTransferCheckId !== null) {
+    const active = state.delayedTransferChecks.find((check) => check.id === state.activeDelayedTransferCheckId);
+    if (!active || (active.status !== "inProgress" && active.status !== "completed")) {
+      throw new Error("Stored active Delayed Transfer Check is invalid.");
+    }
+  }
+}
+
+function ensureDelayedTransferContextLinks(state: LearningApplicationState): void {
+  for (const check of state.delayedTransferChecks) {
+    const session = state.sessions.find((candidate) => candidate.id === check.relatedSessionId);
+    if (!session?.consolidatedOutcome) continue;
+    const contextKey = `delayed-transfer-context:${session.id}`;
+    let item = session.consolidatedOutcome.trailItems.find((candidate) => candidate.curationKey === contextKey);
+    if (!item) {
+      item = {
+        id: `delayed-transfer-context-${check.id}`,
+        kind: "reasoningStep",
+        content: [
+          session.consolidatedOutcome.centralInsight,
+          `Transfer concepts: ${check.originatingConcepts.join(", ")}.`,
+          `Intended next step: ${session.consolidatedOutcome.nextStep}`
+        ].join(" "),
+        required: false,
+        origin: "teachingAgent",
+        links: { sourceAnchorIds: [], teachingCardIds: [], learningArtifactIds: [], understandingEvidenceIds: [] },
+        curationKey: contextKey
+      };
+      session.trailDraft.items.push(structuredClone(item));
+      session.consolidatedOutcome.trailItems.push(item);
+    }
+    check.relevantSourceAnchorId ??= null;
+    check.relevantTrailItemId = item.id;
+  }
+}
+
+function recoverInterruptedDelayedTransferPreparations(state: LearningApplicationState): void {
+  for (const check of state.delayedTransferChecks) {
+    if (check.status !== "preparing" && check.status !== "stopping") continue;
+    check.status = "scheduled";
+    check.task = null;
+    check.taskError = "Task preparation stopped when Quick Study closed. Start the check again when you are ready.";
+    check.updatedAt = new Date().toISOString();
+    if (state.activeDelayedTransferCheckId === check.id) state.activeDelayedTransferCheckId = null;
   }
 }
 
@@ -9150,6 +9885,7 @@ function initialState(): LearningApplicationState {
     verifierManifests: [],
     verifierEnvironment: defaultVerifierEnvironmentState(),
     delayedTransferChecks: [],
+    activeDelayedTransferCheckId: null,
     activeSessionId: null,
     resumeSessionId: null,
     navigation: {

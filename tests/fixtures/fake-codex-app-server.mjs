@@ -159,36 +159,60 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         } else if (message.params.outputSchema) {
           const prompt = message.params.input[0].text;
           const artifactSynthesis = Boolean(message.params.outputSchema.properties?.noteInterpretations);
+          const delayedTransferTask = Boolean(message.params.outputSchema.properties?.taskDemand);
+          const delayedTransferAssessment = Boolean(message.params.outputSchema.properties?.reasoningQuality);
           const annotationId = prompt.match(/"annotationId":"([^"]+)"/)?.[1];
+          const structuredResult = delayedTransferTask ? {
+            prompt: "A compact parameter space is covered by neighbourhoods carrying local bounds. Explain how to obtain one uniform bound.",
+            concept: "compactness",
+            taskDemand: "derive a uniform bound from finitely many local bounds",
+            structuralComparison: "The mathematical objects change while the finite-subcover proof structure remains.",
+            mathematicalContext: {
+              concepts: ["compactness", "finite subcover"],
+              mathematicalStructures: ["compact parameter space with local bounds"],
+              prerequisiteRelationships: [{
+                prerequisiteConcept: "open cover", supportsConcept: "compactness", relationship: "requiredFor"
+              }],
+              taskDemands: ["derive a uniform bound from finitely many local bounds"]
+            }
+          } : delayedTransferAssessment ? {
+            result: "partial",
+            reasoningQuality: "developing",
+            confidenceCalibration: "aligned",
+            misconceptionOrStrength: "The finite reduction is correct, but the uniform maximum still needs justification.",
+            recommendedNextAction: "Explain why the maximum controls every parameter.",
+            refresherGoal: "Connect the finite subcover to the construction of one uniform bound."
+          } : artifactSynthesis ? {
+            content: "Start from the key definition, then preserve the learner's finite-choice insight.",
+            noteInterpretations: annotationId ? [{
+              annotationId,
+              interpretation: "The learner connects the equation with a finite-choice insight."
+            }] : []
+          } : {
+            learningGoal: "Understand the mathematical strategy",
+            scope: "Work through the central claim",
+            initialTeachingDirection: "Identify the key definition and first inference",
+            requiresConfirmation: false,
+            confirmationReason: null,
+            materialScope: "focused",
+            argumentRoadmap: null,
+            evidenceTransferContext: {
+              concepts: ["compactness"],
+              mathematicalStructures: ["compact Hausdorff subspace"],
+              prerequisiteRelationships: [{
+                prerequisiteConcept: "Hausdorff separation", supportsConcept: "compactness", relationship: "requiredFor"
+              }],
+              taskDemands: ["explain a proof strategy"]
+            }
+          };
           send({
             method: "item/agentMessage/delta",
             params: {
               threadId: message.params.threadId,
               turnId,
-              itemId: artifactSynthesis ? "artifact-synthesis" : "proposal",
-              delta: JSON.stringify(artifactSynthesis ? {
-                content: "Start from the key definition, then preserve the learner's finite-choice insight.",
-                noteInterpretations: annotationId ? [{
-                  annotationId,
-                  interpretation: "The learner connects the equation with a finite-choice insight."
-                }] : []
-              } : {
-                learningGoal: "Understand the mathematical strategy",
-                scope: "Work through the central claim",
-                initialTeachingDirection: "Identify the key definition and first inference",
-                requiresConfirmation: false,
-                confirmationReason: null,
-                materialScope: "focused",
-                argumentRoadmap: null,
-                evidenceTransferContext: {
-                  concepts: ["compactness"],
-                  mathematicalStructures: ["compact Hausdorff subspace"],
-                  prerequisiteRelationships: [{
-                    prerequisiteConcept: "Hausdorff separation", supportsConcept: "compactness", relationship: "requiredFor"
-                  }],
-                  taskDemands: ["explain a proof strategy"]
-                }
-              })
+              itemId: artifactSynthesis ? "artifact-synthesis" : delayedTransferTask ? "delayed-task"
+                : delayedTransferAssessment ? "delayed-assessment" : "proposal",
+              delta: JSON.stringify(structuredResult)
             }
           });
         } else if ((message.params.input[0].text.includes("TRIGGER_ACCESS_REQUEST")
@@ -228,7 +252,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
               threadId: message.params.threadId,
               turnId,
               itemId: "teaching-card",
-              delta: "Start from the key definition, then connect each inference to the stated goal."
+              delta: message.params.input[0].text.includes("Answer one clarification about a Delayed Transfer Check")
+                ? "Use the parameter neighbourhoods on which each local estimate holds; you still need to justify the finite reduction."
+                : "Start from the key definition, then connect each inference to the stated goal."
             }
           });
         }

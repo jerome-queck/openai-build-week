@@ -16,7 +16,7 @@ const executablePath = join(
 );
 
 test("packaged Quick Study organizes durable work and resumes the latest session", async () => {
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   const packagedEnvironment = join(executablePath, "..", "..", "Resources", "verifiers",
     "lean-4.29.1-mathlib-4.29.1-quick-study-v1");
   const packagedManifest = join(packagedEnvironment, "manifest.json");
@@ -85,7 +85,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     let page = await launch();
     await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Application settings" }))
-      .toContainText("Installed and ready", { timeout: 60_000 });
+      .toContainText("Installed and ready", { timeout: 120_000 });
     const noteSynthesisPreference = page.getByRole("checkbox", { name: "Allow Personal Notes during artifact synthesis" });
     await expect(noteSynthesisPreference).toBeChecked();
     await noteSynthesisPreference.click();
@@ -413,6 +413,10 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await delayedTransfer.getByLabel("Intended transfer goal").fill(
       "Apply the finite-choice proof structure to a fresh mathematical setting."
     );
+    const dueSoon = new Date(Math.ceil((Date.now() + 30_000) / 60_000) * 60_000);
+    const dueSoonLocal = new Date(dueSoon.getTime() - dueSoon.getTimezoneOffset() * 60_000)
+      .toISOString().slice(0, 16);
+    await delayedTransfer.getByLabel("When should Quick Study check in?").fill(dueSoonLocal);
     await delayedTransfer.getByRole("button", { name: "Save follow-up choice" }).press("Enter");
     const followUps = page.getByRole("region", { name: "Follow-ups" });
     await expect(followUps).toContainText("1 scheduled");
@@ -423,16 +427,38 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(page.getByRole("region", { name: "Follow-up Queue" })).toContainText(
       "Related Learning Session:"
     );
-    await page.getByRole("button", { name: "Return to dashboard" }).press("Enter");
+    const queue = page.getByRole("region", { name: "Follow-up Queue" });
+    const startDelayed = queue.getByRole("button", { name: /Start delayed check for/ });
+    await expect(startDelayed).toBeVisible({ timeout: 100_000 });
+    await startDelayed.press("Enter");
+    const delayedCheck = page.getByRole("region", { name: "Delayed Transfer Check" });
+    await expect(delayedCheck).toContainText("compact parameter space");
+    await delayedCheck.getByLabel("Your work").fill("Choose a finite subcover and take the largest local bound.");
+    await delayedCheck.getByLabel("Explain your reasoning").fill("Compactness makes the local family finite.");
+    await delayedCheck.getByRole("radio", { name: "Medium confidence" }).click();
+    await delayedCheck.getByRole("button", { name: "Save check work" }).press("Enter");
+    await delayedCheck.getByLabel("Ask for clarification").fill("Which sets form the cover?");
+    await delayedCheck.getByRole("button", { name: "Request clarification" }).press("Enter");
+    await expect(delayedCheck.getByRole("list", { name: "Clarification assistance" }))
+      .toContainText("parameter neighbourhoods");
+    await delayedCheck.getByRole("button", { name: "Complete delayed check" }).press("Enter");
+    const delayedResult = page.getByRole("region", { name: "Delayed Check Result" });
+    await expect(delayedResult).toContainText("Partial evidence");
+    await expect(delayedResult).toContainText("Developing reasoning");
+    await expect(delayedResult).toContainText("Confidence aligned");
+    await expect(delayedResult).toContainText("Clarification assistance used");
+    await delayedResult.getByRole("button", { name: "Decline refresher" }).press("Enter");
+    await expect(page.getByRole("region", { name: "Follow-ups" })).toContainText("1 completed");
 
     await quit();
     page = await launch();
     const restoredFollowUps = page.getByRole("region", { name: "Follow-ups" });
-    await expect(restoredFollowUps).toContainText("1 scheduled");
+    await expect(restoredFollowUps).toContainText("1 completed");
     await restoredFollowUps.getByRole("button", { name: /Open Follow-up Queue/ }).press("Enter");
     const restoredQueue = page.getByRole("region", { name: "Follow-up Queue" });
-    await restoredQueue.getByRole("button", { name: /Cancel follow-up for/ }).press("Enter");
-    await expect(page.getByRole("region", { name: "Follow-ups" })).toHaveCount(0);
+    await restoredQueue.getByRole("button", { name: /Review result for/ }).press("Enter");
+    await expect(page.getByRole("region", { name: "Delayed Check Result" })).toContainText("Partial evidence");
+    await expect(page.getByRole("button", { name: "Start refresher session" })).toHaveCount(0);
 
   } finally {
     await quit();

@@ -137,7 +137,7 @@ function trailSession(): LearningSession {
       links: { sourceAnchorIds: [], teachingCardIds: [], learningArtifactIds: [], understandingEvidenceIds: [] }
     }] },
     consolidationDraft: null, consolidatedOutcome: null, delayedTransferOffer: null,
-    continuationOf: null, modelStopConfirmation: null,
+    continuationOf: null, refresherOf: null, modelStopConfirmation: null,
     learningSlice: null, conceptPeeks: [], pendingConceptPeek: null, prerequisiteBranchProposals: [], prerequisiteBranch: null
   };
 }

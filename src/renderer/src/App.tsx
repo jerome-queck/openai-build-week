@@ -40,6 +40,9 @@ export function App() {
   }, []);
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
+  if (state.screen === "delayedTransfer" && state.activeDelayedTransferCheckId) {
+    return <DelayedTransferCheckScreen state={state} onState={setState} />;
+  }
   if (state.screen === "followUps") return <FollowUpQueue state={state} onState={setState} />;
   if (state.screen === "workbench" && state.activeSessionId) {
     return <Workbench
@@ -168,18 +171,20 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
 function FollowUpsCard({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const checks = state.delayedTransferChecks
-    .filter((check) => check.status === "scheduled")
+    .filter((check) => !["cancelled", "skipped", "dismissed"].includes(check.status))
     .sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt));
   const now = useFollowUpClock(checks.map((check) => check.dueAt));
   if (checks.length === 0) return null;
-  const ready = checks.filter((check) => Date.parse(check.dueAt) <= now).length;
+  const scheduled = checks.filter((check) => check.status === "scheduled");
+  const ready = scheduled.filter((check) => Date.parse(check.dueAt) <= now).length;
+  const completed = checks.filter((check) => check.status === "completed").length;
   return (
     <section className="history-card" aria-labelledby="follow-ups-title">
       <p className="eyebrow">Optional delayed work</p>
       <h2 id="follow-ups-title">Follow-ups</h2>
-      <p role="status" aria-live="polite">{ready} ready · {checks.length} scheduled. Follow-ups never block other work.</p>
+      <p role="status" aria-live="polite">{ready} ready · {scheduled.length} scheduled{completed > 0 ? ` · ${completed} completed` : ""}. Follow-ups never block other work.</p>
       <button className="secondary"
-        aria-label={`Open Follow-up Queue with ${checks.length} scheduled item${checks.length === 1 ? "" : "s"}`}
+        aria-label={`Open Follow-up Queue with ${checks.length} active or completed item${checks.length === 1 ? "" : "s"}`}
         onClick={() => {
           setNavigationError(null);
           void window.quickStudy.submit({ type: "openFollowUpQueue" }).then(onState).catch((cause: unknown) =>
@@ -195,7 +200,7 @@ function FollowUpsCard({ state, onState }: { state: LearningApplicationState; on
 function FollowUpQueue({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const checks = state.delayedTransferChecks
-    .filter((check) => check.status === "scheduled")
+    .filter((check) => !["cancelled", "skipped", "dismissed"].includes(check.status))
     .sort((left, right) => Date.parse(left.dueAt) - Date.parse(right.dueAt));
   return <main className="shell">
     <Brand />
@@ -224,6 +229,7 @@ function FollowUpQueueItem({ check, onState }: {
 }) {
   const [dueAt, setDueAt] = useState(toDateTimeLocal(check.dueAt));
   const [error, setError] = useState<string | null>(null);
+  const now = useFollowUpClock([check.dueAt]);
   const reschedule = async () => {
     setError(null);
     try {
@@ -233,26 +239,189 @@ function FollowUpQueueItem({ check, onState }: {
       setError(cause instanceof Error ? cause.message : "The follow-up could not be rescheduled.");
     }
   };
+  const due = Date.parse(check.dueAt) <= now;
   return <li>
     <strong>{check.originatingSessionTarget}</strong>
     {check.originatingConcepts.length > 0 && <p>Originating concepts: {check.originatingConcepts.join(", ")}</p>}
     <p>Related Learning Session: {check.relatedLearningSessionGoal}</p>
     <p>Intended transfer goal: {check.intendedTransferGoal}</p>
     <p>Due {new Date(check.dueAt).toLocaleString()}</p>
-    <label htmlFor={`reschedule-${check.id}`}>Reschedule {check.originatingSessionTarget}</label>
-    <input id={`reschedule-${check.id}`} type="datetime-local" value={dueAt}
-      onChange={(event) => setDueAt(event.target.value)} />
-    <div className="resume-actions">
-      <button className="secondary" aria-label={`Save new time for ${check.originatingSessionTarget}`}
-        disabled={!dueAt} onClick={() => void reschedule()}>Save new time</button>
-      <button className="text-button" aria-label={`Cancel follow-up for ${check.originatingSessionTarget}`}
-        onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransfer", checkId: check.id })
+    {check.status === "scheduled" && <>
+      <label htmlFor={`reschedule-${check.id}`}>Reschedule {check.originatingSessionTarget}</label>
+      <input id={`reschedule-${check.id}`} type="datetime-local" value={dueAt}
+        onChange={(event) => setDueAt(event.target.value)} />
+      <div className="resume-actions">
+        {due && <button className="primary" aria-label={`Start delayed check for ${check.originatingSessionTarget}`}
+          onClick={() => void window.quickStudy.submit({ type: "startDelayedTransferCheck", checkId: check.id })
+            .then(onState).catch((cause: unknown) => setError(
+              cause instanceof Error ? cause.message : "The delayed check could not be started."
+            ))}>Start delayed check</button>}
+        <button className="secondary" aria-label={`Save new time for ${check.originatingSessionTarget}`}
+          disabled={!dueAt} onClick={() => void reschedule()}>Save new time</button>
+        {due && <button className="text-button" aria-label={`Skip delayed check for ${check.originatingSessionTarget}`}
+          onClick={() => void window.quickStudy.submit({ type: "skipDelayedTransferCheck", checkId: check.id })
+            .then(onState).catch((cause: unknown) => setError(
+              cause instanceof Error ? cause.message : "The delayed check could not be skipped."
+            ))}>Skip without evidence</button>}
+        <button className="text-button" aria-label={`Cancel follow-up for ${check.originatingSessionTarget}`}
+          onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransfer", checkId: check.id })
+            .then(onState).catch((cause: unknown) => setError(
+              cause instanceof Error ? cause.message : "The follow-up could not be cancelled."
+            ))}>Cancel follow-up</button>
+      </div>
+      {check.taskError && <p className="failure-message" role="alert">{check.taskError}</p>}
+    </>}
+    {(check.status === "preparing" || check.status === "stopping") && <div>
+      <p role="status">{check.status === "stopping"
+        ? "Stopping task preparation…"
+        : "Preparing an unseen, structurally comparable task…"}</p>
+      <button className="secondary" aria-label={`Cancel task preparation for ${check.originatingSessionTarget}`}
+        onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransferPreparation", checkId: check.id })
           .then(onState).catch((cause: unknown) => setError(
-            cause instanceof Error ? cause.message : "The follow-up could not be cancelled."
-          ))}>Cancel follow-up</button>
-    </div>
+            cause instanceof Error ? cause.message : "Task preparation could not be cancelled."
+          ))}>{check.status === "stopping" ? "Retry stop" : "Cancel task preparation"}</button>
+      {check.taskError && <p className="failure-message" role="alert">{check.taskError}</p>}
+    </div>}
+    {(check.status === "inProgress" || check.status === "completed") && <button className="secondary"
+      aria-label={`${check.status === "completed" ? "Review result" : "Continue delayed check"} for ${check.originatingSessionTarget}`}
+      onClick={() => void window.quickStudy.submit({ type: "openDelayedTransferCheck", checkId: check.id })
+        .then(onState).catch((cause: unknown) => setError(
+          cause instanceof Error ? cause.message : "The delayed check could not be opened."
+        ))}>{check.status === "completed" ? "Review result" : "Continue delayed check"}</button>}
     {error && <p className="failure-message" role="alert">{error}</p>}
   </li>;
+}
+
+function DelayedTransferCheckScreen({ state, onState }: {
+  state: LearningApplicationState;
+  onState: StateHandler;
+}) {
+  const check = state.delayedTransferChecks.find((candidate) => candidate.id === state.activeDelayedTransferCheckId);
+  const [work, setWork] = useState(check?.draft.work ?? "");
+  const [reasoning, setReasoning] = useState(check?.draft.reasoning ?? "");
+  const [confidence, setConfidence] = useState<"low" | "medium" | "high" | null>(check?.draft.confidence ?? null);
+  const [clarification, setClarification] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!check) return <main className="shell"><Brand /><p role="alert">This Delayed Transfer Check is unavailable.</p></main>;
+
+  const submit = async (...actions: LearnerAction[]) => {
+    setBusy(true);
+    setError(null);
+    try {
+      let nextState = state;
+      for (const action of actions) nextState = await window.quickStudy.submit(action);
+      onState(nextState);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Delayed Transfer Check could not be updated.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (check.status === "completed" && check.evidence && check.result) {
+    const evidence = check.evidence;
+    const resultLabel = evidence.result === "demonstrated" ? "Demonstrated evidence"
+      : evidence.result === "partial" ? "Partial evidence" : "Specific difficulty exposed";
+    return <main className="shell">
+      <Brand />
+      <section className="dashboard-content" aria-label="Delayed Check Result">
+        <p className="eyebrow">Delayed Transfer Evidence</p>
+        <h1>Delayed Check Result</h1>
+        <p>This result is concept-specific evidence, not a grade or blanket mastery claim.</p>
+        <dl>
+          <dt>Result</dt><dd>{resultLabel}</dd>
+          <dt>Reasoning quality</dt><dd>{capitalize(evidence.reasoningQuality)} reasoning</dd>
+          <dt>Confidence calibration</dt><dd>Confidence {confidenceCalibrationLabel(evidence.confidenceCalibration)}</dd>
+          <dt>Assistance</dt><dd>{evidence.assistanceUsed ? "Clarification assistance used" : "No clarification assistance used"}</dd>
+          <dt>Misconception or strength</dt><dd>{evidence.misconceptionOrStrength}</dd>
+          <dt>Recommended next action</dt><dd>{evidence.recommendedNextAction}</dd>
+        </dl>
+        {check.result.refresherOffer?.status === "pending" && <section aria-label="Optional Refresher Session">
+          <h2>Optional refresher</h2>
+          <p>{check.result.refresherOffer.goal}</p>
+          <div className="resume-actions">
+            <button className="primary" disabled={busy}
+              onClick={() => void submit({ type: "acceptDelayedTransferRefresher", checkId: check.id })}>
+              Start refresher session
+            </button>
+            <button className="secondary" disabled={busy}
+              onClick={() => void submit({ type: "declineDelayedTransferRefresher", checkId: check.id })}>
+              Decline refresher
+            </button>
+          </div>
+        </section>}
+        <button className="text-button" disabled={busy}
+          onClick={() => void submit({ type: "closeDelayedTransferCheck" })}>Return to dashboard</button>
+        {error && <p className="failure-message" role="alert">{error}</p>}
+      </section>
+    </main>;
+  }
+
+  return <main className="shell">
+    <Brand />
+    <section className="dashboard-content" aria-label="Delayed Transfer Check">
+      <p className="eyebrow">Fresh reasoning task</p>
+      <h1>Delayed Transfer Check</h1>
+      <p>{check.task?.prompt}</p>
+      <p className="subtle">Completing late creates no penalty. Skip or dismiss this check without creating negative evidence.</p>
+      <label htmlFor={`delayed-work-${check.id}`}>Your work</label>
+      <textarea id={`delayed-work-${check.id}`} value={work} disabled={busy}
+        onChange={(event) => setWork(event.target.value)} />
+      <label htmlFor={`delayed-reasoning-${check.id}`}>Explain your reasoning</label>
+      <textarea id={`delayed-reasoning-${check.id}`} value={reasoning} disabled={busy}
+        onChange={(event) => setReasoning(event.target.value)} />
+      <fieldset>
+        <legend>Confidence (optional)</legend>
+        {(["low", "medium", "high"] as const).map((value) => <label key={value}>
+          <input type="radio" name="delayed-confidence" checked={confidence === value} disabled={busy}
+            onChange={() => setConfidence(value)} />{capitalize(value)} confidence
+        </label>)}
+      </fieldset>
+      <button className="secondary" disabled={busy}
+        onClick={() => void submit({ type: "saveDelayedTransferDraft", checkId: check.id, work, reasoning, confidence })}>
+        Save check work
+      </button>
+      <label htmlFor={`delayed-clarification-${check.id}`}>Ask for clarification</label>
+      <textarea id={`delayed-clarification-${check.id}`} value={clarification} disabled={busy}
+        onChange={(event) => setClarification(event.target.value)} />
+      <button className="secondary" disabled={busy || !clarification.trim()}
+        onClick={() => void submit(
+          { type: "saveDelayedTransferDraft", checkId: check.id, work, reasoning, confidence },
+          { type: "requestDelayedTransferClarification", checkId: check.id, question: clarification }
+        )}>
+        Request clarification
+      </button>
+      {check.draft.clarifications.length > 0 && <ol aria-label="Clarification assistance">
+        {check.draft.clarifications.map((item) => <li key={item.requestedAt}>
+          <strong>{item.question}</strong><p>{item.response}</p>
+        </li>)}
+      </ol>}
+      <div className="resume-actions">
+        <button className="primary" disabled={busy || (!work.trim() && !reasoning.trim())}
+          onClick={() => void submit(
+            { type: "saveDelayedTransferDraft", checkId: check.id, work, reasoning, confidence },
+            { type: "completeDelayedTransferCheck", checkId: check.id }
+          )}>
+          Complete delayed check
+        </button>
+        <button className="text-button" disabled={busy}
+          onClick={() => void submit({ type: "skipDelayedTransferCheck", checkId: check.id })}>Skip without evidence</button>
+        <button className="text-button" disabled={busy}
+          onClick={() => void submit({ type: "dismissDueDelayedTransferCheck", checkId: check.id })}>Dismiss without evidence</button>
+      </div>
+      {busy && <p role="status">Updating the Delayed Transfer Check…</p>}
+      {error && <p className="failure-message" role="alert">{error}</p>}
+    </section>
+  </main>;
+}
+
+function capitalize(value: string): string {
+  return value.charAt(0).toLocaleUpperCase() + value.slice(1);
+}
+
+function confidenceCalibrationLabel(value: "aligned" | "overconfident" | "underconfident" | "notExpressed"): string {
+  return value === "notExpressed" ? "not expressed" : value;
 }
 
 function useFollowUpClock(dueTimes: string[]): number {

@@ -4,6 +4,11 @@ import { ModelAccessError, isCompleteEvidenceTransferContext, type
   AuthenticationState,
   ChatGptLogin,
   ConceptPeekRequest,
+  DelayedTransferAssessment,
+  DelayedTransferAssessmentRequest,
+  DelayedTransferClarificationRequest,
+  DelayedTransferTask,
+  DelayedTransferTaskRequest,
   ModelRuntime,
   ModelRuntimeCapabilities,
   ModelRuntimeEvent,
@@ -384,6 +389,93 @@ export class CodexAppServerRuntime implements ModelRuntime {
     });
   }
 
+  async createDelayedTransferTask(request: DelayedTransferTaskRequest): Promise<DelayedTransferTask> {
+    return this.withTeachingStartSignal(request.checkId, async () => {
+      if (request.signal.aborted) throw new Error("Delayed Transfer task generation was stopped.");
+      try {
+        const content = await this.runTurn(
+          [
+            "Create one unseen Delayed Transfer Check task for the learner.",
+            "Return only the requested JSON. The task must require the same underlying mathematical structure or proof method while changing the mathematical objects, mathematical conditions, and surface wording. Do not repeat, quote, or lightly rename the original problem. Do not include a solution or hint. Record the fresh task's own complete Evidence Transfer context; do not copy the original problem's structures or task demands.",
+            `Originating Learning Goal: ${request.originatingLearningGoal}`,
+            `Originating Session Target: ${request.originatingSessionTarget}`,
+            `Originating concepts: ${request.originatingConcepts.join(", ")}`,
+            `Intended transfer goal: ${request.intendedTransferGoal}`,
+            "Original mathematics (use only to design a structurally comparable but unseen task):",
+            request.originatingMathematics
+          ].join("\n\n"),
+          DELAYED_TRANSFER_TASK_SCHEMA,
+          undefined,
+          request.checkId,
+          request.onRuntimeEvent,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          request.signal
+        );
+        if (request.signal.aborted) throw new Error("Delayed Transfer task generation was stopped.");
+        return parseDelayedTransferTask(content);
+      } catch (error) {
+        request.onRuntimeEvent?.({ type: "turnFailed", threadId: "unavailable", turnId: null, detail: diagnosticMessage(error) });
+        throw error;
+      }
+    });
+  }
+
+  async clarifyDelayedTransferTask(request: DelayedTransferClarificationRequest): Promise<string> {
+    return this.withTeachingStartSignal(request.checkId, async () => {
+      if (request.signal.aborted) throw new Error("Delayed Transfer clarification was stopped.");
+      const content = await this.runTurn(
+        [
+          "Answer one clarification about a Delayed Transfer Check task in two concise sentences.",
+          "Clarify wording or setup without revealing the solution, selecting the key method, or evaluating the learner.",
+          `Task: ${request.task.prompt}`,
+          `Learner clarification question: ${request.question}`
+        ].join("\n\n"),
+        undefined,
+        undefined,
+        request.checkId,
+        request.onRuntimeEvent,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        request.signal
+      );
+      if (request.signal.aborted) throw new Error("Delayed Transfer clarification was stopped.");
+      return content;
+    });
+  }
+
+  async assessDelayedTransferWork(request: DelayedTransferAssessmentRequest): Promise<DelayedTransferAssessment> {
+    return this.withTeachingStartSignal(request.checkId, async () => {
+      if (request.signal.aborted) throw new Error("Delayed Transfer assessment was stopped.");
+      const content = await this.runTurn(
+        [
+          "Assess one completed Delayed Transfer Check and return only the requested JSON.",
+          "Distinguish the mathematical result, reasoning quality, confidence calibration, assistance used, and one specific misconception or strength. Do not assign a grade, global mastery, or failure label. Offer a narrow refresherGoal only when focused review would be useful; otherwise return null.",
+          `Task: ${request.task.prompt}`,
+          `Learner work: ${request.work || "not supplied"}`,
+          `Learner reasoning: ${request.reasoning || "not supplied"}`,
+          `Learner confidence: ${request.confidence ?? "not expressed"}`,
+          `Clarification assistance: ${request.clarifications.length === 0 ? "none" : JSON.stringify(request.clarifications)}`
+        ].join("\n\n"),
+        DELAYED_TRANSFER_ASSESSMENT_SCHEMA,
+        undefined,
+        request.checkId,
+        request.onRuntimeEvent,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        request.signal
+      );
+      if (request.signal.aborted) throw new Error("Delayed Transfer assessment was stopped.");
+      return parseDelayedTransferAssessment(content);
+    });
+  }
+
   async synthesizeArtifact(request: ArtifactSynthesisRequest): Promise<ArtifactSynthesisResult> {
     if (request.signal.aborted) throw new Error("Learning Artifact synthesis was stopped.");
     try {
@@ -519,7 +611,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
     teachingRequest?: TeachingRequest,
     baseInstructionsOverride?: string,
     turnTimeoutMs = this.turnTimeoutMs,
-    specialistRequest?: SpecialistAgentRequest
+    specialistRequest?: SpecialistAgentRequest,
+    abortSignal?: AbortSignal
   ): Promise<string> {
     const accessPolicy = teachingRequest?.accessScope.policy ?? "focused";
     const anchoredFocus = Boolean(teachingRequest?.focus);
@@ -579,6 +672,13 @@ export class CodexAppServerRuntime implements ModelRuntime {
       }).catch(() => undefined);
       throw new Error("Specialist Agent work was stopped.");
     }
+    if (abortSignal?.aborted) {
+      await this.client.request("turn/interrupt", {
+        threadId: threadResponse.thread.id,
+        turnId: turnResponse.turn.id
+      }).catch(() => undefined);
+      throw new Error("Model work was stopped.");
+    }
     onRuntimeEvent?.({
       type: "turnStarted",
       threadId: threadResponse.thread.id,
@@ -593,7 +693,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
     });
 
     return new Promise<string>((resolve, reject) => {
-      const abortListener = specialistRequest ? () => {
+      const activeAbortSignal = specialistRequest?.signal ?? abortSignal;
+      const abortListener = activeAbortSignal ? () => {
         void this.client.request("turn/interrupt", {
           threadId: threadResponse.thread.id,
           turnId: turnResponse.turn.id
@@ -613,12 +714,12 @@ export class CodexAppServerRuntime implements ModelRuntime {
         specialistMaxTokens: specialistRequest?.budget.maxTokens,
         lastSpecialistCheckpoint: "",
         budgetExceeded: false,
-        abortSignal: specialistRequest?.signal,
+        abortSignal: activeAbortSignal,
         abortListener
       });
       if (abortListener) {
-        specialistRequest!.signal.addEventListener("abort", abortListener, { once: true });
-        if (specialistRequest!.signal.aborted) abortListener();
+        activeAbortSignal!.addEventListener("abort", abortListener, { once: true });
+        if (activeAbortSignal!.aborted) abortListener();
       }
       this.turnRegistrationWaiters.get(turnResponse.turn.id)?.();
       if (sessionId) {
@@ -1225,6 +1326,53 @@ const SPECIALIST_AGENT_RESULT_SCHEMA = {
   }
 } as const;
 
+const DELAYED_TRANSFER_TASK_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["prompt", "concept", "taskDemand", "structuralComparison", "mathematicalContext"],
+  properties: {
+    prompt: { type: "string" },
+    concept: { type: "string" },
+    taskDemand: { type: "string" },
+    structuralComparison: { type: "string" },
+    mathematicalContext: {
+      type: "object",
+      additionalProperties: false,
+      required: ["concepts", "mathematicalStructures", "prerequisiteRelationships", "taskDemands"],
+      properties: {
+        concepts: { type: "array", minItems: 1, items: { type: "string" } },
+        mathematicalStructures: { type: "array", minItems: 1, items: { type: "string" } },
+        prerequisiteRelationships: {
+          type: "array", minItems: 1,
+          items: {
+            type: "object", additionalProperties: false,
+            required: ["prerequisiteConcept", "supportsConcept", "relationship"],
+            properties: {
+              prerequisiteConcept: { type: "string" }, supportsConcept: { type: "string" },
+              relationship: { type: "string", enum: ["requiredFor"] }
+            }
+          }
+        },
+        taskDemands: { type: "array", minItems: 1, items: { type: "string" } }
+      }
+    }
+  }
+} as const;
+
+const DELAYED_TRANSFER_ASSESSMENT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["result", "reasoningQuality", "confidenceCalibration", "misconceptionOrStrength", "recommendedNextAction", "refresherGoal"],
+  properties: {
+    result: { type: "string", enum: ["demonstrated", "partial", "difficulty"] },
+    reasoningQuality: { type: "string", enum: ["strong", "developing", "unclear"] },
+    confidenceCalibration: { type: "string", enum: ["aligned", "overconfident", "underconfident", "notExpressed"] },
+    misconceptionOrStrength: { type: "string" },
+    recommendedNextAction: { type: "string" },
+    refresherGoal: { type: ["string", "null"] }
+  }
+} as const;
+
 const SPECIALIST_CHECKPOINT_TOOL = {
   type: "function",
   name: "checkpoint_specialist_result",
@@ -1289,6 +1437,42 @@ function parseSpecialistAgentResult(content: string): SpecialistAgentResult {
     throw new Error("Codex returned a malformed Specialist Agent result. Retry to request a fresh review.");
   }
   return value as unknown as SpecialistAgentResult;
+}
+
+function parseDelayedTransferTask(content: string): DelayedTransferTask {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new Error("Codex returned a malformed Delayed Transfer task. Retry to request a fresh task.");
+  }
+  if (!isRecord(value) || [value.prompt, value.concept, value.taskDemand, value.structuralComparison]
+    .some((field) => typeof field !== "string" || !field.trim())
+    || !isCompleteEvidenceTransferContext(value.mathematicalContext)
+    || !value.mathematicalContext.concepts.includes(value.concept as string)
+    || !value.mathematicalContext.taskDemands.includes(value.taskDemand as string)) {
+    throw new Error("Codex returned a malformed Delayed Transfer task. Retry to request a fresh task.");
+  }
+  return value as unknown as DelayedTransferTask;
+}
+
+function parseDelayedTransferAssessment(content: string): DelayedTransferAssessment {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new Error("Codex returned a malformed Delayed Check Result. Retry the assessment.");
+  }
+  if (!isRecord(value)
+    || !["demonstrated", "partial", "difficulty"].includes(String(value.result))
+    || !["strong", "developing", "unclear"].includes(String(value.reasoningQuality))
+    || !["aligned", "overconfident", "underconfident", "notExpressed"].includes(String(value.confidenceCalibration))
+    || typeof value.misconceptionOrStrength !== "string" || !value.misconceptionOrStrength.trim()
+    || typeof value.recommendedNextAction !== "string" || !value.recommendedNextAction.trim()
+    || !(value.refresherGoal === null || (typeof value.refresherGoal === "string" && Boolean(value.refresherGoal.trim())))) {
+    throw new Error("Codex returned a malformed Delayed Check Result. Retry the assessment.");
+  }
+  return value as unknown as DelayedTransferAssessment;
 }
 
 function validArgumentRoadmapProposal(value: unknown): boolean {

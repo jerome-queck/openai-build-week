@@ -943,7 +943,14 @@ describe("anchored teaching workbench", () => {
       scheduledAt: "2026-07-20T12:00:00.000Z",
       updatedAt: "2026-07-20T12:00:00.000Z",
       dueAt: "2026-07-27T12:00:00.000Z",
-      status: "scheduled"
+      relevantSourceAnchorId: "anchor-1",
+      relevantTrailItemId: null,
+      status: "scheduled",
+      task: null,
+      taskError: null,
+      draft: { work: "", reasoning: "", confidence: null, clarifications: [] },
+      evidence: null,
+      result: null
     }];
     const queueState = structuredClone(state);
     queueState.screen = "followUps";
@@ -956,6 +963,9 @@ describe("anchored teaching workbench", () => {
     render(<App />);
     const followUps = await screen.findByRole("region", { name: "Follow-ups" });
     expect(within(followUps).getAllByRole("button", { name: /Open Follow-up Queue/ })).toHaveLength(1);
+    expect(within(followUps).getByRole("button", {
+      name: "Open Follow-up Queue with 1 active or completed item"
+    })).toBeTruthy();
     expect(followUps.textContent).toContain("1 scheduled");
     expect(screen.queryByRole("region", { name: "Follow-up Queue" })).toBeNull();
     await user.click(within(followUps).getByRole("button", { name: /Open Follow-up Queue/ }));
@@ -984,6 +994,41 @@ describe("anchored teaching workbench", () => {
     expect(api.submit).toHaveBeenCalledWith({ type: "cancelDelayedTransfer", checkId: "follow-up-1" });
   });
 
+  it("shows task preparation as pending and lets the learner cancel it", async () => {
+    const user = userEvent.setup();
+    const state = addressedDashboardState();
+    state.screen = "followUps";
+    state.sessions[0].delayedTransferOffer!.status = "scheduled";
+    state.delayedTransferChecks = [{
+      id: "follow-up-preparing", relatedSessionId: "session-1", relatedLearningSessionGoal: "Understand compactness",
+      originatingSessionTarget: "Explain the selected claim", originatingConcepts: ["compactness"],
+      intendedTransferGoal: "Apply compactness in a fresh proof.", scheduledAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-27T12:00:00.000Z", dueAt: "2026-07-27T12:00:00.000Z", status: "preparing",
+      relevantSourceAnchorId: "anchor-1", relevantTrailItemId: null,
+      task: null, taskError: null,
+      draft: { work: "", reasoning: "", confidence: null, clarifications: [] }, evidence: null, result: null
+    }];
+    const cancelled = structuredClone(state);
+    cancelled.delayedTransferChecks[0].status = "scheduled";
+    const api = quickStudyApi(state);
+    vi.mocked(api.submit).mockResolvedValue(cancelled);
+    window.quickStudy = api;
+
+    render(<App />);
+    const queue = await screen.findByRole("region", { name: "Follow-up Queue" });
+    expect(within(queue).getByRole("status").textContent).toContain("Preparing an unseen");
+    expect(within(queue).queryByRole("button", { name: /Start delayed check/ })).toBeNull();
+    expect(within(queue).queryByRole("button", { name: /Skip delayed check/ })).toBeNull();
+    expect(within(queue).queryByRole("button", { name: /Cancel follow-up/ })).toBeNull();
+    await user.click(within(queue).getByRole("button", {
+      name: "Cancel task preparation for Explain the selected claim"
+    }));
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "cancelDelayedTransferPreparation",
+      checkId: "follow-up-preparing"
+    });
+  });
+
   it("updates the Follow-ups ready count when the next scheduled check becomes due", async () => {
     vi.useFakeTimers();
     try {
@@ -994,7 +1039,10 @@ describe("anchored teaching workbench", () => {
         id: "follow-up-soon", relatedSessionId: "session-1", relatedLearningSessionGoal: "Understand compactness",
         originatingSessionTarget: "Explain the selected claim", originatingConcepts: ["compactness"],
         intendedTransferGoal: "Apply compactness in a fresh proof.", scheduledAt: "2026-07-20T11:00:00.000Z",
-        updatedAt: "2026-07-20T11:00:00.000Z", dueAt: "2026-07-20T12:00:01.000Z", status: "scheduled"
+        updatedAt: "2026-07-20T11:00:00.000Z", dueAt: "2026-07-20T12:00:01.000Z", status: "scheduled",
+        relevantSourceAnchorId: "anchor-1", relevantTrailItemId: null,
+        task: null, taskError: null,
+        draft: { work: "", reasoning: "", confidence: null, clarifications: [] }, evidence: null, result: null
       }];
       window.quickStudy = quickStudyApi(state);
       render(<App />);
@@ -1017,7 +1065,10 @@ describe("anchored teaching workbench", () => {
       id: "follow-up-1", relatedSessionId: "session-1", relatedLearningSessionGoal: "Understand compactness",
       originatingSessionTarget: "Explain the selected claim", originatingConcepts: ["compactness"],
       intendedTransferGoal: "Apply compactness in a fresh proof.", scheduledAt: "2026-07-20T12:00:00.000Z",
-      updatedAt: "2026-07-20T12:00:00.000Z", dueAt: "2026-07-27T12:00:00.000Z", status: "scheduled"
+      updatedAt: "2026-07-20T12:00:00.000Z", dueAt: "2026-07-27T12:00:00.000Z", status: "scheduled",
+      relevantSourceAnchorId: "anchor-1", relevantTrailItemId: null,
+      task: null, taskError: null,
+      draft: { work: "", reasoning: "", confidence: null, clarifications: [] }, evidence: null, result: null
     }];
     const api = quickStudyApi(state);
     vi.mocked(api.submit).mockRejectedValue(new Error("Persistence unavailable"));
@@ -1068,6 +1119,108 @@ describe("anchored teaching workbench", () => {
     expect((within(prompt).getByLabelText("Intended transfer goal") as HTMLTextAreaElement).value).toBe(
       "Apply Apply the diagonal argument to a fresh, structurally comparable problem."
     );
+  });
+
+  it("supports a focused delayed check with reasoning, confidence, clarification, and an optional refresher", async () => {
+    const user = userEvent.setup();
+    const queued = addressedDashboardState();
+    queued.screen = "followUps";
+    queued.sessions[0].delayedTransferOffer!.status = "scheduled";
+    queued.delayedTransferChecks = [{
+      id: "follow-up-due", relatedSessionId: "session-1", relatedLearningSessionGoal: "Understand compactness",
+      originatingSessionTarget: "Explain the selected claim", originatingConcepts: ["compactness"],
+      intendedTransferGoal: "Apply compactness in a fresh proof.", scheduledAt: "2026-07-01T12:00:00.000Z",
+      updatedAt: "2026-07-01T12:00:00.000Z", dueAt: "2026-07-02T12:00:00.000Z", status: "scheduled",
+      relevantSourceAnchorId: "anchor-1", relevantTrailItemId: null,
+      task: null, taskError: null,
+      draft: { work: "", reasoning: "", confidence: null, clarifications: [] }, evidence: null, result: null
+    }];
+    const inProgress = structuredClone(queued);
+    inProgress.screen = "delayedTransfer";
+    inProgress.activeDelayedTransferCheckId = "follow-up-due";
+    Object.assign(inProgress.delayedTransferChecks[0], {
+      status: "inProgress",
+      task: {
+        prompt: "A collection of local estimates covers a compact parameter space. Explain how to obtain one uniform bound.",
+        concept: "finite subcover",
+        taskDemand: "transfer the local-to-finite-global structure",
+        structuralComparison: "This changes the objects while preserving the finite-subcover proof step.",
+        mathematicalContext: {
+          concepts: ["finite subcover"], mathematicalStructures: ["compact parameter space with local bounds"],
+          prerequisiteRelationships: [{
+            prerequisiteConcept: "open cover", supportsConcept: "finite subcover", relationship: "requiredFor"
+          }], taskDemands: ["derive a uniform bound from finitely many local bounds"]
+        }
+      }
+    });
+    const clarified = structuredClone(inProgress);
+    clarified.delayedTransferChecks[0].draft = {
+      work: "Choose a finite subcover and take the largest local bound.",
+      reasoning: "Compactness makes the cover finite.",
+      confidence: "medium",
+      clarifications: [{
+        question: "What should form the cover?",
+        response: "Use the parameter neighbourhoods where each local estimate holds; the finite reduction remains yours to justify.",
+        requestedAt: "2026-07-03T12:00:00.000Z"
+      }]
+    };
+    const completed = structuredClone(clarified);
+    completed.delayedTransferChecks[0].status = "completed";
+    completed.delayedTransferChecks[0].evidence = {
+      id: "delayed-evidence-1", checkId: "follow-up-due", originatingSessionId: "session-1",
+      dueAt: "2026-07-02T12:00:00.000Z", completedAt: "2026-07-03T12:00:00.000Z",
+      scheduledDelayMs: 86_400_000, completionDelayMs: 86_400_000,
+      task: inProgress.delayedTransferChecks[0].task!,
+      mathematicalContext: inProgress.delayedTransferChecks[0].task!.mathematicalContext,
+      work: clarified.delayedTransferChecks[0].draft.work,
+      reasoning: clarified.delayedTransferChecks[0].draft.reasoning,
+      confidence: "medium", assistanceUsed: true, result: "partial", reasoningQuality: "developing",
+      confidenceCalibration: "aligned",
+      misconceptionOrStrength: "The finite reduction is correct, but the uniform-maximum justification is incomplete.",
+      recommendedNextAction: "Review why the maximum controls every parameter."
+    };
+    completed.delayedTransferChecks[0].result = {
+      evidenceId: "delayed-evidence-1",
+      refresherOffer: { status: "pending", goal: "Connect the finite subcover to one uniform bound.", refresherSessionId: null }
+    };
+    const api = quickStudyApi(queued);
+    vi.mocked(api.submit).mockImplementation(async (action) => {
+      if (action.type === "startDelayedTransferCheck") return inProgress;
+      if (action.type === "saveDelayedTransferDraft") return clarified;
+      if (action.type === "requestDelayedTransferClarification") return clarified;
+      if (action.type === "completeDelayedTransferCheck") return completed;
+      return completed;
+    });
+    window.quickStudy = api;
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Start delayed check for Explain the selected claim" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "startDelayedTransferCheck", checkId: "follow-up-due" });
+    const check = await screen.findByRole("region", { name: "Delayed Transfer Check" });
+    expect(check.textContent).toContain("A collection of local estimates covers a compact parameter space");
+    expect(check.textContent).toContain("Completing late creates no penalty");
+    await user.type(within(check).getByLabelText("Your work"), "Choose a finite subcover and take the largest local bound.");
+    await user.type(within(check).getByLabelText("Explain your reasoning"), "Compactness makes the cover finite.");
+    await user.click(within(check).getByRole("radio", { name: "Medium confidence" }));
+    await user.click(within(check).getByRole("button", { name: "Save check work" }));
+    expect(api.submit).toHaveBeenCalledWith({
+      type: "saveDelayedTransferDraft", checkId: "follow-up-due",
+      work: "Choose a finite subcover and take the largest local bound.",
+      reasoning: "Compactness makes the cover finite.", confidence: "medium"
+    });
+    await user.type(within(check).getByLabelText("Ask for clarification"), "What should form the cover?");
+    await user.click(within(check).getByRole("button", { name: "Request clarification" }));
+    expect(await within(check).findByText(/Use the parameter neighbourhoods/)).toBeTruthy();
+    await user.click(within(check).getByRole("button", { name: "Complete delayed check" }));
+
+    const result = await screen.findByRole("region", { name: "Delayed Check Result" });
+    expect(result.textContent).toContain("Partial evidence");
+    expect(result.textContent).toContain("Developing reasoning");
+    expect(result.textContent).toContain("Confidence aligned");
+    expect(result.textContent).toContain("Clarification assistance used");
+    expect(result.textContent).not.toContain("mastered");
+    await user.click(within(result).getByRole("button", { name: "Start refresher session" }));
+    expect(api.submit).toHaveBeenCalledWith({ type: "acceptDelayedTransferRefresher", checkId: "follow-up-due" });
   });
 
   it("shows a compact Consolidated Session Outcome with expandable required detail and continuation", async () => {
@@ -1416,6 +1569,7 @@ function workbenchState(): LearningApplicationState {
       consolidatedOutcome: null,
       delayedTransferOffer: null,
       continuationOf: null,
+      refresherOf: null,
       modelStopConfirmation: null,
       learningSlice: null
     }],
@@ -1454,6 +1608,7 @@ function workbenchState(): LearningApplicationState {
       installedBytes: 734_003_200, lastRemovedLogicalBytes: 0, error: null
     },
     delayedTransferChecks: [],
+    activeDelayedTransferCheckId: null,
     activeSessionId: "session-1",
     resumeSessionId: "session-1",
     navigation: { workspaceId: "quick-study-workspace", missionId: "quick-study-unfiled-mission" },

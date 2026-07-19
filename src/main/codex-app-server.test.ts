@@ -530,6 +530,119 @@ describe("Codex app-server contract", () => {
     expect(JSON.stringify(synthesisTurn.params)).toContain("authorized only for this artifact synthesis");
   });
 
+  it("generates, clarifies, and assesses a delayed task through bounded structured turns", async () => {
+    let turnNumber = 0;
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") {
+        transport.respond(message.id, { thread: { id: `delayed-thread-${turnNumber + 1}` } });
+      }
+      if (message.method === "turn/start") {
+        turnNumber += 1;
+        const params = message.params as { threadId: string; input: Array<{ text: string }>; outputSchema?: unknown };
+        const turnId = `delayed-turn-${turnNumber}`;
+        transport.respond(message.id, { turn: { id: turnId } });
+        const prompt = params.input[0].text;
+        const delta = prompt.includes("Create one unseen Delayed Transfer Check task")
+          ? JSON.stringify({
+              prompt: "A compact parameter space has local bounds. Explain how to obtain one uniform bound.",
+              concept: "finite subcover",
+              taskDemand: "transfer a local-to-finite-global argument",
+              structuralComparison: "The objects change while the compactness reduction remains.",
+              mathematicalContext: {
+                concepts: ["finite subcover"], mathematicalStructures: ["compact parameter space with local bounds"],
+                prerequisiteRelationships: [{
+                  prerequisiteConcept: "open cover", supportsConcept: "finite subcover", relationship: "requiredFor"
+                }], taskDemands: ["transfer a local-to-finite-global argument"]
+              }
+            })
+          : prompt.includes("Answer one clarification")
+            ? "Use the parameter neighbourhoods on which each local estimate holds."
+            : JSON.stringify({
+                result: "partial", reasoningQuality: "developing", confidenceCalibration: "aligned",
+                misconceptionOrStrength: "The finite maximum still needs justification.",
+                recommendedNextAction: "Explain why the maximum controls every parameter.",
+                refresherGoal: "Connect the finite subcover to the uniform maximum."
+              });
+        transport.notify("item/agentMessage/delta", {
+          threadId: params.threadId, turnId, itemId: `delayed-item-${turnNumber}`, delta
+        });
+        transport.notify("turn/completed", {
+          threadId: params.threadId, turn: { id: turnId, status: "completed", error: null }
+        });
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    const signal = new AbortController().signal;
+    const task = await runtime.createDelayedTransferTask({
+      checkId: "check-1", originatingSessionId: "session-1",
+      originatingLearningGoal: "Understand compactness", originatingSessionTarget: "Explain the finite-subcover step",
+      originatingConcepts: ["finite subcover"], intendedTransferGoal: "Apply compactness in a new proof.",
+      originatingMathematics: "Show that a compact subset of a Hausdorff space is closed.", signal
+    });
+    expect(task).toMatchObject({ concept: "finite subcover", taskDemand: expect.stringContaining("local-to-finite") });
+    await expect(runtime.clarifyDelayedTransferTask({
+      checkId: "check-1", task, question: "Which sets form the cover?", signal
+    })).resolves.toContain("parameter neighbourhoods");
+    await expect(runtime.assessDelayedTransferWork({
+      checkId: "check-1", task, work: "Take a finite subcover and a maximum.",
+      reasoning: "Compactness makes the family finite.", confidence: "medium",
+      clarifications: [{ question: "Which sets form the cover?", response: "Use the parameter neighbourhoods." }], signal
+    })).resolves.toMatchObject({
+      result: "partial", reasoningQuality: "developing", confidenceCalibration: "aligned",
+      refresherGoal: "Connect the finite subcover to the uniform maximum."
+    });
+    const turns = transport.messages.filter((message) => message.method === "turn/start");
+    expect(turns).toHaveLength(3);
+    expect(turns[0]).toMatchObject({ params: { outputSchema: { required: ["prompt", "concept", "taskDemand", "structuralComparison", "mathematicalContext"] } } });
+    expect(turns[1].params).not.toHaveProperty("outputSchema");
+    expect(turns[2]).toMatchObject({ params: { outputSchema: { properties: { refresherGoal: { type: ["string", "null"] } } } } });
+    expect(JSON.stringify(turns[0])).toContain("Do not repeat, quote, or lightly rename");
+    expect(JSON.stringify(turns[2])).toContain("Do not assign a grade, global mastery, or failure label");
+  });
+
+  it("interrupts delayed task preparation when its abort signal fires", async () => {
+    const transport = new ScriptedTransport((message) => {
+      if (!("id" in message)) return;
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1", codexHome: "/tmp/codex-home", platformFamily: "unix", platformOs: "macos"
+        });
+      }
+      if (message.method === "thread/start") transport.respond(message.id, { thread: { id: "delayed-abort-thread" } });
+      if (message.method === "turn/start") transport.respond(message.id, { turn: { id: "delayed-abort-turn" } });
+      if (message.method === "turn/interrupt") {
+        transport.respond(message.id, {});
+        queueMicrotask(() => transport.notify("turn/completed", {
+          threadId: "delayed-abort-thread",
+          turn: { id: "delayed-abort-turn", status: "interrupted", error: null }
+        }));
+      }
+    });
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+    const controller = new AbortController();
+    const task = runtime.createDelayedTransferTask({
+      checkId: "check-abort", originatingSessionId: "session-1",
+      originatingLearningGoal: "Understand compactness", originatingSessionTarget: "Explain the finite-subcover step",
+      originatingConcepts: ["finite subcover"], intendedTransferGoal: "Apply compactness in a new proof.",
+      originatingMathematics: "Show that a compact subset of a Hausdorff space is closed.", signal: controller.signal
+    });
+    await transport.waitForMessage("turn/start");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    controller.abort();
+
+    await expect(task).rejects.toThrow("interrupted");
+    expect(transport.messages.find((message) => message.method === "turn/interrupt")).toMatchObject({
+      params: { threadId: "delayed-abort-thread", turnId: "delayed-abort-turn" }
+    });
+  });
+
   it("runs one Specialist Agent with only its checkpoint tool and the supplied Agent Brief", async () => {
     const transport = new ScriptedTransport((message) => {
       if (!("id" in message)) return;

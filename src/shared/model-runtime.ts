@@ -159,6 +159,54 @@ export interface ArtifactSynthesisResult {
   }>;
 }
 
+export interface DelayedTransferTask {
+  prompt: string;
+  concept: string;
+  taskDemand: string;
+  structuralComparison: string;
+  mathematicalContext: EvidenceTransferContext;
+}
+
+export interface DelayedTransferTaskRequest {
+  checkId: string;
+  originatingSessionId: string;
+  originatingLearningGoal: string;
+  originatingSessionTarget: string;
+  originatingConcepts: string[];
+  intendedTransferGoal: string;
+  originatingMathematics: string;
+  signal: AbortSignal;
+  onRuntimeEvent?(event: ModelRuntimeEvent): void;
+}
+
+export interface DelayedTransferClarificationRequest {
+  checkId: string;
+  task: DelayedTransferTask;
+  question: string;
+  signal: AbortSignal;
+  onRuntimeEvent?(event: ModelRuntimeEvent): void;
+}
+
+export interface DelayedTransferAssessment {
+  result: "demonstrated" | "partial" | "difficulty";
+  reasoningQuality: "strong" | "developing" | "unclear";
+  confidenceCalibration: "aligned" | "overconfident" | "underconfident" | "notExpressed";
+  misconceptionOrStrength: string;
+  recommendedNextAction: string;
+  refresherGoal: string | null;
+}
+
+export interface DelayedTransferAssessmentRequest {
+  checkId: string;
+  task: DelayedTransferTask;
+  work: string;
+  reasoning: string;
+  confidence: "low" | "medium" | "high" | null;
+  clarifications: Array<{ question: string; response: string }>;
+  signal: AbortSignal;
+  onRuntimeEvent?(event: ModelRuntimeEvent): void;
+}
+
 export interface AgentBrief {
   learningGoal: string;
   sourceAnchors: Array<{
@@ -226,6 +274,9 @@ export interface ModelRuntime {
   startChatGptLogin(): Promise<ChatGptLogin>;
   loginWithApiKey(apiKey: string): Promise<void>;
   proposeSession(mathematics: string, onRuntimeEvent?: (event: ModelRuntimeEvent) => void): Promise<SessionProposal>;
+  createDelayedTransferTask(request: DelayedTransferTaskRequest): Promise<DelayedTransferTask>;
+  clarifyDelayedTransferTask(request: DelayedTransferClarificationRequest): Promise<string>;
+  assessDelayedTransferWork(request: DelayedTransferAssessmentRequest): Promise<DelayedTransferAssessment>;
   createConceptPeek(request: ConceptPeekRequest): Promise<string>;
   synthesizeArtifact(request: ArtifactSynthesisRequest): Promise<ArtifactSynthesisResult>;
   runSpecialistAgent(request: SpecialistAgentRequest): Promise<SpecialistAgentResult>;
