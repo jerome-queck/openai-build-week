@@ -2361,6 +2361,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
       </div>
       <label htmlFor={`artifact-content-${artifact.id}`}>Learning Artifact content for {artifact.title}</label>
       <textarea ref={contentRef} id={`artifact-content-${artifact.id}`} className="artifact-content" value={content}
+        disabled={artifact.regenerationTask?.status === "working"}
         onChange={(event) => setContent(event.target.value)} />
       <section className="artifact-regeneration" aria-label={`Regenerate ${artifact.title}`}>
         <h3>Regenerate with model help</h3>
@@ -2436,7 +2437,8 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
       </fieldset>
       <button className="secondary" aria-label={`Save Learning Artifact revision for ${artifact.title}`}
         disabled={!content.trim() || claimEdits.some((claim) => !claim.statement.trim())
-          || (content === artifact.currentRevision.content && !claimsChanged)}
+          || (content === artifact.currentRevision.content && !claimsChanged)
+          || artifact.regenerationTask?.status === "working"}
         onClick={() => void save()}>Save Learning Artifact revision</button>
       <button className="secondary" aria-label={`Synthesize Learning Artifact ${artifact.title}`}
         disabled={!modelAvailable || !wholeReplacementConfirmed || synthesisStatus === "Synthesizing Learning Artifact…"}
