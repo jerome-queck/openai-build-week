@@ -16,12 +16,15 @@
     "build:native-helpers": "mkdir -p dist/helpers && xcrun swiftc native/source-index-extractor.swift -o dist/helpers/source-index-extractor -framework AppKit -framework PDFKit -framework Vision && xcrun swiftc native/source-bookmark-helper.swift -o dist/helpers/source-bookmark-helper -framework Foundation",
     "build:verifier": "node scripts/prepare-lean-runtime.mjs",
     "lint": "tsc --noEmit --pretty false",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.quality-gate.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "build:quality-gate": "tsc -p tsconfig.quality-gate.json",
+    "quality:gate": "npm run build:quality-gate && node dist/quality-gate/quality-gate-cli.js",
+    "quality:gate:fixture": "npm run quality:gate -- --evidence evaluation/fixtures/passing-evidence-v1.json --out test-results/quality-gate",
     "package": "npm run build && electron-forge package --platform=darwin",
     "test:smoke": "playwright test --config=playwright.config.ts",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run package && npm run test:smoke"
+    "verify": "npm run lint && npm run typecheck && npm test && npm run quality:gate:fixture && npm run package && npm run test:smoke"
   },
   "dependencies": {
     "react": "19.2.7",

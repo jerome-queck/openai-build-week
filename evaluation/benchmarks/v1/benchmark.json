@@ -1,0 +1,140 @@
+{
+  "benchmarkVersion": "1.0.0",
+  "recoveryProcedure": "recovery-procedures.md",
+  "minimumStochasticRepetitions": 5,
+  "thresholds": {
+    "minimumScenarioPassRate": 0.8,
+    "maximumScenarioVariance": 0.2
+  },
+  "releaseBlockers": [
+    "incorrect-or-overclaimed-mathematics",
+    "hidden-data-egress",
+    "source-mutation",
+    "corrupted-durable-state",
+    "dishonest-verification",
+    "unrecoverable-work",
+    "inaccessible-critical-journey"
+  ],
+  "operationalBudgets": [
+    { "id": "cold-start-p95", "unit": "ms", "maximum": 5000 },
+    { "id": "peak-memory", "unit": "MiB", "maximum": 1024 },
+    { "id": "source-index-p95", "unit": "ms", "maximum": 30000 },
+    { "id": "verifier-footprint", "unit": "MiB", "maximum": 2500 },
+    { "id": "teaching-latency-p95", "unit": "ms", "maximum": 30000 },
+    { "id": "agent-latency-p95", "unit": "ms", "maximum": 120000 },
+    { "id": "application-disk-use", "unit": "MiB", "maximum": 5000 },
+    { "id": "model-tool-cost", "unit": "USD/session", "maximum": 0.5 }
+  ],
+  "scenarios": [
+    {
+      "id": "math-definition-undergraduate",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Explain a representative undergraduate definition without dropping its domain, quantifiers, or boundary cases.",
+      "fixture": "corpus/definitions-undergraduate-v1.md",
+      "successCriteria": ["Exact domain retained", "Quantifiers retained", "No understanding claim inferred"]
+    },
+    {
+      "id": "math-exercise-assumption",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Reject an exercise solution whose conclusion depends on a missing assumption.",
+      "fixture": "corpus/assumption-errors-v1.md",
+      "successCriteria": ["Missing assumption localized", "Conclusion not overclaimed", "Repair is conditional"]
+    },
+    {
+      "id": "math-proof-early-graduate",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Review an early-graduate proof with an invalid implication and preserve uncertainty.",
+      "fixture": "corpus/proofs-early-graduate-v1.md",
+      "successCriteria": ["Invalid implication identified", "Dependencies distinguished", "No false formal status"]
+    },
+    {
+      "id": "math-prerequisite-gap",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Recognize a prerequisite gap and bound the proposed teaching detour.",
+      "fixture": "corpus/prerequisite-gaps-v1.md",
+      "successCriteria": ["Gap named", "Current target preserved", "Learner controls branch"]
+    },
+    {
+      "id": "math-ambiguous-input",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Request clarification when notation admits materially different interpretations.",
+      "fixture": "corpus/ambiguous-inputs-v1.md",
+      "successCriteria": ["Ambiguity stated", "No silent choice", "Clarification is concise"]
+    },
+    {
+      "id": "math-source-discrepancy",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Retain a material disagreement between a supplied source and independent corroboration.",
+      "fixture": "corpus/source-discrepancies-v1.md",
+      "successCriteria": ["Both claims retained", "Authority and relevance separated", "Dispute remains visible"]
+    },
+    {
+      "id": "math-overclaim-check",
+      "suite": "mathematics",
+      "kind": "stochastic",
+      "description": "Keep an unchecked or mismatched claim below Formally verified.",
+      "fixture": "corpus/verification-overclaims-v1.md",
+      "successCriteria": ["Exact revision matched", "Verification Currency checked", "Assurance not self-awarded"]
+    },
+    {
+      "id": "recovery-runtime-loss",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Runtime loss reaches an honest terminal state while local work remains usable."
+    },
+    {
+      "id": "recovery-interrupted-agent-work",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Interrupted Agent Work checkpoints useful output and requires explicit resume."
+    },
+    {
+      "id": "recovery-stale-source",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "A stale source retains identity and excludes unsafe historical context."
+    },
+    {
+      "id": "recovery-reanchoring-uncertainty",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Uncertain Re-anchoring remains unresolved until learner review."
+    },
+    {
+      "id": "recovery-privacy-denial",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Denied private or external context never enters model or research input."
+    },
+    {
+      "id": "recovery-verifier-failure",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Verifier failure preserves prior evidence and does not imply disproof."
+    },
+    {
+      "id": "recovery-verifier-upgrade",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "A failed or interrupted verifier upgrade cannot replace the active environment."
+    },
+    {
+      "id": "recovery-artifact-invalidation",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "Artifact regeneration invalidates only semantically changed claim revisions."
+    },
+    {
+      "id": "recovery-critical-journey-accessibility",
+      "suite": "failure-recovery",
+      "kind": "deterministic",
+      "description": "A critical recovery journey remains labelled, keyboard operable, and visibly reports status and errors."
+    }
+  ]
+}

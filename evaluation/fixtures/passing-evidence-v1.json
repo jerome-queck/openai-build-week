@@ -1,0 +1,81 @@
+{
+  "benchmarkVersion": "1.0.0",
+  "release": { "id": "fixture-pass-v1", "commit": "not-a-release-commit" },
+  "recordedAt": "2026-07-20T00:00:00.000Z",
+  "versions": {
+    "application": "0.1.0-fixture",
+    "modelRuntime": "deterministic-fixture-runtime-v1",
+    "verifier": "lean-4.29.1-mathlib-4.29.1-fixture"
+  },
+  "environment": {
+    "hardware": "fixture-apple-silicon",
+    "operatingSystem": "fixture-macos",
+    "node": "fixture-node-24",
+    "electron": "fixture-electron-43.1.1"
+  },
+  "trials": [
+    { "scenarioId": "math-definition-undergraduate", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-definition-undergraduate", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-definition-undergraduate", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-definition-undergraduate", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-definition-undergraduate", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-exercise-assumption", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-exercise-assumption", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-exercise-assumption", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-exercise-assumption", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-exercise-assumption", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-proof-early-graduate", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-proof-early-graduate", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-proof-early-graduate", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-proof-early-graduate", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-proof-early-graduate", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-prerequisite-gap", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-prerequisite-gap", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-prerequisite-gap", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-prerequisite-gap", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-prerequisite-gap", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-ambiguous-input", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-ambiguous-input", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-ambiguous-input", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-ambiguous-input", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-ambiguous-input", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-source-discrepancy", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-source-discrepancy", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-source-discrepancy", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-source-discrepancy", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-source-discrepancy", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-overclaim-check", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-overclaim-check", "run": 2, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-overclaim-check", "run": 3, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-overclaim-check", "run": 4, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "math-overclaim-check", "run": 5, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-runtime-loss", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-interrupted-agent-work", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-stale-source", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-reanchoring-uncertainty", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-privacy-denial", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-verifier-failure", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-verifier-upgrade", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-artifact-invalidation", "run": 1, "passed": true, "observedBlockers": [] },
+    { "scenarioId": "recovery-critical-journey-accessibility", "run": 1, "passed": true, "observedBlockers": [] }
+  ],
+  "operationalMeasurements": [
+    { "budgetId": "cold-start-p95", "value": 1000 },
+    { "budgetId": "peak-memory", "value": 256 },
+    { "budgetId": "source-index-p95", "value": 5000 },
+    { "budgetId": "verifier-footprint", "value": 1200 },
+    { "budgetId": "teaching-latency-p95", "value": 5000 },
+    { "budgetId": "agent-latency-p95", "value": 30000 },
+    { "budgetId": "application-disk-use", "value": 2000 },
+    { "budgetId": "model-tool-cost", "value": 0.1 }
+  ],
+  "allowedExceptions": [],
+  "knownLimitations": [
+    "This deterministic fixture verifies the harness only; it is not release evidence and supports no product or learning claim."
+  ],
+  "productLearningObservations": [],
+  "causalLearningEvidence": {
+    "claimSupported": false,
+    "summary": "No moderated or randomized study is represented by this harness fixture."
+  }
+}

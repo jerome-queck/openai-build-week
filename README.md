@@ -43,8 +43,11 @@ npm test            # deterministic Learning Application behavior
 npm run build       # production renderer and Electron main-process bundles
 npm run package     # ad-hoc-signed macOS .app under out/
 npm run test:smoke  # packaged start, persist, quit, relaunch, and resume
+npm run quality:gate -- --evidence /absolute/path/to/release-evidence.json --out /absolute/path/to/report
 npm run verify      # all of the above in release order
 ```
+
+The versioned mathematical and failure-recovery release gate, operational budgets, evidence-collection procedure, and moderated learning-study instruments live under [`evaluation/`](evaluation/README.md). `npm run verify` exercises the gate with a clearly labelled deterministic fixture; a real release decision must supply separately collected evidence and can never default to that fixture.
 
 The packaged smoke test expects `npm run package` to have completed first. Packaging targets the current Mac architecture and produces `out/Quick Study-darwin-<arch>/Quick Study.app`. The build is ad-hoc signed for local and CI execution; distribution signing and notarization are separate release work.
 
