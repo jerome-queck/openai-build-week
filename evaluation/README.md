@@ -6,7 +6,7 @@ This directory owns the reproducible evidence gate for a release candidate. It d
 2. **Product-learning observations:** what did moderated use reveal about comprehension, reasoning, cognitive load, and navigation?
 3. **Causal educational impact:** does an appropriately designed comparative study support a learning claim?
 
-A passing automated report answers only the first question. The checked-in fixture proves that the harness runs; it is not release evidence and cannot support a product or learning claim.
+A passing automated report answers only the first question. The automated evidence schema accepts only `claimSupported: false`; causal support requires separately governed study evidence and cannot be self-awarded by this gate. The checked-in fixture proves that the harness runs; it is not release evidence and cannot support a product or learning claim.
 
 ## Run a release gate
 
@@ -26,6 +26,7 @@ The command validates both files, writes JSON and Markdown reports, and exits `1
 ## Collect benchmark evidence
 
 - Pin the candidate commit and record the exact application, Model Runtime, Verifier Runtime, operating system, hardware, Node, and Electron versions.
+- Fill every `provenance` field with the immutable revision and lowercase SHA-256 digest used for the run: the corpus bundle, prompt set, evaluation policy, each source revision, and the exact Verification Environment Manifest. Record every evaluator tool and version. Sentinel fixture digests are invalid release evidence.
 - Present each item under `benchmarks/v1/corpus/` verbatim. Use a fresh runtime context and the same declared policy, tools, budgets, and source revisions for every run.
 - Run every `stochastic` scenario at least five times. Two blinded mathematics evaluators independently apply the checked-in criteria, reconcile disagreements, and record one boolean verdict per run. Reported variance is Bernoulli variance `p(1-p)`; do not keep rerunning until a favorable pass rate appears.
 - Follow `benchmarks/v1/recovery-procedures.md` for deterministic failure injection. Record an initial failure even if a later retry succeeds.

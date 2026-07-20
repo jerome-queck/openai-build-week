@@ -1,6 +1,35 @@
 {
   "benchmarkVersion": "1.0.0",
   "release": { "id": "fixture-pass-v1", "commit": "not-a-release-commit" },
+  "provenance": {
+    "benchmarkCorpus": {
+      "revision": "fixture-corpus-v1",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "promptSet": {
+      "revision": "fixture-prompts-v1",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "evaluationPolicy": {
+      "revision": "fixture-policy-v1",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "tools": [
+      { "name": "fixture-model-runner", "version": "1.0.0-fixture" },
+      { "name": "fixture-scorer", "version": "1.0.0-fixture" }
+    ],
+    "sourceRevisions": [
+      {
+        "id": "fixture-benchmark-source",
+        "revision": "fixture-source-v1",
+        "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    ],
+    "verifierEnvironmentManifest": {
+      "id": "lean-4.29.1-mathlib-4.29.1-fixture",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  },
   "recordedAt": "2026-07-20T00:00:00.000Z",
   "versions": {
     "application": "0.1.0-fixture",

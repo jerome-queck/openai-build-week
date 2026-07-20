@@ -7,6 +7,27 @@ import {
   renderQualityGateMarkdown
 } from "./evaluation-gate.js";
 
+const pinnedProvenance = {
+  benchmarkCorpus: {
+    revision: "corpus-v1",
+    sha256: "a".repeat(64)
+  },
+  promptSet: {
+    revision: "prompts-v1",
+    sha256: "b".repeat(64)
+  },
+  evaluationPolicy: {
+    revision: "policy-v1",
+    sha256: "c".repeat(64)
+  },
+  tools: [{ name: "fixture-tool", version: "1.0.0" }],
+  sourceRevisions: [{ id: "fixture-source", revision: "source-v1", sha256: "d".repeat(64) }],
+  verifierEnvironmentManifest: {
+    id: "lean-fixture-v1",
+    sha256: "e".repeat(64)
+  }
+};
+
 describe("evaluateQualityGate", () => {
   it("reports benchmark reliability separately from product and causal-learning evidence", () => {
     const report = evaluateQualityGate(
@@ -39,6 +60,7 @@ describe("evaluateQualityGate", () => {
       {
         benchmarkVersion: "1.0.0",
         release: { id: "candidate-1", commit: "abc123" },
+        provenance: pinnedProvenance,
         recordedAt: "2026-07-20T00:00:00.000Z",
         versions: {
           application: "0.1.0",
@@ -105,6 +127,7 @@ describe("evaluateQualityGate", () => {
       {
         benchmarkVersion: "1.0.0",
         release: { id: "candidate-2", commit: "def456" },
+        provenance: pinnedProvenance,
         recordedAt: "2026-07-20T00:00:00.000Z",
         versions: {
           application: "0.1.0",
@@ -168,6 +191,7 @@ describe("evaluateQualityGate", () => {
       {
         benchmarkVersion: "1.0.0",
         release: { id: "candidate-3", commit: "987fed" },
+        provenance: pinnedProvenance,
         recordedAt: "2026-07-20T00:00:00.000Z",
         versions: {
           application: "0.1.0",
@@ -234,6 +258,7 @@ describe("evaluateQualityGate", () => {
     expect(() => parseQualityEvidence({
       benchmarkVersion: "1.0.0",
       release: { id: "candidate", commit: "abc" },
+      provenance: pinnedProvenance,
       recordedAt: "not-a-date",
       versions: { application: "0.1.0", modelRuntime: "runtime", verifier: "verifier" },
       environment: {
@@ -249,6 +274,37 @@ describe("evaluateQualityGate", () => {
       productLearningObservations: [],
       causalLearningEvidence: { claimSupported: false, summary: "None" }
     })).toThrow("evidence.recordedAt must be an ISO-8601 date-time");
+
+    const validEvidence = {
+      benchmarkVersion: "1.0.0",
+      release: { id: "candidate", commit: "abc" },
+      recordedAt: "2026-07-20T00:00:00.000Z",
+      versions: { application: "0.1.0", modelRuntime: "runtime", verifier: "verifier" },
+      environment: {
+        hardware: "fixture-mac",
+        operatingSystem: "fixture-macos",
+        node: "fixture-node",
+        electron: "fixture-electron"
+      },
+      trials: [],
+      operationalMeasurements: [],
+      allowedExceptions: [],
+      knownLimitations: [],
+      productLearningObservations: [],
+      causalLearningEvidence: { claimSupported: false, summary: "None" }
+    };
+
+    expect(() => parseQualityEvidence(validEvidence)).toThrow(
+      "evidence.provenance must be an object"
+    );
+    expect(() => parseQualityEvidence({
+      ...validEvidence,
+      provenance: pinnedProvenance,
+      causalLearningEvidence: {
+        claimSupported: true,
+        summary: "Self-asserted causal claim."
+      }
+    })).toThrow("automated quality evidence cannot support a causal learning claim");
   });
 
   it("renders an inspectable report with decisions, versions, exceptions, and limitations", () => {
@@ -269,6 +325,7 @@ describe("evaluateQualityGate", () => {
       {
         benchmarkVersion: "1.0.0",
         release: { id: "candidate-4", commit: "123abc" },
+        provenance: pinnedProvenance,
         recordedAt: "2026-07-20T00:00:00.000Z",
         versions: {
           application: "0.1.0",
@@ -307,6 +364,9 @@ describe("evaluateQualityGate", () => {
     expect(markdown).toContain("# Quality Gate Report: candidate-4");
     expect(markdown).toContain("**Decision:** PASS");
     expect(markdown).toContain("runtime-1");
+    expect(markdown).toContain("Corpus: corpus-v1 (`aaaaaaaa");
+    expect(markdown).toContain("Prompt set: prompts-v1 (`bbbbbbbb");
+    expect(markdown).toContain("Verifier environment manifest: lean-fixture-v1 (`eeeeeeee");
     expect(markdown).toContain(
       "Apple Silicon fixture · macOS 15 fixture · Node 24 fixture · Electron 43.1.1"
     );
@@ -337,6 +397,7 @@ describe("evaluateQualityGate", () => {
       {
         benchmarkVersion: "1.0.0",
         release: { id: "candidate-5", commit: "aaa111" },
+        provenance: pinnedProvenance,
         recordedAt: "2026-07-20T00:00:00.000Z",
         versions: { application: "0.1.0", modelRuntime: "runtime", verifier: "verifier" },
         environment: {
@@ -348,7 +409,12 @@ describe("evaluateQualityGate", () => {
         trials: [
           { scenarioId: "known-scenario", run: 1, passed: true, observedBlockers: [] },
           { scenarioId: "known-scenario", run: 1, passed: true, observedBlockers: [] },
-          { scenarioId: "unknown-scenario", run: 1, passed: true, observedBlockers: [] }
+          {
+            scenarioId: "unknown-scenario",
+            run: 1,
+            passed: true,
+            observedBlockers: ["misspelled-stop-ship-class"]
+          }
         ],
         operationalMeasurements: [
           { budgetId: "cold-start", value: 1000 },
@@ -366,6 +432,7 @@ describe("evaluateQualityGate", () => {
     expect(report.failures).toEqual(expect.arrayContaining([
       "Scenario known-scenario contains duplicate run 1.",
       "Evidence contains unknown scenario unknown-scenario.",
+      "Evidence contains unknown release blocker misspelled-stop-ship-class in unknown-scenario run 1.",
       "Operational budget cold-start contains duplicate measurements.",
       "Evidence contains unknown operational budget unknown-budget."
     ]));

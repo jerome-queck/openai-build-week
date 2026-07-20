@@ -26,6 +26,14 @@ export interface QualityBenchmark {
 export interface QualityEvidence {
   benchmarkVersion: string;
   release: { id: string; commit: string };
+  provenance: {
+    benchmarkCorpus: RevisionPin;
+    promptSet: RevisionPin;
+    evaluationPolicy: RevisionPin;
+    tools: Array<{ name: string; version: string }>;
+    sourceRevisions: Array<RevisionPin & { id: string }>;
+    verifierEnvironmentManifest: { id: string; sha256: string };
+  };
   recordedAt: string;
   versions: {
     application: string;
@@ -58,15 +66,21 @@ export interface QualityEvidence {
   knownLimitations: string[];
   productLearningObservations: string[];
   causalLearningEvidence: {
-    claimSupported: boolean;
+    claimSupported: false;
     summary: string;
   };
+}
+
+interface RevisionPin {
+  revision: string;
+  sha256: string;
 }
 
 export interface QualityGateReport {
   decision: "pass" | "fail";
   benchmarkVersion: string;
   release: QualityEvidence["release"];
+  provenance: QualityEvidence["provenance"];
   recordedAt: string;
   versions: QualityEvidence["versions"];
   environment: QualityEvidence["environment"];
@@ -182,6 +196,20 @@ export function parseQualityBenchmark(value: unknown): QualityBenchmark {
 export function parseQualityEvidence(value: unknown): QualityEvidence {
   const evidence = requireRecord(value, "evidence");
   const release = requireRecord(evidence.release, "evidence.release");
+  const provenance = requireRecord(evidence.provenance, "evidence.provenance");
+  const benchmarkCorpus = requireRecord(
+    provenance.benchmarkCorpus,
+    "evidence.provenance.benchmarkCorpus"
+  );
+  const promptSet = requireRecord(provenance.promptSet, "evidence.provenance.promptSet");
+  const evaluationPolicy = requireRecord(
+    provenance.evaluationPolicy,
+    "evidence.provenance.evaluationPolicy"
+  );
+  const verifierManifest = requireRecord(
+    provenance.verifierEnvironmentManifest,
+    "evidence.provenance.verifierEnvironmentManifest"
+  );
   const versions = requireRecord(evidence.versions, "evidence.versions");
   const environment = requireRecord(evidence.environment, "evidence.environment");
   const causal = requireRecord(evidence.causalLearningEvidence, "evidence.causalLearningEvidence");
@@ -189,12 +217,58 @@ export function parseQualityEvidence(value: unknown): QualityEvidence {
   if (!recordedAt.includes("T") || Number.isNaN(Date.parse(recordedAt))) {
     throw new Error("evidence.recordedAt must be an ISO-8601 date-time");
   }
+  const claimSupported = requireBoolean(
+    causal.claimSupported,
+    "evidence.causalLearningEvidence.claimSupported"
+  );
+  if (claimSupported) {
+    throw new Error("automated quality evidence cannot support a causal learning claim");
+  }
 
   return {
     benchmarkVersion: requireString(evidence.benchmarkVersion, "evidence.benchmarkVersion"),
     release: {
       id: requireString(release.id, "evidence.release.id"),
       commit: requireString(release.commit, "evidence.release.commit")
+    },
+    provenance: {
+      benchmarkCorpus: parseRevisionPin(
+        benchmarkCorpus,
+        "evidence.provenance.benchmarkCorpus"
+      ),
+      promptSet: parseRevisionPin(promptSet, "evidence.provenance.promptSet"),
+      evaluationPolicy: parseRevisionPin(
+        evaluationPolicy,
+        "evidence.provenance.evaluationPolicy"
+      ),
+      tools: requireNonEmptyArray(provenance.tools, "evidence.provenance.tools")
+        .map((value, index) => {
+          const tool = requireRecord(value, `evidence.provenance.tools[${index}]`);
+          return {
+            name: requireString(tool.name, `evidence.provenance.tools[${index}].name`),
+            version: requireString(tool.version, `evidence.provenance.tools[${index}].version`)
+          };
+        }),
+      sourceRevisions: requireNonEmptyArray(
+        provenance.sourceRevisions,
+        "evidence.provenance.sourceRevisions"
+      ).map((value, index) => {
+        const source = requireRecord(value, `evidence.provenance.sourceRevisions[${index}]`);
+        return {
+          id: requireString(source.id, `evidence.provenance.sourceRevisions[${index}].id`),
+          ...parseRevisionPin(source, `evidence.provenance.sourceRevisions[${index}]`)
+        };
+      }),
+      verifierEnvironmentManifest: {
+        id: requireString(
+          verifierManifest.id,
+          "evidence.provenance.verifierEnvironmentManifest.id"
+        ),
+        sha256: requireSha256(
+          verifierManifest.sha256,
+          "evidence.provenance.verifierEnvironmentManifest.sha256"
+        )
+      }
     },
     recordedAt,
     versions: {
@@ -275,10 +349,7 @@ export function parseQualityEvidence(value: unknown): QualityEvidence {
       "evidence.productLearningObservations"
     ),
     causalLearningEvidence: {
-      claimSupported: requireBoolean(
-        causal.claimSupported,
-        "evidence.causalLearningEvidence.claimSupported"
-      ),
+      claimSupported: false,
       summary: requireString(causal.summary, "evidence.causalLearningEvidence.summary")
     }
   };
@@ -300,6 +371,10 @@ export function evaluateQualityGate(
       if (benchmark.releaseBlockers.includes(blocker)) {
         failures.push(
           `Release blocker ${blocker} observed in ${trial.scenarioId} run ${trial.run}.`
+        );
+      } else {
+        failures.push(
+          `Evidence contains unknown release blocker ${blocker} in ${trial.scenarioId} run ${trial.run}.`
         );
       }
     }
@@ -387,6 +462,7 @@ export function evaluateQualityGate(
     decision: failures.length === 0 ? "pass" : "fail",
     benchmarkVersion: benchmark.benchmarkVersion,
     release: evidence.release,
+    provenance: evidence.provenance,
     recordedAt: evidence.recordedAt,
     versions: evidence.versions,
     environment: evidence.environment,
@@ -441,6 +517,15 @@ export function renderQualityGateMarkdown(report: QualityGateReport): string {
     `- Verifier: ${report.versions.verifier}`,
     `- Environment: ${report.environment.hardware} · ${report.environment.operatingSystem} · ${report.environment.node} · ${report.environment.electron}`,
     "",
+    "## Pinned provenance",
+    "",
+    `- Corpus: ${report.provenance.benchmarkCorpus.revision} (\`${report.provenance.benchmarkCorpus.sha256}\`)`,
+    `- Prompt set: ${report.provenance.promptSet.revision} (\`${report.provenance.promptSet.sha256}\`)`,
+    `- Evaluation policy: ${report.provenance.evaluationPolicy.revision} (\`${report.provenance.evaluationPolicy.sha256}\`)`,
+    `- Tools: ${report.provenance.tools.map((tool) => `${tool.name}@${tool.version}`).join(", ")}`,
+    `- Source revisions: ${report.provenance.sourceRevisions.map((source) => `${source.id}@${source.revision} (\`${source.sha256}\`)`).join(", ")}`,
+    `- Verifier environment manifest: ${report.provenance.verifierEnvironmentManifest.id} (\`${report.provenance.verifierEnvironmentManifest.sha256}\`)`,
+    "",
     "## Benchmark reliability",
     "",
     `- Minimum stochastic repetitions: ${report.benchmarkReliability.minimumStochasticRepetitions}`,
@@ -494,6 +579,12 @@ function requireArray(value: unknown, path: string): unknown[] {
   return value;
 }
 
+function requireNonEmptyArray(value: unknown, path: string): unknown[] {
+  const array = requireArray(value, path);
+  if (array.length === 0) throw new Error(`${path} must not be empty`);
+  return array;
+}
+
 function requireString(value: unknown, path: string): string {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`${path} must be a non-empty string`);
@@ -529,4 +620,19 @@ function requireProbability(value: unknown, path: string): number {
     throw new Error(`${path} must be between 0 and 1`);
   }
   return value;
+}
+
+function requireSha256(value: unknown, path: string): string {
+  const digest = requireString(value, path);
+  if (!/^[a-f0-9]{64}$/.test(digest)) {
+    throw new Error(`${path} must be a lowercase SHA-256 digest`);
+  }
+  return digest;
+}
+
+function parseRevisionPin(value: Record<string, unknown>, path: string): RevisionPin {
+  return {
+    revision: requireString(value.revision, `${path}.revision`),
+    sha256: requireSha256(value.sha256, `${path}.sha256`)
+  };
 }
