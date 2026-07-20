@@ -3338,16 +3338,21 @@ export class LearningApplication {
           }
         } catch (error) {
           if (controller.signal.aborted) {
+            const revisionUnchanged = artifact.currentRevision.id === baseRevision.id;
             artifact.regenerationTask = {
-              ...regenerationTask, status: "stopped", retryable: true,
-              statusMessage: "Regeneration stopped. The current Artifact revision remains unchanged."
+              ...regenerationTask, status: "stopped", retryable: revisionUnchanged,
+              statusMessage: revisionUnchanged
+                ? "Regeneration stopped. The current Artifact revision remains unchanged."
+                : "Regeneration stopped after the Artifact changed. Select the intended section again."
             };
             await this.publishAndPersist();
             throw new Error("Learning Artifact regeneration was stopped.");
           }
+          const revisionUnchanged = artifact.currentRevision.id === baseRevision.id;
           artifact.regenerationTask = {
-            ...regenerationTask, status: "failed", retryable: true,
-            statusMessage: usefulRuntimeError(error)
+            ...regenerationTask, status: "failed", retryable: revisionUnchanged,
+            statusMessage: revisionUnchanged ? usefulRuntimeError(error)
+              : "The Artifact changed before this regeneration completed. Select the intended section again."
           };
           this.recordModelAccessLoss(error);
           await this.publishAndPersist();

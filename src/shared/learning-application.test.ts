@@ -1934,7 +1934,7 @@ describe("Learning Application", () => {
     expect(application.getState().sessions[0].learningArtifacts[0]).toMatchObject({
       currentRevision: { content: `${artifact.currentRevision.content}\nLearner edit.` },
       pendingRegenerationProposal: null,
-      regenerationTask: { status: "failed", retryable: true }
+      regenerationTask: { status: "failed", retryable: false, statusMessage: expect.stringContaining("Select") }
     });
   });
 
