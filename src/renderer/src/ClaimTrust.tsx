@@ -148,5 +148,7 @@ function verifierUnavailableMessage(status: VerifierEnvironmentState["status"]):
   if (status === "installing" || status === "removing") {
     return "Bundled Lean is unavailable while the current environment operation completes. Review its status in Application settings.";
   }
+  if (status === "preparing") return "Bundled Lean is unavailable until integrity preparation completes; Lean has not been launched.";
+  if (status === "integrityFailed") return "Bundled Lean integrity preparation failed. Review diagnostics in Application settings and retry.";
   return "Bundled Lean is unavailable while its environment needs recovery. Use Retry or Clean up in Application settings.";
 }

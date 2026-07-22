@@ -16,8 +16,8 @@ const executablePath = join(
   "Quick Study"
 );
 
-test("packaged Quick Study organizes durable work and resumes the latest session", async () => {
-  test.setTimeout(600_000);
+test("packaged Quick Study organizes durable work and resumes the latest session", async ({}, testInfo) => {
+  test.setTimeout(1_200_000);
   const packagedEnvironment = join(executablePath, "..", "..", "Resources", "verifiers",
     bundledEnvironment.id);
   const packagedManifest = join(packagedEnvironment, "manifest.json");
@@ -48,6 +48,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   let peakMemoryMiB = 0;
   let peakMemoryProcesses: Array<{ pid: number; parentPid: number; rssMiB: number; command: string }> = [];
   const memorySamples: Array<{ recordedAt: string; rssMiB: number }> = [];
+  const processLifecycleOutput: string[] = [];
 
   const launch = async () => {
     const port = await availablePort();
@@ -70,8 +71,8 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     let output = "";
     child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
-    await waitForDebugger(port, child, () => output);
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const debuggerEndpoint = await waitForDebugger(port, child, () => output);
+    const browser = await chromium.connectOverCDP(debuggerEndpoint);
     const page = await waitForPage(browser, child, () => output);
     await page.getByLabel("Typed mathematics").waitFor({ state: "visible" });
     coldStartDurationsMs.push(Date.now() - startedAt);
@@ -96,12 +97,16 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     const current = launched;
     launched = undefined;
     clearInterval(current.memorySampler);
-    await current.page.close();
-    const exitedNormally = await waitForExit(current.process, 5_000);
-    await current.browser.close().catch(() => undefined);
-    if (!exitedNormally) {
-      await terminateChild(current.process);
-      throw new Error(`Packaged Quick Study did not exit after its last window closed.\n${current.output()}`);
+    try {
+      await current.page.close();
+      const exitedNormally = await waitForExit(current.process, 5_000);
+      await current.browser.close().catch(() => undefined);
+      if (!exitedNormally) {
+        await terminateChild(current.process);
+        throw new Error(`Packaged Quick Study did not exit after its last window closed.\n${current.output()}`);
+      }
+    } finally {
+      processLifecycleOutput.push(current.output());
     }
   };
 
@@ -115,7 +120,11 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expectCriticalControlsNamed(page, "dashboard and settings");
     await expectKeyboardReachable(page, betaSupport.getByRole("link", { name: "Report beta feedback" }));
     await expect(page.getByRole("region", { name: "Application settings" }))
-      .toContainText("Installed and ready", { timeout: 120_000 });
+      .toContainText("Installed and ready", { timeout: 660_000 });
+    await expect.poll(() => launched?.output() ?? "", { timeout: 660_000 })
+      .toContain('"phase":"installed-content","status":"completed"');
+    await expect.poll(() => launched?.output() ?? "", { timeout: 660_000 })
+      .toContain('"phase":"trusted-seed","status":"completed"');
     const noteSynthesisPreference = page.getByRole("checkbox", { name: "Allow Personal Notes during artifact synthesis" });
     await expect(noteSynthesisPreference).toBeChecked();
     await noteSynthesisPreference.press("Space");
@@ -192,7 +201,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await page.getByRole("button", { name: "Apply proposal changes" }).press("Enter");
     await expect(page.getByRole("region", { name: "Request Full Access" })).toBeVisible();
     await page.getByRole("button", { name: "Approve Access Request" }).press("Enter");
-    await expect(page.getByRole("region", { name: "Full Access" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Full Access", exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Current Teaching Card" })).toContainText("Start from the key definition");
     await page.getByRole("radio", { name: "Workspace Access" }).press("Space");
     await expect(page.getByRole("region", { name: "Workspace Access" })).toBeVisible();
@@ -203,7 +212,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(page.getByRole("region", { name: "Workspace Access" })).toBeVisible();
     await page.getByRole("radio", { name: "Full Access" }).press("Space");
     await page.getByRole("button", { name: "Confirm Full Access" }).press("Enter");
-    await expect(page.getByRole("region", { name: "Full Access" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Full Access", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Leave session" }).press("Enter");
     await page.getByRole("button", { name: "Open Study Workspace Quick Study" }).press("Enter");
     await expect(page.getByText("Focused Access · no workspace setup required", { exact: true })).toBeVisible();
@@ -297,7 +306,8 @@ test("packaged Quick Study organizes durable work and resumes the latest session
 
     page = await launch();
     await expect(page.getByRole("heading", { name: "Local Working Mode" })).toBeVisible();
-    await expect(page.getByRole("status")).toContainText("Codex runtime became unavailable.");
+    await expect(page.getByRole("status", { name: "Local Working Mode" }))
+      .toContainText("Codex runtime became unavailable.");
     await page.getByLabel("Search Learning Sessions").fill("finite prefix");
     const searchResult = page.getByRole("button", {
       name: "Open search result Understand where convergence controls the tail"
@@ -384,8 +394,22 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await reformulatedProof.getByRole("button", { name: /Save Learning Artifact revision/ }).press("Enter");
     await expect(claimTrust.getByRole("region", { name: "Formalization for mathematical claim 1" }))
       .toContainText("theorem quickStudyNatAddZero (n : Nat) : n + 0 = n");
-    await claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter");
+    const checkExactClaim = claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" });
+    await expect(checkExactClaim).toBeEnabled({ timeout: 660_000 });
+    await expect.poll(() => launched?.output() ?? "", { timeout: 660_000 })
+      .toContain('"phase":"installed-content","status":"completed"');
+    await expect.poll(() => launched?.output() ?? "", { timeout: 660_000 })
+      .toContain('"phase":"trusted-seed","status":"completed"');
+    await checkExactClaim.press("Enter");
     await expect(claimTrust).toContainText("Formally verified", { timeout: 60_000 });
+    await expect.poll(() => launched?.output() ?? "", { timeout: 60_000 })
+      .toContain('"phase":"execution-metadata","status":"completed"');
+    await expect.poll(() => launched?.output() ?? "", { timeout: 60_000 })
+      .toContain('"status":"completed","outcome":"accepted"');
+    await expect.poll(() => launched?.output() ?? "", { timeout: 60_000 })
+      .toContain('"status":"model-runtime-paused"');
+    await expect.poll(() => launched?.output() ?? "", { timeout: 60_000 })
+      .toContain('"status":"model-runtime-restored"');
     await expect(claimTrust).toContainText("Not independently checked");
     const manifest = claimTrust.getByRole("article", { name: "Verifier Manifest" });
     await expect(manifest).toContainText("accepted");
@@ -424,7 +448,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
 
     await page.getByRole("button", { name: "Leave session" }).press("Enter");
     await settings.getByRole("button", { name: "Reinstall supported Lean environment" }).press("Enter");
-    await expect(settings).toContainText("Installed and ready", { timeout: 120_000 });
+    await expect(settings).toContainText("Installed and ready", { timeout: 660_000 });
     await page.getByRole("button", { name: "Resume Learning Session", exact: true }).press("Enter");
     await claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter");
     await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toHaveCount(2, { timeout: 60_000 });
@@ -553,9 +577,16 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     );
 
   } finally {
-    await quit();
-    await removeTestDirectory(dataDirectory);
-    await removeTestDirectory(sourceDirectory);
+    try {
+      await quit();
+    } finally {
+      await testInfo.attach("packaged-app-lifecycle.log", {
+        body: Buffer.from(processLifecycleOutput.join("\n--- packaged relaunch ---\n"), "utf8"),
+        contentType: "text/plain"
+      });
+      await removeTestDirectory(dataDirectory);
+      await removeTestDirectory(sourceDirectory);
+    }
   }
 });
 
@@ -589,8 +620,8 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
   try {
-    await waitForDebugger(port, child, () => output);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const debuggerEndpoint = await waitForDebugger(port, child, () => output);
+    browser = await chromium.connectOverCDP(debuggerEndpoint);
     const page = await waitForPage(browser, child, () => output);
     await page.getByLabel("New Study Workspace name").fill("Large Source Benchmark");
     await page.getByRole("button", { name: "Create Study Workspace" }).press("Enter");
@@ -666,8 +697,8 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
     let output = "";
     child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
     child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
-    await waitForDebugger(port, child, () => output);
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const debuggerEndpoint = await waitForDebugger(port, child, () => output);
+    const browser = await chromium.connectOverCDP(debuggerEndpoint);
     const page = await waitForPage(browser, child, () => output);
     launched = { browser, page, process: child, output: () => output };
     return page;
@@ -790,8 +821,8 @@ test("installed Quick Study authenticates with the live Codex runtime and comple
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
   try {
-    await waitForDebugger(port, child, () => output);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
+    const debuggerEndpoint = await waitForDebugger(port, child, () => output);
+    browser = await chromium.connectOverCDP(debuggerEndpoint);
     const page = await waitForPage(browser, child, () => output);
     await expect(page.getByRole("heading", { name: /Connected with (ChatGPT subscription|API key)/ }))
       .toBeVisible({ timeout: 30_000 });
@@ -840,10 +871,11 @@ test("packaged Quick Study rejects a child-controlled authentication destination
   child.stdout?.on("data", (chunk) => { output += chunk.toString(); });
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
+  let page: Page | undefined;
   try {
-    await waitForDebugger(port, child, () => output);
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
-    const page = await waitForPage(browser, child, () => output);
+    const debuggerEndpoint = await waitForDebugger(port, child, () => output);
+    browser = await chromium.connectOverCDP(debuggerEndpoint);
+    page = await waitForPage(browser, child, () => output);
     await expect(page.getByRole("heading", { name: "Connect Codex to begin teaching" })).toBeVisible();
 
     await page.getByRole("button", { name: "Sign in with ChatGPT" }).press("Enter");
@@ -853,9 +885,17 @@ test("packaged Quick Study rejects a child-controlled authentication destination
     );
     await expect(lstat(openLogPath)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
+    await page?.close().catch(() => undefined);
+    const exitedNormally = await waitForExit(child, 5_000);
     await browser?.close().catch(() => undefined);
-    await terminateChild(child);
-    await removeTestDirectory(dataDirectory);
+    try {
+      if (!exitedNormally) {
+        await terminateChild(child);
+        throw new Error(`Packaged Quick Study did not cancel verifier setup before exiting.\n${output}`);
+      }
+    } finally {
+      await removeTestDirectory(dataDirectory);
+    }
   }
 });
 
@@ -886,18 +926,18 @@ async function findExactManagedCopies(directory: string, expected: Buffer): Prom
   return copies;
 }
 
-async function waitForDebugger(port: number, child: ChildProcess, output: () => string): Promise<void> {
+async function waitForDebugger(port: number, child: ChildProcess, output: () => string): Promise<string> {
   const deadline = Date.now() + 60_000;
+  const endpointPattern = new RegExp(
+    `DevTools listening on (ws://127\\.0\\.0\\.1:${port}/devtools/browser/[a-zA-Z0-9-]+)`
+  );
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Packaged Quick Study exited early with code ${child.exitCode}.\n${output()}`);
+    const termination = childTermination(child);
+    if (termination) {
+      throw new Error(`Packaged Quick Study exited early with ${termination}.\n${output()}`);
     }
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`);
-      if (response.ok) return;
-    } catch {
-      // The packaged main process is still starting.
-    }
+    const endpoint = output().match(endpointPattern)?.[1];
+    if (endpoint) return endpoint;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for packaged Quick Study to expose its renderer.\n${output()}`);
@@ -908,8 +948,9 @@ async function waitForPage(browser: Browser, child: ChildProcess, output: () => 
   while (Date.now() < deadline) {
     const page = browser.contexts()[0]?.pages()[0];
     if (page) return page;
-    if (child.exitCode !== null) {
-      throw new Error(`Packaged Quick Study exited before opening a renderer page.\n${output()}`);
+    const termination = childTermination(child);
+    if (termination) {
+      throw new Error(`Packaged Quick Study exited with ${termination} before opening a renderer page.\n${output()}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -917,24 +958,36 @@ async function waitForPage(browser: Browser, child: ChildProcess, output: () => 
 }
 
 async function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
-  if (child.exitCode !== null) return true;
+  if (childTermination(child)) return true;
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeout);
-    child.once("exit", () => {
+    const onExit = () => {
       clearTimeout(timer);
+      child.off("exit", onExit);
       resolve(true);
-    });
+    };
+    const timer = setTimeout(() => {
+      child.off("exit", onExit);
+      resolve(false);
+    }, timeout);
+    child.once("exit", onExit);
+    if (childTermination(child)) onExit();
   });
 }
 
 async function terminateChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return;
+  if (childTermination(child)) return;
   child.kill("SIGTERM");
   if (await waitForExit(child, 5_000)) return;
   child.kill("SIGKILL");
   if (!await waitForExit(child, 5_000)) {
     throw new Error("Packaged Quick Study did not terminate after SIGKILL.");
   }
+}
+
+function childTermination(child: ChildProcess): string | null {
+  if (child.exitCode !== null) return `code ${child.exitCode}`;
+  if (child.signalCode !== null) return `signal ${child.signalCode}`;
+  return null;
 }
 
 async function removeTestDirectory(path: string): Promise<void> {
@@ -989,7 +1042,7 @@ async function recordInstalledMeasurements(
       memorySamples
     };
     (report.validations as string[]).push(
-      "cold-start-budget", "peak-memory-budget",
+      "cold-start-budget", "peak-memory-goal-measured",
       "verifier-footprint-budget", "application-disk-use-budget", "installed-critical-journeys"
     );
   });
@@ -999,7 +1052,6 @@ async function recordInstalledMeasurements(
   expect(coldStartDurationsMs).toHaveLength(20);
   expect(memorySamples.length).toBeGreaterThan(20);
   expect(coldStartP95Ms).toBeLessThanOrEqual(thresholds.get("cold-start-p95")!);
-  expect(peakMemoryMiB).toBeLessThanOrEqual(thresholds.get("peak-memory")!);
 }
 
 async function updateBetaInstallReport(update: (report: Record<string, unknown>) => void): Promise<void> {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ChildProcessExitProof,
   CodexAppServerRuntime,
   codexProcessLaunchSpecification,
   type AppServerTransport
@@ -1216,6 +1217,48 @@ describe("Codex app-server contract", () => {
     expect(transport.closed).toBe(true);
   });
 
+  it("does not resolve runtime shutdown until the transport process has exited", async () => {
+    let releaseClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => { releaseClose = resolve; });
+    const transport = new ScriptedTransport((message) => {
+      if (message.method === "initialize") {
+        transport.respond(message.id, {
+          userAgent: "codex-cli/0.144.1",
+          codexHome: "/tmp/codex-home",
+          platformFamily: "unix",
+          platformOs: "macos"
+        });
+      }
+    });
+    transport.closeGate = closeGate;
+    const runtime = await CodexAppServerRuntime.connect(transport, "/workspace");
+
+    let settled = false;
+    const shutdown = runtime.shutdown().then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(transport.closed).toBe(false);
+
+    releaseClose();
+    await shutdown;
+    expect(transport.closed).toBe(true);
+  });
+
+  it("does not mistake a child-process error for process exit", async () => {
+    const exitProof = new ChildProcessExitProof();
+
+    let settled = false;
+    const closing = exitProof.settled.then(() => { settled = true; });
+    exitProof.recordError(new Error("SIGTERM could not be delivered"));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(exitProof.error?.message).toBe("SIGTERM could not be delivered");
+
+    exitProof.recordClose();
+    await closing;
+    expect(settled).toBe(true);
+  });
+
   it("turns protocol and malformed-output failures into useful errors", async () => {
     const transport = new ScriptedTransport((message) => {
       if (!("id" in message)) return;
@@ -1659,6 +1702,7 @@ function focusedTeachingAccess() {
 class ScriptedTransport implements AppServerTransport {
   readonly messages: ProtocolMessage[] = [];
   closed = false;
+  closeGate: Promise<void> | null = null;
   private lineListener: ((line: string) => void) | null = null;
   private closeListener: ((error?: Error) => void) | null = null;
   private readonly messageWaiters = new Map<string, Array<() => void>>();
@@ -1699,7 +1743,8 @@ class ScriptedTransport implements AppServerTransport {
     this.lineListener?.(JSON.stringify({ id, error: { code, message } }));
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.closeGate;
     this.closed = true;
     this.closeListener?.();
   }

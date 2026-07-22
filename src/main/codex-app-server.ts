@@ -59,15 +59,35 @@ export interface AppServerTransport {
   write(line: string): void;
   onLine(listener: (line: string) => void): void;
   onClose(listener: (error?: Error) => void): void;
-  close(): void;
+  close(): Promise<void>;
 }
 
-class CodexProcessTransport implements AppServerTransport {
+export class ChildProcessExitProof {
+  error: Error | null = null;
+  readonly settled: Promise<void>;
+  private resolve!: () => void;
+
+  constructor() {
+    this.settled = new Promise((resolve) => { this.resolve = resolve; });
+  }
+
+  recordError(error: Error): void {
+    this.error = error;
+  }
+
+  recordClose(): void {
+    this.resolve();
+  }
+}
+
+export class CodexProcessTransport implements AppServerTransport {
   private readonly process: ChildProcessWithoutNullStreams;
   private lineListener: ((line: string) => void) | null = null;
   private closeListener: ((error?: Error) => void) | null = null;
   private stderr = "";
   private closed = false;
+  private closing = false;
+  private readonly exitProof = new ChildProcessExitProof();
 
   constructor(command: string, cwd: string) {
     const launch = codexProcessLaunchSpecification(command, cwd);
@@ -76,14 +96,15 @@ class CodexProcessTransport implements AppServerTransport {
     this.process.stderr.on("data", (chunk: Buffer) => {
       this.stderr = `${this.stderr}${chunk.toString()}`.slice(-4_000);
     });
-    this.process.once("error", (error) => this.closeListener?.(error));
-    this.process.once("exit", (code, signal) => {
+    this.process.once("error", (error) => { this.exitProof.recordError(error); });
+    this.process.once("close", (code, signal) => {
       this.closed = true;
+      this.exitProof.recordClose();
       const detail = this.stderr.trim();
       if (detail) console.error("Codex app-server diagnostics:", detail);
-      this.closeListener?.(new Error(
+      this.closeListener?.(this.closing ? undefined : (this.exitProof.error ?? new Error(
         `Codex app-server stopped${code === null ? ` with signal ${signal}` : ` with code ${code}`}.`
-      ));
+      )));
     });
   }
 
@@ -100,13 +121,35 @@ class CodexProcessTransport implements AppServerTransport {
     this.closeListener = listener;
   }
 
-  close(): void {
+  async close(): Promise<void> {
     if (this.closed) return;
+    this.closing = true;
     this.process.stdin.end();
     const terminationTimer = setTimeout(() => {
       if (!this.closed) this.process.kill("SIGTERM");
     }, 1_000);
     terminationTimer.unref();
+    const killTimer = setTimeout(() => {
+      if (!this.closed) this.process.kill("SIGKILL");
+    }, 5_000);
+    killTimer.unref();
+    let boundTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.exitProof.settled,
+        new Promise<never>((_, reject) => {
+          boundTimer = setTimeout(
+            () => reject(new Error("Codex app-server did not exit after forced termination.")),
+            10_000
+          );
+          boundTimer.unref();
+        })
+      ]);
+    } finally {
+      clearTimeout(terminationTimer);
+      clearTimeout(killTimer);
+      if (boundTimer) clearTimeout(boundTimer);
+    }
   }
 }
 
@@ -163,8 +206,8 @@ class AppServerClient {
     this.send({ method, params });
   }
 
-  close(): void {
-    this.transport.close();
+  close(): Promise<void> {
+    return this.transport.close();
   }
 
   onNotification(listener: (message: ProtocolMessage) => void): () => void {
@@ -696,7 +739,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
   }
 
   async shutdown(): Promise<void> {
-    this.client.close();
+    await this.client.close();
   }
 
   private async runTurn(

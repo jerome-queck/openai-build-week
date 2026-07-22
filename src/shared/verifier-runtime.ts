@@ -67,9 +67,10 @@ export interface VerifierEnvironmentInstallation {
 
 export interface VerifierEnvironmentManager {
   inspect(): Promise<VerifierEnvironmentInspection>;
+  prepareInstalledIntegrity?(signal?: AbortSignal, environmentId?: string): Promise<void>;
   remove(environmentId?: string): Promise<{ removedLogicalBytes: number }>;
-  install(): Promise<{ installedBytes: number; environment?: Readonly<VerificationEnvironment> }>;
-  activate?(environmentId: string): Promise<void>;
+  install(signal?: AbortSignal): Promise<{ installedBytes: number; environment?: Readonly<VerificationEnvironment> }>;
+  activate?(environmentId: string, signal?: AbortSignal): Promise<void>;
   cleanup(environmentIds?: string[]): Promise<{ installed: boolean; installedBytes: number }>;
 }
 

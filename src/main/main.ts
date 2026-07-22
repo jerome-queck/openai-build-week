@@ -21,9 +21,14 @@ import { LeanVerifierRuntime } from "./lean-verifier";
 import { LeanEnvironmentManager } from "./lean-environment-manager";
 import { requireApprovedChatGptAuthenticationUrl } from "./authentication-navigation";
 import { boundedProcessEnvironment } from "./bounded-process-environment";
+import { ExclusiveOperationCoordinator } from "./exclusive-operation-coordinator";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
+let applicationShutdown: Promise<void> | null = null;
+const verifierRuns = new Map<string, AbortController>();
+let verifierCompletion: Promise<void> | null = null;
+const runtimeLeanCoordinator = new ExclusiveOperationCoordinator();
 const execFileAsync = promisify(execFile);
 const sourceAccess = new MacOsSourceAccess({
   showOpenDialog: (options) => dialog.showOpenDialog(options),
@@ -101,6 +106,7 @@ function isLearnerAction(value: unknown): value is LearnerAction {
     case "submitPendingQuestion":
     case "returnToPrerequisiteOrigin":
     case "removeVerifierEnvironment":
+    case "prepareVerifierEnvironment":
     case "installVerifierEnvironment":
     case "cleanupVerifierEnvironment":
     case "beginSessionConsolidation":
@@ -330,7 +336,6 @@ function isDerivedResearchQueryInput(value: unknown): boolean {
 }
 
 function registerLearningApplicationHandlers(): void {
-  const verifierRuns = new Map<string, AbortController>();
   learningApplication.subscribe((state) => {
     for (const window of BrowserWindow.getAllWindows()) window.webContents.send("learning:stateChanged", state);
   });
@@ -348,17 +353,33 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("learning:submit", async (event, action: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (!isLearnerAction(action)) throw new Error("Invalid learner action.");
-    if (action.type === "removeVerifierEnvironment" && verifierRuns.size > 0) {
-      throw new Error("Cancel the active Lean check before removing the Bundled Lean Runtime.");
+    if (verifierRuns.size > 0 && [
+      "removeVerifierEnvironment", "prepareVerifierEnvironment", "installVerifierEnvironment",
+      "activateVerifierEnvironment", "setVerifierEnvironmentPinned", "setSessionVerifierEnvironmentPin",
+      "cleanupVerifierEnvironment"
+    ].includes(action.type)) {
+      throw new Error("Cancel the active Lean check before changing the Bundled Lean Runtime or its active selection.");
     }
     if (action.type === "refreshAuthentication" && !learningApplication.getState().runtimeAvailable) {
-      try {
-        const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
-        modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
-        return learningApplication.restoreModelRuntime(modelRuntime);
-      } catch (error) {
-        return learningApplication.reportModelRuntimeFailure(error);
-      }
+      return runtimeLeanCoordinator.run(async () => {
+        if (applicationShutdown) return learningApplication.getState();
+        if (learningApplication.getState().runtimeAvailable) {
+          return learningApplication.submit(action);
+        }
+        try {
+          const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+          const launchedRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+          if (applicationShutdown) {
+            await learningApplication.stopModelRuntimeForShutdown(launchedRuntime);
+            return learningApplication.getState();
+          }
+          modelRuntime = launchedRuntime;
+          return learningApplication.restoreModelRuntime(launchedRuntime);
+        } catch (error) {
+          modelRuntime = null;
+          return learningApplication.reportModelRuntimeFailure(error);
+        }
+      });
     }
     return learningApplication.submit(action);
   });
@@ -401,18 +422,74 @@ function registerLearningApplicationHandlers(): void {
     if (typeof sessionId !== "string" || !isFormalVerificationRequest(request)) {
       throw new Error("Invalid formal verification request.");
     }
-    if (verifierRuns.has(request.runId)) throw new Error("A formal verification run with this identifier is already active.");
+    if (verifierRuns.size > 0) throw new Error("Only one formal verification run can be active at a time.");
     const controller = new AbortController();
     verifierRuns.set(request.runId, controller);
+    let resolveVerifierCompletion!: () => void;
+    const currentVerifierCompletion = new Promise<void>((resolve) => { resolveVerifierCompletion = resolve; });
+    verifierCompletion = currentVerifierCompletion;
+    const startedAt = Date.now();
+    console.info(`[Lean verification] ${JSON.stringify({ runId: request.runId, status: "started" })}`);
+    let restartModelRuntime = false;
+    let failed = false;
+    let failure: unknown;
     try {
-      return await learningApplication.runFormalVerification(sessionId, request, controller.signal);
+      await runtimeLeanCoordinator.run(async () => {
+        try {
+          if (controller.signal.aborted) throw new Error("Formal verification was canceled before Codex was paused.");
+          restartModelRuntime = await learningApplication.pauseModelRuntimeForFormalVerification();
+          if (restartModelRuntime) {
+            modelRuntime = null;
+            console.info(`[Lean verification] ${JSON.stringify({
+              runId: request.runId, status: "model-runtime-paused", elapsedMs: Date.now() - startedAt
+            })}`);
+          }
+          if (controller.signal.aborted) throw new Error("Formal verification was canceled before Lean started.");
+          await learningApplication.runFormalVerification(sessionId, request, controller.signal);
+          const outcome = learningApplication.getState().verifierManifests
+            .find((manifest) => manifest.id === request.runId)?.commandOutcome ?? "unknown";
+          console.info(`[Lean verification] ${JSON.stringify({
+            runId: request.runId, status: "completed", outcome, elapsedMs: Date.now() - startedAt
+          })}`);
+        } finally {
+          if (restartModelRuntime && !applicationShutdown) {
+            try {
+              const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+              modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+              await learningApplication.restoreModelRuntime(modelRuntime);
+              console.info(`[Lean verification] ${JSON.stringify({
+                runId: request.runId, status: "model-runtime-restored", elapsedMs: Date.now() - startedAt
+              })}`);
+            } catch (error) {
+              modelRuntime = null;
+              await learningApplication.reportModelRuntimeFailure(error);
+              console.error("Codex app-server could not restart after formal verification:", error);
+            }
+          }
+        }
+      });
+    } catch (error) {
+      if (!learningApplication.getState().runtimeAvailable) modelRuntime = null;
+      failed = true;
+      failure = error;
+      console.error(`[Lean verification] ${JSON.stringify({
+        runId: request.runId,
+        status: "failed",
+        elapsedMs: Date.now() - startedAt,
+        detail: error instanceof Error ? error.message : "Formal verification failed."
+      })}`);
     } finally {
       verifierRuns.delete(request.runId);
+      resolveVerifierCompletion();
+      if (verifierCompletion === currentVerifierCompletion) verifierCompletion = null;
     }
+    if (failed) throw failure;
+    return learningApplication.getState();
   });
   ipcMain.handle("verifier:cancel", async (event, runId: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof runId !== "string") throw new Error("Invalid formal verification run identifier.");
+    console.info(`[Lean verification] ${JSON.stringify({ runId, status: "cancellation-requested" })}`);
     verifierRuns.get(runId)?.abort();
   });
   ipcMain.handle("source:linkPrimaryFolder", async (event, workspaceId: unknown) => {
@@ -536,6 +613,9 @@ void app.whenReady().then(async () => {
       if (!failRemovalOnce) return;
       failRemovalOnce = false;
       throw new Error("Synthetic removal interruption before deactivation.");
+    },
+    {
+      observe: (event) => console.info(`[Lean integrity] ${JSON.stringify(event)}`)
     }
   );
   const installDefaultVerifier = await verifierEnvironmentManager.defaultInstallationNeeded().catch((error) => {
@@ -570,15 +650,41 @@ void app.whenReady().then(async () => {
       console.error("The default Lean environment could not be installed:", error);
     });
   }
-  verifierEnvironmentManager.primeSeedIntegrity();
   registerLearningApplicationHandlers();
   createWindow();
+  if (!installDefaultVerifier && learningApplication.getState().verifierEnvironment.status === "preparing") {
+    void learningApplication.prepareVerifierEnvironment().catch((error) => {
+      console.error("The installed Lean environment could not become ready:", error);
+    });
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
+function requestApplicationShutdown(): Promise<void> {
+  if (!learningApplication) {
+    app.quit();
+    return Promise.resolve();
+  }
+  for (const controller of verifierRuns.values()) controller.abort();
+  applicationShutdown ??= (async () => {
+    await runtimeLeanCoordinator.closeAndDrain();
+    await verifierCompletion;
+    await learningApplication.shutdown();
+  })().finally(() => app.quit());
+  return applicationShutdown;
+}
+
 app.on("window-all-closed", () => {
-  void learningApplication.shutdown().finally(() => app.quit());
+  void requestApplicationShutdown();
+});
+
+process.once("SIGTERM", () => {
+  void requestApplicationShutdown();
+});
+
+process.once("SIGINT", () => {
+  void requestApplicationShutdown();
 });

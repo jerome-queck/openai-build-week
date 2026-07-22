@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -31,10 +31,49 @@ describe("runQualityGate", () => {
       benchmarkVersion: string;
       benchmarkReliability: { scenarios: unknown[] };
     };
-    expect(jsonReport.benchmarkVersion).toBe("2.0.0");
+    expect(jsonReport.benchmarkVersion).toBe("2.1.0");
     expect(jsonReport.benchmarkReliability.scenarios).toHaveLength(16);
     expect(await readFile(result.markdownPath, "utf8")).toContain(
       "Causal educational impact: not supported"
+    );
+  });
+
+  it("keeps parsed advisory misses non-blocking while omitted enforcement remains release-blocking", async () => {
+    const temporaryDirectory = await mkdtemp(join(tmpdir(), "quick-study-quality-gate-enforcement-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const benchmark = JSON.parse(await readFile(
+      resolve("evaluation/benchmarks/v2/benchmark.json"), "utf8"
+    )) as {
+      operationalBudgets: Array<{ id: string; enforcement?: string }>;
+      scenarios: Array<{ fixture?: string }>;
+    };
+    const evidence = JSON.parse(await readFile(
+      resolve("evaluation/fixtures/passing-evidence-v2.json"), "utf8"
+    )) as { operationalMeasurements: Array<{ budgetId: string; value: number }> };
+    evidence.operationalMeasurements.find((measurement) => measurement.budgetId === "peak-memory")!.value = 1052;
+    for (const scenario of benchmark.scenarios) {
+      if (scenario.fixture) scenario.fixture = resolve("evaluation/benchmarks/v2", scenario.fixture);
+    }
+    const benchmarkPath = join(temporaryDirectory, "benchmark.json");
+    const evidencePath = join(temporaryDirectory, "evidence.json");
+    await writeFile(benchmarkPath, JSON.stringify(benchmark), "utf8");
+    await writeFile(evidencePath, JSON.stringify(evidence), "utf8");
+
+    const advisory = await runQualityGate({
+      benchmarkPath, evidencePath, outputDirectory: join(temporaryDirectory, "advisory")
+    });
+    expect(advisory.exitCode).toBe(0);
+    expect(advisory.report.operationalBudgets.find((budget) => budget.id === "peak-memory"))
+      .toMatchObject({ enforcement: "advisory", measured: 1052, passed: false });
+
+    delete benchmark.operationalBudgets.find((budget) => budget.id === "peak-memory")!.enforcement;
+    await writeFile(benchmarkPath, JSON.stringify(benchmark), "utf8");
+    const required = await runQualityGate({
+      benchmarkPath, evidencePath, outputDirectory: join(temporaryDirectory, "required")
+    });
+    expect(required.exitCode).toBe(1);
+    expect(required.report.failures).toContain(
+      "Operational budget peak-memory measured 1052 MiB, above 1024 MiB."
     );
   });
 });

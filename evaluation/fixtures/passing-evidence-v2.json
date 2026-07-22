@@ -1,5 +1,5 @@
 {
-  "benchmarkVersion": "2.0.0",
+  "benchmarkVersion": "2.1.0",
   "release": { "id": "fixture-pass-v2", "commit": "not-a-release-commit" },
   "provenance": {
     "benchmarkCorpus": {

@@ -1286,6 +1286,191 @@ describe("Learning Application", () => {
     });
   });
 
+  it("reports an installed environment as preparing until its execution integrity is ready", async () => {
+    let finishPreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed: true, installedBytes: 1024, cleanupRequired: false })),
+      prepareInstalledIntegrity: vi.fn(async () => preparation),
+      remove: vi.fn(async () => ({ removedLogicalBytes: 1024 })),
+      install: vi.fn(async () => ({ installedBytes: 1024 })),
+      cleanup: vi.fn(async () => ({ installed: true, installedBytes: 1024 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    expect(application.getState().verifierEnvironment).toMatchObject({ status: "preparing", error: null });
+    const preparing = application.prepareVerifierEnvironment();
+    finishPreparation();
+    await preparing;
+    expect(application.getState().verifierEnvironment).toMatchObject({ status: "installed", error: null });
+  });
+
+  it("recovers integrity preparation after installation without reinstalling the payload", async () => {
+    let installed = false;
+    let preparationAttempts = 0;
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0, cleanupRequired: false })),
+      prepareInstalledIntegrity: vi.fn(async () => {
+        preparationAttempts += 1;
+        if (preparationAttempts === 1) throw new Error("Installed integrity scan was interrupted.");
+      }),
+      remove: vi.fn(async () => ({ removedLogicalBytes: 2048 })),
+      install: vi.fn(async () => {
+        installed = true;
+        return { installedBytes: 2048, environment: BUNDLED_LEAN_ENVIRONMENT };
+      }),
+      cleanup: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    const failedPreparation = await application.submit({ type: "installVerifierEnvironment" });
+    expect(failedPreparation.verifierEnvironment).toMatchObject({
+      status: "integrityFailed", installedBytes: 2048, error: "Installed integrity scan was interrupted."
+    });
+
+    await application.shutdown();
+    const relaunched = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(relaunched);
+    expect(relaunched.getState().verifierEnvironment).toMatchObject({
+      status: "integrityFailed", installedBytes: 2048, error: "Installed integrity scan was interrupted."
+    });
+
+    const recovered = await relaunched.submit({ type: "prepareVerifierEnvironment" });
+    expect(recovered.verifierEnvironment).toMatchObject({ status: "installed", installedBytes: 2048, error: null });
+    expect(environmentManager.install).toHaveBeenCalledTimes(1);
+    expect(environmentManager.prepareInstalledIntegrity).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes verifier actions behind preparation and cancels its scanner on shutdown", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({
+        installed: true,
+        installedBytes: 2048,
+        cleanupRequired: false,
+        environments: [{ environment: BUNDLED_LEAN_ENVIRONMENT, installedBytes: 2048 }],
+        activeEnvironmentId: BUNDLED_LEAN_ENVIRONMENT.id
+      })),
+      prepareInstalledIntegrity: vi.fn(async (signal) => {
+        capturedSignal = signal;
+        markStarted();
+        await new Promise<void>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("Integrity preparation was cancelled.")), { once: true });
+        });
+      }),
+      remove: vi.fn(async () => ({ removedLogicalBytes: 2048 })),
+      install: vi.fn(async () => ({ installedBytes: 2048, environment: BUNDLED_LEAN_ENVIRONMENT })),
+      activate: vi.fn(async () => undefined),
+      cleanup: vi.fn(async () => ({ installed: true, installedBytes: 2048 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    const preparation = application.prepareVerifierEnvironment();
+    await started;
+    const activation = application.submit({
+      type: "activateVerifierEnvironment", environmentId: BUNDLED_LEAN_ENVIRONMENT.id
+    });
+    const activationRejected = expect(activation).rejects.toThrow("application is shutting down");
+    expect(environmentManager.activate).not.toHaveBeenCalled();
+
+    await application.shutdown();
+    await preparation;
+    await activationRejected;
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(environmentManager.activate).not.toHaveBeenCalled();
+    expect(application.getState().verifierEnvironment).toMatchObject({ status: "preparing", error: null });
+    const relaunched = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(relaunched);
+    expect(relaunched.getState().verifierEnvironment).toMatchObject({ status: "preparing", error: null });
+  });
+
+  it("reports post-integrity activation failures as lifecycle cleanup instead of integrity failure", async () => {
+    let installed = false;
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0, cleanupRequired: false })),
+      prepareInstalledIntegrity: vi.fn(async () => undefined),
+      remove: vi.fn(async () => ({ removedLogicalBytes: 2048 })),
+      install: vi.fn(async () => {
+        installed = true;
+        return { installedBytes: 2048, environment: BUNDLED_LEAN_ENVIRONMENT };
+      }),
+      activate: vi.fn(async () => { throw new Error("The active-environment marker could not be written."); }),
+      cleanup: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    const state = await application.submit({ type: "installVerifierEnvironment" });
+
+    expect(environmentManager.prepareInstalledIntegrity).toHaveBeenCalledTimes(1);
+    expect(state.verifierEnvironment).toMatchObject({
+      status: "cleanupRequired", error: "The active-environment marker could not be written."
+    });
+  });
+
+  it("does not start integrity scanning when shutdown begins during installation", async () => {
+    let installed = false;
+    let markInstallationStarted!: () => void;
+    let installationSignal: AbortSignal | undefined;
+    const installationStarted = new Promise<void>((resolve) => { markInstallationStarted = resolve; });
+    const environmentManager: VerifierEnvironmentManager = {
+      inspect: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0, cleanupRequired: false })),
+      prepareInstalledIntegrity: vi.fn(async () => undefined),
+      remove: vi.fn(async () => ({ removedLogicalBytes: 2048 })),
+      install: vi.fn(async (signal) => {
+        installationSignal = signal;
+        markInstallationStarted();
+        return await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("Installation was cancelled.")), { once: true });
+        });
+      }),
+      activate: vi.fn(async () => undefined),
+      cleanup: vi.fn(async () => ({ installed, installedBytes: installed ? 2048 : 0 }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, environmentManager
+    );
+    applications.push(application);
+
+    const installation = application.submit({ type: "installVerifierEnvironment" });
+    await installationStarted;
+    const shutdown = application.shutdown();
+    await installation;
+    await shutdown;
+
+    expect(installationSignal?.aborted).toBe(true);
+    expect(environmentManager.prepareInstalledIntegrity).not.toHaveBeenCalled();
+    expect(environmentManager.activate).not.toHaveBeenCalled();
+    expect(application.getState().verifierEnvironment).toMatchObject({ status: "installing", error: null });
+  });
+
   it("keeps failed environment operations recoverable without exposing a half-active checker", async () => {
     let installed = true;
     let installationAttempts = 0;
@@ -1341,6 +1526,7 @@ describe("Learning Application", () => {
         environments: installations,
         activeEnvironmentId
       })),
+      prepareInstalledIntegrity: vi.fn(async () => undefined),
       remove: vi.fn(async () => ({ removedLogicalBytes: 0 })),
       install: vi.fn(async () => ({ installedBytes: 2048, environment: BUNDLED_LEAN_ENVIRONMENT })),
       activate: vi.fn(async (environmentId: string) => { activeEnvironmentId = environmentId; }),
@@ -1368,6 +1554,9 @@ describe("Learning Application", () => {
       activeEnvironmentId: BUNDLED_LEAN_ENVIRONMENT.id,
       environment: BUNDLED_LEAN_ENVIRONMENT
     });
+    expect(environmentManager.prepareInstalledIntegrity).toHaveBeenCalledWith(
+      expect.any(AbortSignal), BUNDLED_LEAN_ENVIRONMENT.id
+    );
     await application.submit({ type: "cleanupVerifierEnvironment" });
     expect(cleanupRequests).toEqual([[]]);
 
@@ -2822,75 +3011,86 @@ describe("Learning Application", () => {
   });
 
   it("exposes cancellable task preparation without allowing competing queue actions", async () => {
-    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
-    runtime.holdDelayedTransferTask = true;
-    const { application, dataDirectory } = await launchWithRuntime(runtime);
-    const { checkId } = await scheduleDelayedTransfer(
-      application,
-      new Date(Date.now() + 50).toISOString()
-    );
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-08-05T12:00:00.000Z"));
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      runtime.holdDelayedTransferTask = true;
+      const { application, dataDirectory } = await launchWithRuntime(runtime);
+      const dueAt = new Date(Date.now() + 60_000).toISOString();
+      const { checkId } = await scheduleDelayedTransfer(application, dueAt);
+      vi.setSystemTime(new Date(Date.parse(dueAt) + 1));
 
-    const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
-    for (let attempt = 0; attempt < 100 && (application.getState().delayedTransferChecks[0].status !== "preparing"
-      || runtime.delayedTransferTaskRequests.length === 0); attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
+      for (let attempt = 0; attempt < 100 && (application.getState().delayedTransferChecks[0].status !== "preparing"
+        || runtime.delayedTransferTaskRequests.length === 0); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      expect(application.getState().delayedTransferChecks[0]).toMatchObject({ status: "preparing", task: null });
+      const recovered = await LearningApplication.launch(
+        dataDirectory,
+        new DeterministicModelRuntime(transferableSessionProposal(), false)
+      );
+      applications.push(recovered);
+      expect(recovered.getState().delayedTransferChecks[0]).toMatchObject({
+        status: "scheduled",
+        task: null,
+        taskError: expect.stringContaining("stopped when Quick Study closed")
+      });
+      await expect(application.submit({ type: "skipDelayedTransferCheck", checkId }))
+        .rejects.toThrow("Choose an active Delayed Transfer Check");
+      await expect(application.submit({ type: "cancelDelayedTransfer", checkId }))
+        .rejects.toThrow("Choose a scheduled Delayed Transfer Check");
+
+      const cancelled = await application.submit({ type: "cancelDelayedTransferPreparation", checkId });
+      await starting;
+      expect(runtime.canceledSessionIds).toContain(checkId);
+      expect(cancelled.delayedTransferChecks[0]).toMatchObject({
+        status: "scheduled",
+        task: null,
+        taskError: null
+      });
+      expect(cancelled.activeDelayedTransferCheckId).toBeNull();
+    } finally {
+      vi.useRealTimers();
     }
-    expect(application.getState().delayedTransferChecks[0]).toMatchObject({ status: "preparing", task: null });
-    const recovered = await LearningApplication.launch(
-      dataDirectory,
-      new DeterministicModelRuntime(transferableSessionProposal(), false)
-    );
-    applications.push(recovered);
-    expect(recovered.getState().delayedTransferChecks[0]).toMatchObject({
-      status: "scheduled",
-      task: null,
-      taskError: expect.stringContaining("stopped when Quick Study closed")
-    });
-    await expect(application.submit({ type: "skipDelayedTransferCheck", checkId }))
-      .rejects.toThrow("Choose an active Delayed Transfer Check");
-    await expect(application.submit({ type: "cancelDelayedTransfer", checkId }))
-      .rejects.toThrow("Choose a scheduled Delayed Transfer Check");
-
-    const cancelled = await application.submit({ type: "cancelDelayedTransferPreparation", checkId });
-    await starting;
-    expect(runtime.canceledSessionIds).toContain(checkId);
-    expect(cancelled.delayedTransferChecks[0]).toMatchObject({
-      status: "scheduled",
-      task: null,
-      taskError: null
-    });
-    expect(cancelled.activeDelayedTransferCheckId).toBeNull();
   });
 
   it("keeps an honest stopping state when task interruption is not confirmed", async () => {
-    const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
-    runtime.holdDelayedTransferTask = true;
-    runtime.ignoreDelayedTransferAbort = true;
-    runtime.cancelError = new Error("turn interruption unavailable");
-    const { application } = await launchWithRuntime(runtime);
-    const { checkId } = await scheduleDelayedTransfer(application, new Date(Date.now() + 50).toISOString());
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-08-06T12:00:00.000Z"));
+      const runtime = new DeterministicModelRuntime(transferableSessionProposal(), false);
+      runtime.holdDelayedTransferTask = true;
+      runtime.ignoreDelayedTransferAbort = true;
+      runtime.cancelError = new Error("turn interruption unavailable");
+      const { application } = await launchWithRuntime(runtime);
+      const dueAt = new Date(Date.now() + 60_000).toISOString();
+      const { checkId } = await scheduleDelayedTransfer(application, dueAt);
+      vi.setSystemTime(new Date(Date.parse(dueAt) + 1));
 
-    const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
-    for (let attempt = 0; attempt < 100 && runtime.delayedTransferTaskRequests.length === 0; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      const starting = application.submit({ type: "startDelayedTransferCheck", checkId });
+      for (let attempt = 0; attempt < 100 && runtime.delayedTransferTaskRequests.length === 0; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      await expect(application.submit({ type: "cancelDelayedTransferPreparation", checkId }))
+        .rejects.toThrow("could not confirm that task preparation stopped");
+      expect(application.getState().delayedTransferChecks[0]).toMatchObject({
+        status: "stopping",
+        task: null,
+        taskError: expect.stringContaining("Retry the stop action")
+      });
+
+      runtime.completeDelayedTransferTaskPreparation();
+      await starting;
+      expect(application.getState().delayedTransferChecks[0]).toMatchObject({
+        status: "scheduled",
+        task: null,
+        taskError: null
+      });
+    } finally {
+      vi.useRealTimers();
     }
-    await expect(application.submit({ type: "cancelDelayedTransferPreparation", checkId }))
-      .rejects.toThrow("could not confirm that task preparation stopped");
-    expect(application.getState().delayedTransferChecks[0]).toMatchObject({
-      status: "stopping",
-      task: null,
-      taskError: expect.stringContaining("Retry the stop action")
-    });
-
-    runtime.completeDelayedTransferTaskPreparation();
-    await starting;
-    expect(application.getState().delayedTransferChecks[0]).toMatchObject({
-      status: "scheduled",
-      task: null,
-      taskError: null
-    });
   });
 
   it("rejects a superficial rewrite that preserves the originating task conditions", async () => {
@@ -5680,6 +5880,139 @@ describe("Learning Application", () => {
     await application.waitForModelWork();
   });
 
+  it("refuses to pause during an in-flight proposal RPC that has not created model work yet", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness", scope: "Use an open cover",
+      initialTeachingDirection: "Start from the definition", requiresConfirmation: false, confirmationReason: null
+    });
+    runtime.holdProposal = true;
+    const { application } = await launchWithRuntime(runtime);
+    const intake = application.submit({ type: "submitSessionIntake", mathematics: "Explain compactness." });
+    await vi.waitFor(() => expect(runtime.proposalStarted).toBe(true));
+
+    await expect(application.pauseModelRuntimeForFormalVerification())
+      .rejects.toThrow("Wait for active Codex work to finish or stop it before running formal verification.");
+    expect(runtime.shutdownCalls).toBe(0);
+
+    runtime.releaseProposal();
+    await intake;
+    await application.waitForModelWork();
+  });
+
+  it("still terminates Codex and reports unavailability when paused-state persistence fails", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    await rm(dataDirectory, { recursive: true });
+    await writeFile(dataDirectory, "blocks state directory recreation", "utf8");
+
+    await expect(application.pauseModelRuntimeForFormalVerification()).rejects.toThrow();
+    expect(runtime.shutdownCalls).toBe(1);
+    expect(application.getState()).toMatchObject({
+      runtimeAvailable: false,
+      modelRuntimePausedForFormalVerification: false,
+      modelAccess: { status: "unavailable", cause: "runtime" }
+    });
+    await rm(dataDirectory, { force: true });
+    await application.submit({ type: "createWorkspace", name: "Recovered persistence" });
+  });
+
+  it("terminates an incoming replacement runtime instead of restoring it during shutdown", async () => {
+    const { application } = await launch();
+    await application.shutdown();
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+
+    await expect(application.restoreModelRuntime(replacement))
+      .rejects.toThrow("Codex cannot restart while the application is closing.");
+    expect(replacement.shutdownCalls).toBe(1);
+    expect(application.getState().runtimeAvailable).toBe(false);
+  });
+
+  it("retains a shutdown-time runtime whose termination fails and retries it on shutdown", async () => {
+    const { application } = await launch();
+    await application.shutdown();
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    replacement.shutdownError = new Error("replacement remained alive");
+
+    await expect(application.restoreModelRuntime(replacement)).rejects.toThrow("replacement remained alive");
+    expect(replacement.shutdownCalls).toBe(1);
+    replacement.shutdownError = null;
+    await application.shutdown();
+    expect(replacement.shutdownCalls).toBe(2);
+  });
+
+  it("does not overwrite an old runtime when replacement cleanup fails", async () => {
+    const original = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    original.shutdownError = new Error("original remained alive");
+    const { application } = await launchWithRuntime(original);
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+
+    await expect(application.restoreModelRuntime(replacement)).rejects.toThrow("original remained alive");
+    expect(original.shutdownCalls).toBe(1);
+    expect(replacement.shutdownCalls).toBe(1);
+    original.shutdownError = null;
+    await application.shutdown();
+    expect(original.shutdownCalls).toBe(2);
+    expect(replacement.shutdownCalls).toBe(1);
+  });
+
+  it("retains both old and incoming runtimes when neither can terminate during replacement", async () => {
+    const original = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    original.shutdownError = new Error("original remained alive");
+    const { application } = await launchWithRuntime(original);
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    replacement.shutdownError = new Error("replacement remained alive");
+
+    await expect(application.restoreModelRuntime(replacement)).rejects.toThrow("original remained alive");
+    expect(original.shutdownCalls).toBe(1);
+    expect(replacement.shutdownCalls).toBe(1);
+    original.shutdownError = null;
+    replacement.shutdownError = null;
+    await application.shutdown();
+    expect(original.shutdownCalls).toBe(2);
+    expect(replacement.shutdownCalls).toBe(2);
+  });
+
+  it("does not claim a pause when Codex refuses to shut down", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    runtime.shutdownError = new Error("process remained alive");
+    const { application } = await launchWithRuntime(runtime);
+
+    await expect(application.pauseModelRuntimeForFormalVerification()).rejects.toThrow("process remained alive");
+    expect(runtime.shutdownCalls).toBe(2);
+    expect(application.getState()).toMatchObject({
+      runtimeAvailable: false,
+      modelRuntimePausedForFormalVerification: false,
+      modelAccess: { status: "unavailable", cause: "runtime" }
+    });
+    runtime.shutdownError = null;
+    await application.shutdown();
+    expect(runtime.shutdownCalls).toBe(3);
+  });
+
   it("keeps confirmed authentication distinct from a runtime capability discovery failure", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand the claim", scope: "One inference", initialTeachingDirection: "Start",
@@ -6589,6 +6922,83 @@ describe("Learning Application", () => {
     });
     expect(state.sessions[0].pendingQuestion).toMatchObject({ text: "Where is finiteness used?" });
     expect(runtime.teachingRequests).toHaveLength(0);
+  });
+
+  it("fully pauses an idle Codex Runtime for formal verification and restores truthful access afterward", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+
+    await expect(application.pauseModelRuntimeForFormalVerification()).resolves.toBe(true);
+    expect(runtime.shutdownCalls).toBe(1);
+    expect(application.getState()).toMatchObject({
+      runtimeAvailable: false,
+      modelRuntimePausedForFormalVerification: true,
+      modelAccess: {
+        status: "unavailable",
+        cause: "runtime",
+        message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
+      }
+    });
+    const localState = await application.submit({ type: "createWorkspace", name: "Local notes workspace" });
+    expect(localState.workspaces).toContainEqual(expect.objectContaining({ name: "Local notes workspace" }));
+    expect(localState.modelRuntimePausedForFormalVerification).toBe(true);
+
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const restored = await application.restoreModelRuntime(replacement);
+    expect(restored).toMatchObject({
+      runtimeAvailable: true,
+      modelRuntimePausedForFormalVerification: false,
+      modelAccess: { status: "available" }
+    });
+  });
+
+  it("refuses to pause Codex while learner-requested model work is active", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness", scope: "Use an open cover",
+      initialTeachingDirection: "Start from the definition", requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    await application.submit({ type: "submitSessionIntake", mathematics: "Explain compactness." });
+
+    await expect(application.pauseModelRuntimeForFormalVerification())
+      .rejects.toThrow("Wait for active Codex work to finish or stop it before running formal verification.");
+    expect(runtime.shutdownCalls).toBe(0);
+    expect(application.getState()).toMatchObject({
+      runtimeAvailable: true,
+      modelRuntimePausedForFormalVerification: false,
+      modelAccess: { status: "available" }
+    });
+
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+  });
+
+  it("resets a persisted transient pause marker when the application relaunches", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const { application, dataDirectory } = await launchWithRuntime(runtime);
+    await application.pauseModelRuntimeForFormalVerification();
+
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const relaunched = await LearningApplication.launch(dataDirectory, replacement);
+    applications.push(relaunched);
+
+    expect(relaunched.getState()).toMatchObject({
+      runtimeAvailable: true,
+      modelRuntimePausedForFormalVerification: false,
+      modelAccess: { status: "available" }
+    });
   });
 
   it("turns a submitted Pending Question into a retryable Question Card without replacing earlier teaching", async () => {
@@ -8317,9 +8727,14 @@ class DeterministicModelRuntime implements ModelRuntime {
   chatGptLoginStarts = 0;
   readonly receivedApiKeys: string[] = [];
   proposalError: Error | null = null;
+  proposalStarted = false;
+  holdProposal = false;
+  private proposalCompletion: (() => void) | null = null;
   authenticationError: Error | null = null;
   capabilitiesError: Error | null = null;
   cancelError: Error | null = null;
+  shutdownCalls = 0;
+  shutdownError: Error | null = null;
   artifactSynthesisError: Error | null = null;
   artifactSynthesisContent: string | null = null;
   completeTeachingOnCancel = true;
@@ -8357,10 +8772,17 @@ class DeterministicModelRuntime implements ModelRuntime {
 
   async proposeSession(mathematics: string, onRuntimeEvent?: TeachingRequest["onRuntimeEvent"]): Promise<SessionProposal> {
     if (this.proposalError) throw this.proposalError;
+    this.proposalStarted = true;
+    if (this.holdProposal) await new Promise<void>((resolve) => { this.proposalCompletion = resolve; });
     onRuntimeEvent?.({ type: "threadStarted", threadId: "proposal-thread", turnId: null, detail: "Thread started." });
     onRuntimeEvent?.({ type: "inputSubmitted", threadId: "proposal-thread", turnId: "proposal-turn", detail: mathematics });
     onRuntimeEvent?.({ type: "turnCompleted", threadId: "proposal-thread", turnId: "proposal-turn", detail: JSON.stringify(this.proposal) });
     return this.proposal;
+  }
+
+  releaseProposal() {
+    this.proposalCompletion?.();
+    this.proposalCompletion = null;
   }
 
   async createConceptPeek(request: Parameters<ModelRuntime["createConceptPeek"]>[0]): Promise<string> {
@@ -8583,5 +9005,8 @@ class DeterministicModelRuntime implements ModelRuntime {
     }
   }
 
-  async shutdown() {}
+  async shutdown() {
+    this.shutdownCalls += 1;
+    if (this.shutdownError) throw this.shutdownError;
+  }
 }

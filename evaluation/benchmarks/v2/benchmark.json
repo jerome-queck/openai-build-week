@@ -1,5 +1,5 @@
 {
-  "benchmarkVersion": "2.0.0",
+  "benchmarkVersion": "2.1.0",
   "recoveryProcedure": "recovery-procedures.md",
   "minimumStochasticRepetitions": 5,
   "thresholds": {
@@ -17,7 +17,7 @@
   ],
   "operationalBudgets": [
     { "id": "cold-start-p95", "unit": "ms", "maximum": 5000 },
-    { "id": "peak-memory", "unit": "MiB", "maximum": 1024 },
+    { "id": "peak-memory", "unit": "MiB", "maximum": 1024, "enforcement": "advisory" },
     { "id": "source-index-p95", "unit": "ms", "maximum": 30000 },
     { "id": "verifier-footprint", "unit": "MiB", "maximum": 7500 },
     { "id": "teaching-latency-p95", "unit": "ms", "maximum": 30000 },

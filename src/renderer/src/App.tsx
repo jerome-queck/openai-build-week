@@ -548,10 +548,15 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
             Reinstall supported Lean environment
           </button>
         </>}
+        {environment.status === "preparing" && <p role="status">
+          Preparing the installed verifier integrity before Lean can launch. Ordinary study remains available.
+        </p>}
         {(environment.status === "installing" || environment.status === "removing")
           && <p role="status">Do not quit Quick Study while this local environment operation completes.</p>}
-        {(environment.status === "installFailed" || environment.status === "removeFailed" || environment.status === "cleanupRequired") && <div role="alert">
+        {(environment.status === "integrityFailed" || environment.status === "installFailed"
+          || environment.status === "removeFailed" || environment.status === "cleanupRequired") && <div role="alert">
           <p>{environment.error ?? "The Lean environment needs recovery before it can be used."}</p>
+          {environment.status === "integrityFailed" && <button onClick={() => void updateEnvironment({ type: "prepareVerifierEnvironment" })}>Retry Lean integrity preparation</button>}
           {environment.status === "installFailed" && <button onClick={() => void updateEnvironment({ type: "installVerifierEnvironment" })}>Retry Lean installation</button>}
           {environment.status === "removeFailed" && <button onClick={() => void updateEnvironment({ type: "removeVerifierEnvironment" })}>Retry Lean removal</button>}
           <button className="secondary" onClick={() => void updateEnvironment({ type: "cleanupVerifierEnvironment" })}>Clean up Lean environment</button>
@@ -575,6 +580,8 @@ function verifierEnvironmentLabel(status: LearningApplicationState["verifierEnvi
   return {
     installed: "Installed and ready",
     absent: "Not installed",
+    preparing: "Preparing verification integrity…",
+    integrityFailed: "Integrity preparation failed",
     installing: "Installing and validating…",
     removing: "Removing…",
     installFailed: "Installation failed",
@@ -944,8 +951,9 @@ function ModelAccessPanel({ state, onState }: { state: LearningApplicationState;
         <p>{state.modelAccess.message}</p>
         <small>You can open, resume, search, and edit local sessions. Model teaching is unavailable.</small>
       </div>
-      <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
-        Check Codex access
+      <button className="secondary" disabled={state.modelRuntimePausedForFormalVerification}
+        onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
+        {state.modelRuntimePausedForFormalVerification ? "Lean check in progress" : "Check Codex access"}
       </button>
     </section>
   );
@@ -972,7 +980,7 @@ function AuthenticationPanel({ state, onState }: { state: LearningApplicationSta
         <p className="eyebrow">Codex Runtime</p>
         <h2 id="authentication-title">
           {!state.runtimeAvailable
-            ? "Codex Runtime unavailable"
+            ? state.modelRuntimePausedForFormalVerification ? "Codex paused for Lean verification" : "Codex Runtime unavailable"
             : authentication.status === "signedIn"
             ? `Connected with ${authentication.method === "chatgpt" ? "ChatGPT subscription" : "API key"}`
             : "Connect Codex to begin teaching"}

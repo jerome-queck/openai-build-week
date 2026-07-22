@@ -32,6 +32,26 @@ describe("anchored teaching workbench", () => {
     expect(api.openExternal).toHaveBeenCalledWith("https://github.com/jerome-queck/openai-build-week/issues/new");
   });
 
+  it("keeps local work available while truthfully showing that Codex is paused for Lean", async () => {
+    const state = workbenchState();
+    state.modelRuntimePausedForFormalVerification = true;
+    state.modelAccess = {
+      status: "unavailable",
+      cause: "runtime",
+      message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
+    };
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Local Working Mode" })).toBeTruthy();
+    expect(screen.getByText("Codex is paused while the Bundled Lean Runtime checks the exact claim.")).toBeTruthy();
+    expect(screen.getByText("You can open, resume, search, and edit local sessions. Model teaching is unavailable."))
+      .toBeTruthy();
+    expect(screen.getByRole("button", { name: "Lean check in progress" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Leave session" }).hasAttribute("disabled")).toBe(false);
+  });
+
   it("confirms Lean removal with capability and storage impact, then offers reinstall", async () => {
     const user = userEvent.setup();
     const installed = workbenchState();
@@ -63,6 +83,21 @@ describe("anchored teaching workbench", () => {
     expect(settings.textContent).toContain("reasoning review, source-grounded checking, and independent corroboration");
     await user.click(within(settings).getByRole("button", { name: "Reinstall supported Lean environment" }));
     expect(api.submit).toHaveBeenLastCalledWith({ type: "installVerifierEnvironment" });
+  });
+
+  it("reports verifier integrity preparation separately from installation", async () => {
+    const state = workbenchState();
+    state.screen = "dashboard";
+    state.activeSessionId = null;
+    state.verifierEnvironment.status = "preparing";
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const settings = await screen.findByRole("region", { name: "Application settings" });
+    expect(settings.textContent).toContain("Preparing verification integrity");
+    expect(settings.textContent).toContain("before Lean can launch");
+    expect(within(settings).queryByRole("button", { name: "Remove Lean environment" })).toBeNull();
   });
 
   it("lists retained Verifier Environments with explicit pin, rollback, and safe-cleanup controls", async () => {
@@ -392,6 +427,21 @@ describe("anchored teaching workbench", () => {
       runId: expect.any(String), target: "learningArtifact", targetId: artifact.id,
       claimId: artifact.currentRevision.claims[0].claimId
     });
+  });
+
+  it("keeps formal checks unavailable while installed Lean integrity is preparing", async () => {
+    const state = workbenchState();
+    state.verifierEnvironment.status = "preparing";
+    state.sessions[0].learningArtifacts[0].currentRevision.claims[0].claimStatement =
+      "For every natural number n, n + 0 = n.";
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const formalization = await screen.findByRole("region", { name: "Formalization for mathematical claim 1" });
+    expect(within(formalization).getByRole("button", { name: "Check exact claim 1 with bundled Lean" })
+      .hasAttribute("disabled")).toBe(true);
+    expect(formalization.textContent).toContain("integrity preparation completes");
   });
 
   it("keeps unsupported checks honest and lets the learner cancel an active Lean run", async () => {
@@ -1762,6 +1812,7 @@ function workbenchState(): LearningApplicationState {
     authentication: { status: "failed", method: null, accountLabel: null, loginUrl: null, error: "Unavailable" },
     intakeError: null,
     runtimeAvailable: false,
+    modelRuntimePausedForFormalVerification: false,
     runtimeCapabilities: { models: [] },
     modelAccess: { status: "unavailable", cause: "runtime", message: "Unavailable" },
     accessConfirmationPreference: { confirmFullAccess: true },

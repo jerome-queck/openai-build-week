@@ -228,6 +228,46 @@ describe("evaluateQualityGate", () => {
     ]));
   });
 
+  it("reports a missed advisory operational goal without failing the release", () => {
+    const report = evaluateQualityGate(
+      {
+        benchmarkVersion: "2.1.0",
+        minimumStochasticRepetitions: 1,
+        thresholds: { minimumScenarioPassRate: 1, maximumScenarioVariance: 0 },
+        releaseBlockers: [],
+        operationalBudgets: [
+          { id: "peak-memory", unit: "MiB", maximum: 1024, enforcement: "advisory" }
+        ],
+        scenarios: []
+      },
+      {
+        benchmarkVersion: "2.1.0",
+        release: { id: "candidate-advisory-memory", commit: "abc123" },
+        provenance: pinnedProvenance,
+        recordedAt: "2026-07-22T00:00:00.000Z",
+        versions: { application: "0.1.0", modelRuntime: "fixture-runtime", verifier: "fixture-verifier" },
+        environment: {
+          hardware: "fixture-mac", operatingSystem: "fixture-macos",
+          node: "fixture-node", electron: "fixture-electron"
+        },
+        trials: [],
+        operationalMeasurements: [{ budgetId: "peak-memory", value: 1052 }],
+        allowedExceptions: [],
+        knownLimitations: [],
+        productLearningObservations: [],
+        causalLearningEvidence: { claimSupported: false, summary: "No causal claim." }
+      }
+    );
+
+    expect(report.decision).toBe("pass");
+    expect(report.failures).toEqual([]);
+    expect(report.operationalBudgets).toContainEqual({
+      id: "peak-memory", unit: "MiB", maximum: 1024, measured: 1052,
+      passed: false, enforcement: "advisory"
+    });
+    expect(renderQualityGateMarkdown(report)).toContain("missed (advisory)");
+  });
+
   it("rejects malformed and ambiguous evaluator input", () => {
     expect(() => parseQualityBenchmark({
       benchmarkVersion: "1.0.0",
@@ -254,6 +294,15 @@ describe("evaluateQualityGate", () => {
         { id: "duplicate", suite: "failure-recovery", kind: "deterministic", description: "Two" }
       ]
     })).toThrow("benchmark.scenarios contains duplicate id duplicate");
+
+    expect(() => parseQualityBenchmark({
+      benchmarkVersion: "2.1.0",
+      minimumStochasticRepetitions: 5,
+      thresholds: { minimumScenarioPassRate: 0.8, maximumScenarioVariance: 0.2 },
+      releaseBlockers: [],
+      operationalBudgets: [{ id: "peak-memory", unit: "MiB", maximum: 1024, enforcement: "optional" }],
+      scenarios: []
+    })).toThrow("benchmark.operationalBudgets[0].enforcement is invalid");
 
     expect(() => parseQualityEvidence({
       benchmarkVersion: "1.0.0",

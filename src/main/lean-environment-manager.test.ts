@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import bundledEnvironment from "../shared/bundled-verifier-environment.json";
-import { LeanEnvironmentManager, validateReferenceProof } from "./lean-environment-manager";
+import {
+  LeanEnvironmentManager,
+  validateReferenceProof,
+  type LeanIntegrityScanner,
+  type LeanIntegritySnapshot
+} from "./lean-environment-manager";
 
 describe("LeanEnvironmentManager", () => {
   const directories: string[] = [];
@@ -132,6 +137,38 @@ describe("LeanEnvironmentManager", () => {
     expect(await manager.inspect()).toMatchObject({ installed: true, cleanupRequired: false });
   });
 
+  it("leaves a cancelled installation recoverable as interrupted staging", async () => {
+    const { registry, seedRoot } = await fixture();
+    const controller = new AbortController();
+    const manager = new LeanEnvironmentManager(registry, seedRoot, async (_path, signal) => {
+      expect(signal).toBe(controller.signal);
+      controller.abort();
+    });
+
+    await expect(manager.install(controller.signal)).rejects.toThrow("Lean environment operation was cancelled");
+    expect(await manager.inspect()).toMatchObject({ installed: false, cleanupRequired: true });
+    await expect(manager.cleanup()).resolves.toMatchObject({ installed: false, installedBytes: 0 });
+    expect(await manager.inspect()).toMatchObject({ installed: false, cleanupRequired: false });
+  });
+
+  it("requires cleanup to repair a valid environment whose size record is missing", async () => {
+    const { registry, seedRoot, manager } = await fixture();
+    await manager.install();
+    await rm(join(registry, `.lean-environment-size-${bundledEnvironment.id}`));
+
+    const restarted = new LeanEnvironmentManager(registry, seedRoot, async () => undefined);
+    expect(await restarted.inspect()).toMatchObject({ installed: true, installedBytes: 0, cleanupRequired: true });
+    const recovered = await restarted.cleanup();
+
+    expect(recovered.installed).toBe(true);
+    expect(recovered.installedBytes).toBeGreaterThan(0);
+    expect(await restarted.inspect()).toMatchObject({
+      installed: true,
+      installedBytes: recovered.installedBytes,
+      cleanupRequired: false
+    });
+  });
+
   it("preserves removal intent when cleanup finishes an interrupted post-deactivation removal", async () => {
     const { registry, manager } = await fixture();
     await manager.install();
@@ -163,12 +200,14 @@ describe("LeanEnvironmentManager", () => {
   it("rejects a read-only installed tree whose content differs from the signed seed", async () => {
     const { registry, manager } = await fixture();
     await manager.install();
+    await manager.prepareInstalledIntegrity();
     const executable = join(registry, bundledEnvironment.id, "bin", "lean");
     await chmod(executable, 0o700);
     await writeFile(executable, "tampered executable", "utf8");
     await chmod(executable, 0o500);
 
-    await expect(manager.assertInstalledIntegrity()).rejects.toThrow("does not match the signed application payload");
+    await expect(manager.assertInstalledIntegrity()).rejects.toThrow("changed after readiness preparation");
+    await expect(manager.prepareInstalledIntegrity()).rejects.toThrow("does not match the signed application payload");
     expect(await manager.inspect()).toMatchObject({ installed: true, cleanupRequired: false });
   });
 
@@ -182,9 +221,138 @@ describe("LeanEnvironmentManager", () => {
 
     const restartedManager = new LeanEnvironmentManager(registry, seedRoot, async () => undefined);
     expect(await restartedManager.inspect()).toMatchObject({ installed: true, cleanupRequired: false });
-    await expect(restartedManager.assertInstalledIntegrity()).rejects.toThrow(
-      "does not match the signed application payload"
+    await expect(restartedManager.assertInstalledIntegrity()).rejects.toThrow("integrity preparation has not completed");
+    await expect(restartedManager.prepareInstalledIntegrity()).rejects.toThrow("contains a writable filesystem entry");
+  });
+
+  it("prepares full integrity before readiness and keeps execution checks off the content-scan path", async () => {
+    const { registry, seedRoot, manager: installer } = await fixture();
+    await installer.install();
+    const installed = deferred<LeanIntegritySnapshot>();
+    const trusted = deferred<LeanIntegritySnapshot>();
+    let metadataDigest = "installed-metadata";
+    const scanner: LeanIntegrityScanner = {
+      scanTree: async (root) => root.startsWith(registry) ? installed.promise : trusted.promise,
+      scanMetadata: async () => metadataDigest
+    };
+    const events: Array<{ phase: string; status: string; elapsedMs: number }> = [];
+    const manager = new LeanEnvironmentManager(
+      registry,
+      seedRoot,
+      async () => undefined,
+      async () => undefined,
+      { scanner, preparationTimeoutMs: 1_000, executionTimeoutMs: 1_000, observe: (event) => events.push(event) }
     );
+
+    const preparation = manager.prepareInstalledIntegrity();
+    await expect(manager.assertInstalledIntegrity()).rejects.toThrow(
+      "Lean integrity preparation is still running; Lean was not launched"
+    );
+    installed.resolve({ contentDigest: "trusted-content", metadataDigest: "installed-metadata" });
+    trusted.resolve({ contentDigest: "trusted-content", metadataDigest: "seed-metadata" });
+    await expect(preparation).resolves.toBeUndefined();
+    await expect(manager.assertInstalledIntegrity()).resolves.toBeUndefined();
+
+    metadataDigest = "changed-metadata";
+    await expect(manager.assertInstalledIntegrity()).rejects.toThrow(
+      "installed Lean environment changed after readiness preparation; Lean was not launched"
+    );
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ phase: "installed-content", status: "started" }),
+      expect.objectContaining({ phase: "trusted-seed", status: "completed" }),
+      expect.objectContaining({ phase: "execution-metadata", status: "completed" })
+    ]));
+  });
+
+  it("settles a stalled integrity phase at a hard deadline with actionable diagnostics", async () => {
+    const { registry, seedRoot, manager: installer } = await fixture();
+    await installer.install();
+    const scanner: LeanIntegrityScanner = {
+      scanTree: async () => await new Promise<LeanIntegritySnapshot>(() => undefined),
+      scanMetadata: async () => "metadata"
+    };
+    const manager = new LeanEnvironmentManager(
+      registry,
+      seedRoot,
+      async () => undefined,
+      async () => undefined,
+      { scanner, preparationTimeoutMs: 20, executionTimeoutMs: 20 }
+    );
+
+    await expect(manager.prepareInstalledIntegrity()).rejects.toThrow(
+      /Lean integrity phase (installed-content|trusted-seed) exceeded 20 ms after \d+ ms; Lean was not launched/
+    );
+  });
+
+  it("aborts the active integrity scanner when preparation is cancelled", async () => {
+    const { registry, seedRoot, manager: installer } = await fixture();
+    await installer.install();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let scannerObservedCancellation = false;
+    const scanner: LeanIntegrityScanner = {
+      scanTree: async (_root, signal) => {
+        markStarted();
+        return await new Promise<LeanIntegritySnapshot>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            scannerObservedCancellation = true;
+            reject(new Error("scanner cancelled"));
+          }, { once: true });
+        });
+      },
+      scanMetadata: async () => "metadata"
+    };
+    const manager = new LeanEnvironmentManager(
+      registry,
+      seedRoot,
+      async () => undefined,
+      async () => undefined,
+      { scanner, preparationTimeoutMs: 1_000 }
+    );
+    const controller = new AbortController();
+
+    const preparation = manager.prepareInstalledIntegrity(controller.signal);
+    await started;
+    controller.abort();
+
+    await expect(preparation).rejects.toThrow(/cancelled.*Lean was not launched/);
+    expect(scannerObservedCancellation).toBe(true);
+  });
+
+  it("aborts the activation metadata check when lifecycle cancellation begins", async () => {
+    const { registry, seedRoot, manager: installer } = await fixture();
+    await installer.install();
+    let markMetadataStarted!: () => void;
+    const metadataStarted = new Promise<void>((resolve) => { markMetadataStarted = resolve; });
+    let scannerObservedCancellation = false;
+    const scanner: LeanIntegrityScanner = {
+      scanTree: async () => ({ contentDigest: "trusted-content", metadataDigest: "installed-metadata" }),
+      scanMetadata: async (_root, signal) => {
+        markMetadataStarted();
+        return await new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => {
+            scannerObservedCancellation = true;
+            reject(new Error("metadata scan cancelled"));
+          }, { once: true });
+        });
+      }
+    };
+    const manager = new LeanEnvironmentManager(
+      registry,
+      seedRoot,
+      async () => undefined,
+      async () => undefined,
+      { scanner, preparationTimeoutMs: 1_000, executionTimeoutMs: 1_000 }
+    );
+    await manager.prepareInstalledIntegrity();
+    const controller = new AbortController();
+
+    const activation = manager.activate(bundledEnvironment.id, controller.signal);
+    await metadataStarted;
+    controller.abort();
+
+    await expect(activation).rejects.toThrow(/execution-metadata was cancelled.*Lean was not launched/);
+    expect(scannerObservedCancellation).toBe(true);
   });
 
   it("does not follow an active-environment symlink while preparing a managed move", async () => {
@@ -208,4 +376,10 @@ async function makeWritable(path: string): Promise<void> {
     if (entry.isDirectory()) await makeWritable(child);
     else await chmod(child, 0o600);
   }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((accept) => { resolve = accept; });
+  return { promise, resolve };
 }

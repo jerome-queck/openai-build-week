@@ -12,6 +12,7 @@ export interface QualityBenchmark {
     id: string;
     unit: string;
     maximum: number;
+    enforcement?: "release" | "advisory";
   }>;
   scenarios: Array<{
     id: string;
@@ -103,6 +104,7 @@ export interface QualityGateReport {
     maximum: number;
     measured: number | null;
     passed: boolean;
+    enforcement: "release" | "advisory";
   }>;
   allowedExceptions: QualityEvidence["allowedExceptions"];
   knownLimitations: string[];
@@ -161,13 +163,21 @@ export function parseQualityBenchmark(value: unknown): QualityBenchmark {
     "benchmark.operationalBudgets"
   ).map((value, index) => {
     const budget = requireRecord(value, `benchmark.operationalBudgets[${index}]`);
+    const parsedEnforcement = budget.enforcement === undefined
+      ? "release"
+      : requireString(budget.enforcement, `benchmark.operationalBudgets[${index}].enforcement`);
+    if (parsedEnforcement !== "release" && parsedEnforcement !== "advisory") {
+      throw new Error(`benchmark.operationalBudgets[${index}].enforcement is invalid`);
+    }
+    const enforcement: "release" | "advisory" = parsedEnforcement;
     return {
       id: requireString(budget.id, `benchmark.operationalBudgets[${index}].id`),
       unit: requireString(budget.unit, `benchmark.operationalBudgets[${index}].unit`),
       maximum: requireNonNegativeNumber(
         budget.maximum,
         `benchmark.operationalBudgets[${index}].maximum`
-      )
+      ),
+      enforcement
     };
   });
 
@@ -437,6 +447,7 @@ export function evaluateQualityGate(
   });
 
   const operationalBudgets = benchmark.operationalBudgets.map((budget) => {
+    const enforcement = budget.enforcement ?? "release";
     const measurements = evidence.operationalMeasurements.filter(
       (candidate) => candidate.budgetId === budget.id
     );
@@ -446,13 +457,14 @@ export function evaluateQualityGate(
     const measurement = measurements[0];
     if (!measurement) {
       failures.push(`Operational budget ${budget.id} has no measurement.`);
-    } else if (measurement.value > budget.maximum) {
+    } else if (measurement.value > budget.maximum && enforcement === "release") {
       failures.push(
         `Operational budget ${budget.id} measured ${measurement.value} ${budget.unit}, above ${budget.maximum} ${budget.unit}.`
       );
     }
     return {
       ...budget,
+      enforcement,
       measured: measurement?.value ?? null,
       passed: measurement !== undefined && measurement.value <= budget.maximum
     };
@@ -499,7 +511,7 @@ export function renderQualityGateMarkdown(report: QualityGateReport): string {
     `| ${scenario.scenarioId} | ${scenario.suite} | ${scenario.repetitions} | ${(scenario.passRate * 100).toFixed(1)}% | ${scenario.variance.toFixed(3)} | ${scenario.passed ? "pass" : "fail"} |`
   );
   const budgetLines = report.operationalBudgets.map((budget) =>
-    `| ${budget.id} | ${budget.measured ?? "missing"} ${budget.unit} | <= ${budget.maximum} ${budget.unit} | ${budget.passed ? "pass" : "fail"} |`
+    `| ${budget.id} | ${budget.measured ?? "missing"} ${budget.unit} | ${budget.enforcement === "advisory" ? "goal " : ""}<= ${budget.maximum} ${budget.unit} | ${budget.enforcement === "advisory" ? budget.passed ? "met" : budget.measured !== null ? "missed (advisory)" : "fail" : budget.passed ? "pass" : "fail"} |`
   );
 
   return [

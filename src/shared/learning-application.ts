@@ -1174,6 +1174,7 @@ export interface LearningApplicationState {
   };
   intakeError: string | null;
   runtimeAvailable: boolean;
+  modelRuntimePausedForFormalVerification: boolean;
   runtimeCapabilities: ModelRuntimeCapabilities;
   modelAccess: ModelAccessState;
   accessConfirmationPreference: {
@@ -1189,7 +1190,8 @@ export interface LearningApplicationState {
 }
 
 export interface VerifierEnvironmentState {
-  status: "installed" | "absent" | "installing" | "removing" | "installFailed" | "removeFailed" | "cleanupRequired";
+  status: "installed" | "absent" | "preparing" | "integrityFailed" | "installing" | "removing"
+    | "installFailed" | "removeFailed" | "cleanupRequired";
   environment: Readonly<VerificationEnvironment>;
   defaultEnvironment: Readonly<VerificationEnvironment>;
   activeEnvironmentId: string | null;
@@ -1365,6 +1367,7 @@ export type LearnerAction =
   | { type: "setAdaptiveReusePreference"; enabled: boolean }
   | { type: "setSessionLearnerModelIgnored"; ignored: boolean }
   | { type: "removeVerifierEnvironment" }
+  | { type: "prepareVerifierEnvironment" }
   | { type: "installVerifierEnvironment" }
   | { type: "activateVerifierEnvironment"; environmentId: string }
   | { type: "setVerifierEnvironmentPinned"; environmentId: string; pinned: boolean }
@@ -1424,6 +1427,8 @@ export class LearningApplication {
   private sourceIndexWork = Promise.resolve();
   private sourceSnapshotWork = Promise.resolve();
   private verifierEnvironmentWork = Promise.resolve();
+  private verifierEnvironmentPreparation: AbortController | null = null;
+  private shuttingDown = false;
   private readonly modelWorks = new Map<string, {
     controller: AbortController;
     promise: Promise<unknown>;
@@ -1433,6 +1438,8 @@ export class LearningApplication {
     restart(): Promise<void>;
   }>();
   private readonly accessDecisionWaiters = new Map<string, (decision: RuntimeAccessDecision) => void>();
+  private activeModelRuntimeOperations = 0;
+  private readonly modelRuntimesPendingShutdown = new Set<ModelRuntime>();
   private readonly researchWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
   private agentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
@@ -1519,6 +1526,7 @@ export class LearningApplication {
     await application.loadSourceIndexCache();
     if (modelRuntime) {
       application.state.runtimeAvailable = true;
+      application.state.modelRuntimePausedForFormalVerification = false;
       try {
         application.updateAuthentication(await modelRuntime.getAuthentication());
       } catch (error) {
@@ -1536,6 +1544,7 @@ export class LearningApplication {
       }
     } else {
       application.state.runtimeAvailable = false;
+      application.state.modelRuntimePausedForFormalVerification = false;
       const error = new Error("Codex Runtime is unavailable. Restart Codex and try again.");
       application.state.authentication = failedAuthentication(null, error);
       application.state.modelAccess = unavailableModelAccess(error);
@@ -1565,14 +1574,16 @@ export class LearningApplication {
       this.state.verifierEnvironment = {
         ...this.state.verifierEnvironment,
         status: interrupted || inspection.cleanupRequired ? "cleanupRequired"
-          : priorStatus === "installFailed" || priorStatus === "removeFailed" ? priorStatus
-            : inspection.installed ? "installed" : "absent",
+          : priorStatus === "installFailed" || priorStatus === "removeFailed" || priorStatus === "integrityFailed" ? priorStatus
+            : inspection.installed
+              ? this.verifierEnvironmentManager.prepareInstalledIntegrity ? "preparing" : "installed"
+              : "absent",
         installedBytes: inspection.installedBytes,
         error: interrupted
           ? "The previous Lean environment operation was interrupted. Clean up its staging files before retrying."
           : inspection.cleanupRequired
             ? "Lean environment staging files require cleanup before formal verification can resume."
-            : priorStatus === "installFailed" || priorStatus === "removeFailed"
+            : priorStatus === "installFailed" || priorStatus === "removeFailed" || priorStatus === "integrityFailed"
               ? this.state.verifierEnvironment.error
               : null
       };
@@ -1586,7 +1597,11 @@ export class LearningApplication {
   }
 
   private serializeVerifierEnvironment<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.verifierEnvironmentWork.then(work, work);
+    const guardedWork = () => {
+      if (this.shuttingDown) throw new Error("The application is shutting down; retry the verifier action after relaunch.");
+      return work();
+    };
+    const result = this.verifierEnvironmentWork.then(guardedWork, guardedWork);
     this.verifierEnvironmentWork = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -1680,12 +1695,49 @@ export class LearningApplication {
     this.state.verifierEnvironment.error = null;
     await this.publishAndPersist();
     const priorActive = this.state.verifierEnvironment.activeEnvironmentId;
+    let result: Awaited<ReturnType<VerifierEnvironmentManager["install"]>>;
     try {
-      const result = await this.verifierEnvironmentManager.install();
-      if (result.environment && this.verifierEnvironmentManager.activate) {
-        await this.verifierEnvironmentManager.activate(result.environment.id);
-      }
+      result = await this.runVerifierEnvironmentOperation((signal) => this.verifierEnvironmentManager!.install(signal));
+    } catch (error) {
+      this.state.verifierEnvironment.status = this.shuttingDown ? "installing" : priorActive ? "installed" : "installFailed";
+      this.state.verifierEnvironment.error = this.shuttingDown ? null : usefulVerifierEnvironmentError(error);
+      return;
+    }
+    const installedEnvironmentId = result.environment?.id ?? this.state.verifierEnvironment.defaultEnvironment.id;
+    try {
       this.applyVerifierEnvironmentInspection(await this.verifierEnvironmentManager.inspect());
+    } catch (error) {
+      this.state.verifierEnvironment.status = "cleanupRequired";
+      this.state.verifierEnvironment.installedBytes = result.installedBytes;
+      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+      return;
+    }
+    this.state.verifierEnvironment.status = "preparing";
+    await this.publishAndPersist();
+    let integrityPrepared = false;
+    try {
+      const inspection = await this.runVerifierEnvironmentLifecycle(installedEnvironmentId, async (signal) => {
+        integrityPrepared = true;
+        if (result.environment && this.verifierEnvironmentManager?.activate) {
+          await this.verifierEnvironmentManager.activate(result.environment.id, signal);
+        }
+        return this.verifierEnvironmentManager!.inspect();
+      });
+      this.applyVerifierEnvironmentInspection(inspection);
+    } catch (error) {
+      if (this.shuttingDown) {
+        this.state.verifierEnvironment.status = "preparing";
+        this.state.verifierEnvironment.error = null;
+        return;
+      }
+      const preservedActive = priorActive !== null && priorActive !== installedEnvironmentId;
+      this.state.verifierEnvironment.status = integrityPrepared ? "cleanupRequired"
+        : preservedActive ? "installed" : "integrityFailed";
+      if (!preservedActive && !integrityPrepared) this.state.verifierEnvironment.installedBytes = result.installedBytes;
+      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+      return;
+    }
+    try {
       const superseded = this.unreferencedVerifierEnvironmentIds();
       if (superseded.length > 0) {
         await this.verifierEnvironmentManager.cleanup(superseded);
@@ -1698,8 +1750,57 @@ export class LearningApplication {
         error: null
       };
     } catch (error) {
-      this.state.verifierEnvironment.status = priorActive ? "installed" : "installFailed";
+      this.state.verifierEnvironment.status = "cleanupRequired";
       this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+    }
+  }
+
+  async prepareVerifierEnvironment(): Promise<LearningApplicationState> {
+    return this.serializeVerifierEnvironment(() => this.prepareVerifierEnvironmentNow());
+  }
+
+  private async prepareVerifierEnvironmentNow(): Promise<LearningApplicationState> {
+    if (!this.verifierEnvironmentManager?.prepareInstalledIntegrity
+      || this.state.verifierEnvironment.activeEnvironmentId === null) return this.getState();
+    this.state.verifierEnvironment.status = "preparing";
+    this.state.verifierEnvironment.error = null;
+    await this.publishAndPersist();
+    try {
+      await this.runVerifierEnvironmentLifecycle(
+        this.state.verifierEnvironment.activeEnvironmentId,
+        async () => undefined
+      );
+      this.state.verifierEnvironment.status = "installed";
+      this.state.verifierEnvironment.error = null;
+    } catch (error) {
+      this.state.verifierEnvironment.status = this.shuttingDown ? "preparing" : "integrityFailed";
+      this.state.verifierEnvironment.error = this.shuttingDown ? null : usefulVerifierEnvironmentError(error);
+    }
+    await this.publishAndPersist();
+    return this.getState();
+  }
+
+  private async runVerifierEnvironmentLifecycle<T>(
+    environmentId: string,
+    continueAfterPreparation: (signal: AbortSignal) => Promise<T>
+  ): Promise<T> {
+    return this.runVerifierEnvironmentOperation(async (signal) => {
+      await this.verifierEnvironmentManager?.prepareInstalledIntegrity?.(signal, environmentId);
+      if (this.shuttingDown) throw new Error("Verifier environment work was cancelled during shutdown.");
+      return continueAfterPreparation(signal);
+    });
+  }
+
+  private async runVerifierEnvironmentOperation<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    if (this.shuttingDown) throw new Error("Verifier environment work was cancelled during shutdown.");
+    const controller = new AbortController();
+    this.verifierEnvironmentPreparation = controller;
+    try {
+      const result = await work(controller.signal);
+      if (this.shuttingDown) throw new Error("Verifier environment work was cancelled during shutdown.");
+      return result;
+    } finally {
+      if (this.verifierEnvironmentPreparation === controller) this.verifierEnvironmentPreparation = null;
     }
   }
 
@@ -1710,16 +1811,28 @@ export class LearningApplication {
     const candidate = this.state.verifierEnvironment.environments.find((entry) => entry.environment.id === environmentId);
     if (!candidate) throw new Error("The selected Verifier Environment is not installed.");
     const priorActive = this.state.verifierEnvironment.activeEnvironmentId;
+    this.state.verifierEnvironment.status = "preparing";
+    this.state.verifierEnvironment.error = null;
+    await this.publishAndPersist();
+    let integrityPrepared = false;
     try {
-      await this.verifierEnvironmentManager.activate(environmentId);
-      this.applyVerifierEnvironmentInspection(await this.verifierEnvironmentManager.inspect());
-      this.state.verifierEnvironment.status = "installed";
-      this.state.verifierEnvironment.error = null;
+      const inspection = await this.runVerifierEnvironmentLifecycle(environmentId, async (signal) => {
+        integrityPrepared = true;
+        await this.verifierEnvironmentManager!.activate!(environmentId, signal);
+        return this.verifierEnvironmentManager!.inspect();
+      });
+      this.applyVerifierEnvironmentInspection(inspection);
     } catch (error) {
       this.state.verifierEnvironment.activeEnvironmentId = priorActive;
-      this.state.verifierEnvironment.status = priorActive ? "installed" : "installFailed";
-      this.state.verifierEnvironment.error = usefulVerifierEnvironmentError(error);
+      const preservedActive = priorActive !== null && priorActive !== environmentId;
+      this.state.verifierEnvironment.status = this.shuttingDown ? "preparing" : integrityPrepared
+        ? priorActive ? "installed" : "cleanupRequired"
+        : preservedActive ? "installed" : "integrityFailed";
+      this.state.verifierEnvironment.error = this.shuttingDown ? null : usefulVerifierEnvironmentError(error);
+      return;
     }
+    this.state.verifierEnvironment.status = "installed";
+    this.state.verifierEnvironment.error = null;
   }
 
   private setVerifierEnvironmentPinned(environmentId: string, pinned: boolean): void {
@@ -2390,11 +2503,25 @@ export class LearningApplication {
   }
 
   async restoreModelRuntime(modelRuntime: ModelRuntime): Promise<LearningApplicationState> {
-    if (this.modelRuntime && this.modelRuntime !== modelRuntime) {
-      await this.modelRuntime.shutdown().catch(() => undefined);
+    if (this.shuttingDown) {
+      await this.stopModelRuntimeForShutdown(modelRuntime);
+      throw new Error("Codex cannot restart while the application is closing.");
     }
+    if (this.modelRuntime !== modelRuntime) this.modelRuntimesPendingShutdown.add(modelRuntime);
+    if (this.modelRuntime && this.modelRuntime !== modelRuntime) {
+      const previousRuntime = this.modelRuntime;
+      try {
+        await this.stopModelRuntimeForShutdown(previousRuntime);
+      } catch (error) {
+        this.modelRuntime = previousRuntime;
+        await this.stopModelRuntimeForShutdown(modelRuntime).catch(() => undefined);
+        throw error;
+      }
+    }
+    this.modelRuntimesPendingShutdown.delete(modelRuntime);
     this.modelRuntime = modelRuntime;
     this.state.runtimeAvailable = true;
+    this.state.modelRuntimePausedForFormalVerification = false;
     try {
       this.updateAuthentication(await modelRuntime.getAuthentication());
     } catch (error) {
@@ -2415,10 +2542,48 @@ export class LearningApplication {
 
   async reportModelRuntimeFailure(error: unknown): Promise<LearningApplicationState> {
     this.state.runtimeAvailable = false;
+    this.state.modelRuntimePausedForFormalVerification = false;
     this.state.modelAccess = unavailableModelAccess(
       error instanceof ModelAccessError ? error : new ModelAccessError("runtime", usefulRuntimeError(error))
     );
     return this.publishAndPersist();
+  }
+
+  async stopModelRuntimeForShutdown(modelRuntime: ModelRuntime): Promise<void> {
+    this.modelRuntimesPendingShutdown.add(modelRuntime);
+    await modelRuntime.shutdown();
+    this.modelRuntimesPendingShutdown.delete(modelRuntime);
+  }
+
+  async pauseModelRuntimeForFormalVerification(): Promise<boolean> {
+    if (this.shuttingDown) throw new Error("Formal verification cannot start while the application is closing.");
+    if (this.modelWorks.size > 0 || this.accessDecisionWaiters.size > 0 || this.activeModelRuntimeOperations > 0) {
+      throw new Error("Wait for active Codex work to finish or stop it before running formal verification.");
+    }
+    if (!this.modelRuntime) return false;
+    const runtime = this.modelRuntime;
+    this.modelRuntime = null;
+    this.state.runtimeAvailable = false;
+    this.state.modelRuntimePausedForFormalVerification = true;
+    this.state.modelAccess = {
+      status: "unavailable",
+      cause: "runtime",
+      message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
+    };
+    try {
+      await this.publishAndPersist();
+      await runtime.shutdown();
+      return true;
+    } catch (error) {
+      try {
+        await runtime.shutdown();
+      } catch {
+        this.modelRuntime = runtime;
+      }
+      this.state.modelRuntimePausedForFormalVerification = false;
+      await this.reportModelRuntimeFailure(error);
+      throw error;
+    }
   }
 
   async linkPrimaryFolder(
@@ -2571,6 +2736,8 @@ export class LearningApplication {
   }
 
   async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    this.verifierEnvironmentPreparation?.abort();
     for (const session of this.state.sessions) {
       for (const request of session.accessRequests) {
         if (request.status !== "pending") continue;
@@ -2597,8 +2764,14 @@ export class LearningApplication {
       this.queuePersistence();
     }
     await Promise.all(activeWorks.map(([sessionId]) => this.modelRuntime?.cancelTeaching(sessionId).catch(() => undefined)));
+    await this.verifierEnvironmentWork;
     await this.waitForModelWork();
-    await this.modelRuntime?.shutdown();
+    if (this.modelRuntime) this.modelRuntimesPendingShutdown.add(this.modelRuntime);
+    const shutdownResults = await Promise.allSettled(
+      [...this.modelRuntimesPendingShutdown].map((runtime) => this.stopModelRuntimeForShutdown(runtime))
+    );
+    const failedShutdown = shutdownResults.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failedShutdown) throw failedShutdown.reason;
   }
 
   async submit(action: LearnerAction): Promise<LearningApplicationState> {
@@ -4112,9 +4285,9 @@ export class LearningApplication {
         this.agentWorkLogs[proposalAttemptId] = pendingLog;
         const runtime = this.modelRuntime!;
         try {
-          proposal = await runtime.proposeSession(mathematics, (event) => {
+          proposal = await this.withModelRuntimeOperation(() => runtime.proposeSession(mathematics, (event) => {
             pendingLog.push({ ...event, sequence: pendingLog.length + 1 });
-          });
+          }));
           const materialScope = proposal.materialScope ?? (proposal.argumentRoadmap ? "longOrMultiStage" : "focused");
           if (proposal.argumentRoadmap && materialScope !== "longOrMultiStage") {
             throw new Error("Codex returned an inconsistent Argument Roadmap. Retry to request a fresh proposal.");
@@ -4316,7 +4489,8 @@ export class LearningApplication {
       case "startChatGptLogin": {
         if (!this.modelRuntime) throw new Error("Codex is unavailable.");
         try {
-          const login = await this.modelRuntime.startChatGptLogin();
+          const runtime = this.modelRuntime;
+          const login = await this.withModelRuntimeOperation(() => runtime.startChatGptLogin());
           this.state.authentication = {
             status: "signingIn",
             method: "chatgpt",
@@ -4333,8 +4507,11 @@ export class LearningApplication {
         if (!this.modelRuntime) throw new Error("Codex is unavailable.");
         if (!action.apiKey.trim()) throw new Error("An OpenAI API key is required.");
         try {
-          await this.modelRuntime.loginWithApiKey(action.apiKey);
-          this.updateAuthentication(await this.modelRuntime.getAuthentication());
+          const runtime = this.modelRuntime;
+          await this.withModelRuntimeOperation(async () => {
+            await runtime.loginWithApiKey(action.apiKey);
+            this.updateAuthentication(await runtime.getAuthentication());
+          });
         } catch (error) {
           this.state.authentication = failedAuthentication("apiKey", error);
           this.applyModelAccessFailure(error);
@@ -4344,7 +4521,8 @@ export class LearningApplication {
       case "refreshAuthentication": {
         if (!this.modelRuntime) throw new Error("Codex is unavailable.");
         try {
-          this.updateAuthentication(await this.modelRuntime.getAuthentication());
+          const runtime = this.modelRuntime;
+          this.updateAuthentication(await this.withModelRuntimeOperation(() => runtime.getAuthentication()));
         } catch (error) {
           this.state.authentication = failedAuthentication(null, error);
           this.applyModelAccessFailure(error);
@@ -4460,6 +4638,10 @@ export class LearningApplication {
       }
       case "removeVerifierEnvironment": {
         await this.serializeVerifierEnvironment(() => this.removeVerifierEnvironment());
+        break;
+      }
+      case "prepareVerifierEnvironment": {
+        await this.prepareVerifierEnvironment();
         break;
       }
       case "installVerifierEnvironment": {
@@ -5656,7 +5838,8 @@ export class LearningApplication {
       session.modelStopConfirmation = unconfirmedModelStop(attemptId);
       return;
     }
-    void this.modelRuntime.cancelTeaching(session.id).then(() => {
+    const runtime = this.modelRuntime;
+    void this.withModelRuntimeOperation(() => runtime.cancelTeaching(session.id)).then(() => {
       if (session.modelStopConfirmation?.attemptId === attemptId) session.modelStopConfirmation = null;
     }).catch(() => {
       if (session.modelStopConfirmation?.attemptId === attemptId) {
@@ -5666,6 +5849,15 @@ export class LearningApplication {
       this.queuePersistence();
       this.emitState();
     });
+  }
+
+  private async withModelRuntimeOperation<T>(operation: () => Promise<T>): Promise<T> {
+    this.activeModelRuntimeOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      this.activeModelRuntimeOperations -= 1;
+    }
   }
 
   private reviseProposal(
@@ -7449,6 +7641,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.authentication ??= signedOutAuthentication();
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
+    current.modelRuntimePausedForFormalVerification = false;
     current.runtimeCapabilities = { models: [] };
     current.modelAccess ??= {
       status: "unavailable",
@@ -10666,6 +10859,7 @@ function initialState(): LearningApplicationState {
     authentication: signedOutAuthentication(),
     intakeError: null,
     runtimeAvailable: false,
+    modelRuntimePausedForFormalVerification: false,
     runtimeCapabilities: { models: [] },
     modelAccess: {
       status: "unavailable",
@@ -10694,7 +10888,7 @@ function defaultVerifierEnvironmentState(): VerifierEnvironmentState {
 
 function migrateVerifierEnvironmentState(value: unknown, manifests: VerifierManifest[] = []): VerifierEnvironmentState {
   if (!isRecord(value)) return defaultVerifierEnvironmentState();
-  const status = ["installed", "absent", "installing", "removing", "installFailed", "removeFailed", "cleanupRequired"]
+  const status = ["installed", "absent", "preparing", "integrityFailed", "installing", "removing", "installFailed", "removeFailed", "cleanupRequired"]
     .includes(String(value.status)) ? value.status as VerifierEnvironmentState["status"] : "cleanupRequired";
   const storedEnvironments = Array.isArray(value.environments)
     ? value.environments.filter(validRegisteredVerifierEnvironment) : [];

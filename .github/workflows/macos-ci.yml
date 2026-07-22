@@ -24,6 +24,15 @@ jobs:
           key: bundled-lean-4.29.1-mathlib-4.29.1-foundations-v4-${{ runner.arch }}
       - run: npm run verify
       - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: macos-ci-diagnostics-attempt-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            test-results/playwright-artifacts
+            test-results/beta-install.json
+      - uses: actions/upload-artifact@v4
         if: success()
         with:
           name: quick-study-macos-beta-${{ runner.arch }}
