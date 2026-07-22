@@ -10,20 +10,20 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             node_modules/.cache/quick-study-lean
             dist/verifiers
           key: bundled-lean-4.29.1-mathlib-4.29.1-foundations-v4-${{ runner.arch }}
       - run: npm run verify
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: macos-ci-diagnostics-attempt-${{ github.run_attempt }}
@@ -32,7 +32,7 @@ jobs:
           path: |
             test-results/playwright-artifacts
             test-results/beta-install.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: success()
         with:
           name: quick-study-macos-beta-${{ runner.arch }}
@@ -40,7 +40,7 @@ jobs:
           path: |
             out/make/zip/darwin/*/Quick Study-darwin-*.zip
             test-results/beta-install.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: success()
         with:
           name: quality-gate-harness-fixture-only
