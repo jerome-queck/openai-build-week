@@ -24,6 +24,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   expect((await stat(packagedEnvironment)).mode & 0o222).toBe(0);
   expect((await stat(packagedManifest)).mode & 0o222).toBe(0);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-smoke-"));
+  const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-runtime-control-"));
   const sourceDirectory = await mkdtemp(join(tmpdir(), "quick-study-source-"));
   const primaryFolderPath = join(sourceDirectory, "algebra-course");
   const attachmentPath = join(sourceDirectory, "lecture-3.pdf");
@@ -39,7 +40,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
   const attachmentContent = await readFile(attachmentPath);
   await writeFile(join(primaryFolderPath, "problem-set.txt"), "Classify the orbits and stabilizers.", "utf8");
   await writeFile(unrelatedPath, "PRIVATE_UNRELATED_DEVICE_CONTENT", "utf8");
-  const accessStatePath = join(dataDirectory, "fake-codex-access.json");
+  const accessStatePath = join(runtimeControlDirectory, "fake-codex-access.json");
   let launched: {
     browser: Browser; page: Page; process: ChildProcess; output(): string;
     memorySampler: ReturnType<typeof setInterval>;
@@ -58,6 +59,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
         ...process.env,
         ELECTRON_ENABLE_LOGGING: "1",
         QUICK_STUDY_DATA_DIR: dataDirectory,
+        CODEX_HOME: runtimeControlDirectory,
         QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
         QUICK_STUDY_TEST_PRIMARY_FOLDER: primaryFolderPath,
         QUICK_STUDY_TEST_EXTERNAL_ATTACHMENT: attachmentPath,
@@ -189,7 +191,9 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(accessRequest).toContainText("The proof cites a local lemma that is not available under the current policy.");
     await expect(accessRequest).toContainText("/Users/learner/reference/lemma.pdf");
     await expect(accessRequest).toContainText("Read the cited lemma statement without modifying the source.");
-    const workspacePrompt = JSON.parse(await readFile(join(dataDirectory, "fake-codex-last-teaching-input.json"), "utf8")).prompt;
+    const workspacePrompt = JSON.parse(await readFile(
+      join(runtimeControlDirectory, "fake-codex-last-teaching-input.json"), "utf8"
+    )).prompt;
     expect(workspacePrompt).toContain("lecture-3.pdf");
     expect(workspacePrompt).toContain("problem-set.txt");
     expect(workspacePrompt).toContain("Classify the orbits and stabilizers.");
@@ -207,7 +211,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
     await expect(page.getByRole("region", { name: "Workspace Access" })).toBeVisible();
     await page.getByRole("radio", { name: "Full Access" }).press("Space");
     const fullConfirmation = page.getByRole("region", { name: "Full Access confirmation" });
-    await expect(fullConfirmation).toContainText("broader read-only local-file and agent-tool access");
+    await expect(fullConfirmation).toContainText("all learner-authorized Linked Sources and Managed Assets");
     await fullConfirmation.getByRole("button", { name: "Cancel Full Access" }).press("Enter");
     await expect(page.getByRole("region", { name: "Workspace Access" })).toBeVisible();
     await page.getByRole("radio", { name: "Full Access" }).press("Space");
@@ -586,6 +590,7 @@ test("packaged Quick Study organizes durable work and resumes the latest session
       });
       await removeTestDirectory(dataDirectory);
       await removeTestDirectory(sourceDirectory);
+      await removeTestDirectory(runtimeControlDirectory);
     }
   }
 });
@@ -675,7 +680,8 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
 test("packaged Quick Study checkpoints Background Agent Tasks and resumes them explicitly", async () => {
   test.setTimeout(120_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-task-smoke-"));
-  const accessStatePath = join(dataDirectory, "fake-codex-access.json");
+  const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-runtime-control-"));
+  const accessStatePath = join(runtimeControlDirectory, "fake-codex-access.json");
   let launched: { browser: Browser; page: Page; process: ChildProcess; output(): string } | undefined;
   const agentLatencySamples: Array<{
     outcome: "checkpointed" | "completed" | "cancelled" | "failed";
@@ -689,6 +695,7 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
         ...process.env,
         ELECTRON_ENABLE_LOGGING: "1",
         QUICK_STUDY_DATA_DIR: dataDirectory,
+        CODEX_HOME: runtimeControlDirectory,
         QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
         QUICK_STUDY_TEST_EXTERNAL_RESEARCH: "stub"
       },
@@ -804,6 +811,7 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
   } finally {
     await quit();
     await removeTestDirectory(dataDirectory);
+    await removeTestDirectory(runtimeControlDirectory);
   }
 });
 
@@ -851,7 +859,8 @@ test("installed Quick Study authenticates with the live Codex runtime and comple
 test("packaged Quick Study rejects a child-controlled authentication destination", async () => {
   test.setTimeout(60_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-auth-policy-"));
-  const accessStatePath = join(dataDirectory, "fake-codex-access.json");
+  const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-auth-runtime-control-"));
+  const accessStatePath = join(runtimeControlDirectory, "fake-codex-access.json");
   const openLogPath = join(dataDirectory, "authentication-open.log");
   await writeFile(accessStatePath, JSON.stringify({
     status: "signedOut",
@@ -862,6 +871,7 @@ test("packaged Quick Study rejects a child-controlled authentication destination
     env: {
       ...process.env,
       QUICK_STUDY_DATA_DIR: dataDirectory,
+      CODEX_HOME: runtimeControlDirectory,
       QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
       QUICK_STUDY_TEST_AUTHENTICATION_OPEN_LOG: openLogPath
     },
@@ -895,6 +905,7 @@ test("packaged Quick Study rejects a child-controlled authentication destination
       }
     } finally {
       await removeTestDirectory(dataDirectory);
+      await removeTestDirectory(runtimeControlDirectory);
     }
   }
 });

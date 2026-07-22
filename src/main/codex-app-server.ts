@@ -758,7 +758,6 @@ export class CodexAppServerRuntime implements ModelRuntime {
     const anchoredFocus = Boolean(teachingRequest?.focus);
     const contextualQuestion = Boolean(teachingRequest?.questionContext);
     const boundedContext = anchoredFocus || contextualQuestion;
-    const fullAccessTools = accessPolicy === "full" && !boundedContext;
     const runtimeSelection = specialistRequest?.budget ?? teachingRequest?.runtimeSelection;
     const dynamicTools = specialistRequest ? [SPECIALIST_CHECKPOINT_TOOL]
       : teachingRequest && !boundedContext ? [SESSION_ACCESS_REQUEST_TOOL] : [];
@@ -777,8 +776,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
           hooks: false,
           multi_agent: false,
           remote_plugin: false,
-          shell_tool: fullAccessTools,
-          unified_exec: fullAccessTools
+          shell_tool: false,
+          unified_exec: false
         },
         mcp_servers: {},
         web_search: "disabled"
@@ -787,15 +786,15 @@ export class CodexAppServerRuntime implements ModelRuntime {
         ? "You are the bounded teaching runtime for an anchored Teaching Card. Use only the supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Produce only learner-facing mathematical teaching output."
         : contextualQuestion
         ? "You are the bounded teaching runtime for a Question Card. Use only the learner-approved Ask Bar context and supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Revise one coherent Question Card rather than producing a chat transcript."
-        : fullAccessTools
-        ? "You are the bounded teaching runtime for Quick Study. Full Access permits read-only local inspection for this Learning Session. Never modify or delete source files. Produce only learner-facing mathematical teaching output."
+        : accessPolicy === "full"
+        ? "You are the bounded teaching runtime for Quick Study. Full Access supplies all learner-authorized source context through the application broker. Use only that supplied authorized source context. Do not inspect other local files, execute commands, or modify files. Produce only learner-facing mathematical teaching output."
         : "You are the bounded teaching runtime for Quick Study. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output.")
     }) as { thread: { id: string } };
     onRuntimeEvent?.({
       type: "threadStarted",
       threadId: threadResponse.thread.id,
       turnId: null,
-      detail: `Codex teaching thread started with ${sessionAccessPolicyLabel(accessPolicy)}${fullAccessTools ? " read-only tools enabled" : " supplied context only"}.`
+      detail: `Codex teaching thread started with ${sessionAccessPolicyLabel(accessPolicy)} supplied context only.`
     });
     const turnResponse = await this.client.request("turn/start", {
       threadId: threadResponse.thread.id,

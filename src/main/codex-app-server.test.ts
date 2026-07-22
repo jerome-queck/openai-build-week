@@ -470,9 +470,11 @@ describe("Codex app-server contract", () => {
     expect(fullThreadStart).toMatchObject({
       params: {
         sandbox: "read-only",
-        config: { features: { shell_tool: true, unified_exec: true } }
+        config: { features: { shell_tool: false, unified_exec: false } }
       }
     });
+    expect(JSON.stringify(fullThreadStart.params)).toContain("supplied authorized source context");
+    expect(JSON.stringify(fullThreadStart.params)).not.toContain("local inspection");
     const fullTurnStart = transport.messages.filter((message) => message.method === "turn/start").at(-1)!;
     expect(JSON.stringify(fullTurnStart.params)).toContain("A bounded monotone sequence converges.");
 

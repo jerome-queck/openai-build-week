@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -29,6 +29,7 @@ import { annotationPurposeLabel, type AnnotationPurpose, type SourceAnnotation }
 export type { AnnotationPurpose, SourceAnnotation } from "./annotations";
 import { sessionAccessPolicyLabel, type SessionAccessPolicy } from "./session-access";
 import { coordinateAgentTasks } from "./agent-task-coordinator";
+import { atomicWriteFile } from "./atomic-file";
 import {
   buildDerivedResearchQuery,
   validatedCorroborationResearchResult,
@@ -615,6 +616,23 @@ export interface ArtifactPortableCopy {
   content: string;
 }
 
+export interface ArtifactExportDestination {
+  kind: "learnerSelectedExternalFile";
+  operation: "createOrReplace";
+  allowedRoot: string;
+  path: string;
+}
+
+export function learnerSelectedArtifactExportDestination(path: string): ArtifactExportDestination {
+  if (!isAbsolute(path)) throw new Error("Choose an absolute destination for the Artifact Export.");
+  const allowedRoot = dirname(path);
+  const relativePath = relative(allowedRoot, path);
+  if (!relativePath || relativePath === ".." || relativePath.startsWith(`..${sep}`) || relativePath.includes(sep)) {
+    throw new Error("Choose one explicit file inside the learner-selected export folder.");
+  }
+  return { kind: "learnerSelectedExternalFile", operation: "createOrReplace", allowedRoot, path };
+}
+
 export type ArtifactExportResult = { status: "canceled" } | { status: "exported"; path: string };
 export interface ArtifactShareResult { status: "shared"; path: string }
 export interface ArtifactSharing {
@@ -1144,6 +1162,10 @@ export interface LearningSession {
 }
 
 export interface LearningApplicationState {
+  persistenceRecovery: {
+    status: "ready" | "blocked";
+    message: string | null;
+  };
   screen: "dashboard" | "workbench" | "followUps" | "delayedTransfer";
   quickStudy: QuickStudyHome;
   workspaces: StudyWorkspace[];
@@ -1419,11 +1441,13 @@ export type LearnerAction =
 
 export class LearningApplication {
   private state: LearningApplicationState = initialState();
+  private durableState: LearningApplicationState = initialState();
   private readonly statePath: string;
   private readonly sourceIndexPath: string;
   private readonly verifierEvidenceDirectory: string;
   private modelRuntime: ModelRuntime | null;
   private persistence = Promise.resolve();
+  private persistenceGeneration = 0;
   private sourceIndexWork = Promise.resolve();
   private sourceSnapshotWork = Promise.resolve();
   private verifierEnvironmentWork = Promise.resolve();
@@ -1443,6 +1467,7 @@ export class LearningApplication {
   private readonly researchWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
   private agentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
+  private durableAgentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
   private sourceIndexDocuments = new Map<string, SourceIndexDocument>();
   private sourceSearchResults = new Map<string, SourceSearchResult>();
 
@@ -1454,7 +1479,8 @@ export class LearningApplication {
     private readonly externalResearch: ExternalResearch | null,
     private readonly formalVerificationAuthority: FormalVerificationAuthority | null,
     private readonly verifierRuntime: VerifierRuntime | null,
-    private readonly verifierEnvironmentManager: VerifierEnvironmentManager | null
+    private readonly verifierEnvironmentManager: VerifierEnvironmentManager | null,
+    private readonly writeTextFile: (destinationPath: string, content: string) => Promise<void> = atomicWriteTextFile
   ) {
     this.statePath = join(dataDirectory, "learning-application.json");
     this.sourceIndexPath = join(dataDirectory, "source-index.json");
@@ -1470,11 +1496,12 @@ export class LearningApplication {
     externalResearch: ExternalResearch | null = null,
     formalVerificationAuthority: FormalVerificationAuthority | null = null,
     verifierRuntime: VerifierRuntime | null = null,
-    verifierEnvironmentManager: VerifierEnvironmentManager | null = null
+    verifierEnvironmentManager: VerifierEnvironmentManager | null = null,
+    writeTextFile: (destinationPath: string, content: string) => Promise<void> = atomicWriteTextFile
   ): Promise<LearningApplication> {
     const application = new LearningApplication(
       dataDirectory, modelRuntime, sourceAccess, artifactSharing, externalResearch, formalVerificationAuthority,
-      verifierRuntime, verifierEnvironmentManager
+      verifierRuntime, verifierEnvironmentManager, writeTextFile
     );
     try {
       const stored = JSON.parse(await readFile(application.statePath, "utf8")) as Record<string, unknown>;
@@ -1521,7 +1548,13 @@ export class LearningApplication {
       persisted.screen = "dashboard";
       application.state = persisted;
     } catch (error) {
-      if (!isMissingFile(error)) throw error;
+      if (!isMissingFile(error)) {
+        application.state = initialState();
+        application.state.persistenceRecovery = {
+          status: "blocked",
+          message: "Clarifold could not safely migrate the stored learner state. The original file was preserved unchanged. Restore or repair that file, then restart Clarifold to retry."
+        };
+      }
     }
     await application.loadSourceIndexCache();
     if (modelRuntime) {
@@ -1550,6 +1583,8 @@ export class LearningApplication {
       application.state.modelAccess = unavailableModelAccess(error);
     }
     await application.synchronizeVerifierEnvironment();
+    application.durableState = application.getState();
+    application.durableAgentWorkLogs = structuredClone(application.agentWorkLogs);
     return application;
   }
 
@@ -2203,11 +2238,18 @@ export class LearningApplication {
     };
   }
 
-  async exportLearningArtifact(sessionId: string, artifactId: string, destinationPath: string): Promise<ArtifactPortableCopy> {
-    if (!isAbsolute(destinationPath)) throw new Error("Choose an absolute destination for the Artifact Export.");
+  async exportLearningArtifact(
+    sessionId: string,
+    artifactId: string,
+    destination: ArtifactExportDestination
+  ): Promise<ArtifactPortableCopy> {
+    const expected = learnerSelectedArtifactExportDestination(destination.path);
+    if (destination.kind !== expected.kind || destination.operation !== expected.operation
+      || destination.allowedRoot !== expected.allowedRoot) {
+      throw new Error("The Artifact Export destination is outside the learner-selected file boundary.");
+    }
     const portableCopy = this.createArtifactPortableCopy(sessionId, artifactId);
-    await mkdir(dirname(destinationPath), { recursive: true });
-    await writeFile(destinationPath, portableCopy.content, "utf8");
+    await this.writeTextFile(destination.path, portableCopy.content);
     return portableCopy;
   }
 
@@ -2241,7 +2283,7 @@ export class LearningApplication {
     return {
       policy: session.accessPolicy,
       sourceIds: [...new Set(sourceIds)],
-      allowsBroadLocalRead: session.accessPolicy === "full",
+      allowsBroadLocalRead: false,
       allowsSourceModification: false
     };
   }
@@ -2480,6 +2522,7 @@ export class LearningApplication {
       await this.markSourceIndexUnavailable(result.sourceId, usefulSourceError(error));
       throw error;
     }
+    this.upgradeLegacySourceFingerprint(source, extracted.fingerprint);
     if (!sameFingerprint(source.link.fingerprint, extracted.fingerprint)) {
       this.recordSourceFingerprint(source, extracted.fingerprint);
       await this.indexSourceNow(result.sourceId, true);
@@ -2503,6 +2546,7 @@ export class LearningApplication {
   }
 
   async restoreModelRuntime(modelRuntime: ModelRuntime): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     if (this.shuttingDown) {
       await this.stopModelRuntimeForShutdown(modelRuntime);
       throw new Error("Codex cannot restart while the application is closing.");
@@ -2541,6 +2585,7 @@ export class LearningApplication {
   }
 
   async reportModelRuntimeFailure(error: unknown): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     this.state.runtimeAvailable = false;
     this.state.modelRuntimePausedForFormalVerification = false;
     this.state.modelAccess = unavailableModelAccess(
@@ -2556,6 +2601,7 @@ export class LearningApplication {
   }
 
   async pauseModelRuntimeForFormalVerification(): Promise<boolean> {
+    this.assertPersistenceWritable();
     if (this.shuttingDown) throw new Error("Formal verification cannot start while the application is closing.");
     if (this.modelWorks.size > 0 || this.accessDecisionWaiters.size > 0 || this.activeModelRuntimeOperations > 0) {
       throw new Error("Wait for active Codex work to finish or stop it before running formal verification.");
@@ -2590,6 +2636,7 @@ export class LearningApplication {
     workspaceId: string,
     selection: SelectedLocalSource
   ): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     const workspace = this.requireWorkspace(workspaceId);
     if (selection.resourceType !== "folder") throw new Error("Choose a folder for the Primary Folder.");
     if (workspace.context.primaryFolderSourceId) throw new Error("This Study Workspace already has a Primary Folder.");
@@ -2606,6 +2653,7 @@ export class LearningApplication {
     workspaceId: string,
     selection: SelectedLocalSource
   ): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     const workspace = this.requireWorkspace(workspaceId);
     if (selection.resourceType !== "file") throw new Error("Choose a file for an External Attachment.");
     this.requireSourcePlacement(workspace, "externalAttachment", selection.canonicalPath);
@@ -2617,6 +2665,7 @@ export class LearningApplication {
   }
 
   async relocateLinkedSource(sourceId: string, selection: SelectedLocalSource): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     const source = this.state.sources.find(
       (candidate): candidate is LinkedSource => candidate.id === sourceId && candidate.kind === "linkedSource"
     );
@@ -2624,6 +2673,7 @@ export class LearningApplication {
     if (selection.resourceType !== source.resourceType) {
       throw new Error(source.resourceType === "file" ? "Locate the Linked Source file again." : "Locate the Primary Folder again.");
     }
+    this.upgradeLegacySourceFingerprint(source, selection.fingerprint);
     const changed = !sameFingerprint(source.link.fingerprint, selection.fingerprint);
     source.name = selection.name;
     Object.assign(source.link, {
@@ -2668,6 +2718,7 @@ export class LearningApplication {
     if (revision.snapshotAssetId) return this.getState();
     const snapshot = await this.sourceAccess.snapshot(source);
     if (snapshot.linkRefresh) Object.assign(source.link, snapshot.linkRefresh);
+    this.upgradeLegacySourceFingerprint(source, snapshot.fingerprint);
     if (!sameFingerprint(source.link.fingerprint, snapshot.fingerprint)) {
       throw new Error("This source changed before its Source Snapshot could be preserved. Open it and review the new revision first.");
     }
@@ -2712,6 +2763,7 @@ export class LearningApplication {
     try {
       const view = await this.sourceAccess.read(source);
       if (view.linkRefresh) Object.assign(source.link, view.linkRefresh);
+      this.upgradeLegacySourceFingerprint(source, view.fingerprint);
       const changed = !sameFingerprint(source.link.fingerprint, view.fingerprint);
       if (changed) this.recordSourceFingerprint(source, view.fingerprint);
       source.link.accessStatus = "available";
@@ -2775,6 +2827,9 @@ export class LearningApplication {
   }
 
   async submit(action: LearnerAction): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
+    const lastKnownGoodModelWorks = new Map(this.modelWorks);
+    const lastKnownGoodResearchWorks = new Map(this.researchWorks);
     switch (action.type) {
       case "createWorkspace": {
         const workspace: StudyWorkspace = {
@@ -5028,18 +5083,65 @@ export class LearningApplication {
     }
 
     const state = this.getState();
-    this.emitState(state);
-    this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
-    await this.persistence;
-    return this.getState();
+    const generation = this.persistenceGeneration;
+    const persistenceAttempt = this.persistence.catch(() => undefined)
+      .then(() => this.persistIfCurrentGeneration(state, generation));
+    this.persistence = persistenceAttempt;
+    try {
+      await persistenceAttempt;
+    } catch (error) {
+      this.persistenceGeneration += 1;
+      if (this.persistence === persistenceAttempt) this.persistence = Promise.resolve();
+      const durableAccessRequestIds = new Set(this.durableState.sessions.flatMap((session) =>
+        session.accessRequests.map((request) => request.id)));
+      for (const session of this.state.sessions) {
+        for (const request of session.accessRequests) {
+          if (!durableAccessRequestIds.has(request.id)) {
+            this.resolveAccessDecision(request.id, { status: "denied", policy: session.accessPolicy });
+          }
+        }
+      }
+      for (const [sessionId, work] of this.modelWorks) {
+        if (lastKnownGoodModelWorks.get(sessionId) === work) continue;
+        work.stop();
+        work.controller.abort();
+        this.modelWorks.delete(sessionId);
+        void this.modelRuntime?.cancelTeaching(sessionId).catch(() => undefined);
+      }
+      for (const [researchId, work] of this.researchWorks) {
+        if (lastKnownGoodResearchWorks.get(researchId) === work) continue;
+        work.controller.abort();
+        this.researchWorks.delete(researchId);
+      }
+      this.state = structuredClone(this.durableState);
+      for (const [sessionId, previousWork] of lastKnownGoodModelWorks) {
+        if (this.modelWorks.get(sessionId) === previousWork) continue;
+        const session = this.state.sessions.find((candidate) => candidate.id === sessionId);
+        if (session) checkpointDetachedModelWork(session);
+      }
+      this.agentWorkLogs = structuredClone(this.durableAgentWorkLogs);
+      this.emitState();
+      throw new Error("Clarifold could not save this change. The last known-good learner state remains active; retry after storage is available.", { cause: error });
+    }
+    const currentState = this.getState();
+    this.emitState(currentState);
+    return currentState;
   }
 
   private async persist(state: LearningApplicationState): Promise<void> {
     const directory = dirname(this.statePath);
-    const temporaryPath = `${this.statePath}.temporary`;
+    const agentWorkLogs = structuredClone(this.agentWorkLogs);
     await mkdir(directory, { recursive: true });
-    await writeFile(temporaryPath, JSON.stringify({ ...state, agentWorkLogs: this.agentWorkLogs }, null, 2), "utf8");
-    await rename(temporaryPath, this.statePath);
+    await this.writeTextFile(this.statePath, JSON.stringify({ ...state, agentWorkLogs }, null, 2));
+    this.durableState = structuredClone(state);
+    this.durableAgentWorkLogs = agentWorkLogs;
+  }
+
+  private async persistIfCurrentGeneration(state: LearningApplicationState, generation: number): Promise<void> {
+    if (generation !== this.persistenceGeneration) {
+      throw new Error("This change was superseded by a failed concurrent save. Retry it against the restored learner state.");
+    }
+    await this.persist(state);
   }
 
   private async loadSourceIndexCache(): Promise<void> {
@@ -5076,10 +5178,8 @@ export class LearningApplication {
 
   private async persistSourceIndexCache(): Promise<void> {
     const directory = dirname(this.sourceIndexPath);
-    const temporaryPath = `${this.sourceIndexPath}.temporary`;
     await mkdir(directory, { recursive: true });
-    await writeFile(temporaryPath, JSON.stringify([...this.sourceIndexDocuments.values()], null, 2), "utf8");
-    await rename(temporaryPath, this.sourceIndexPath);
+    await this.writeTextFile(this.sourceIndexPath, JSON.stringify([...this.sourceIndexDocuments.values()], null, 2));
   }
 
   private sourceIndexStatus(sourceId: string): SourceIndexSummary | undefined {
@@ -5656,6 +5756,7 @@ export class LearningApplication {
         throw new Error("Selected pages require an indexed Linked Source available under the active policy.");
       }
       const extraction = validatedSourceIndexExtractionResult(await this.sourceAccess.extractForIndex(source));
+      this.upgradeLegacySourceFingerprint(source, extraction.fingerprint);
       if (!sameFingerprint(source.link.fingerprint, extraction.fingerprint)) {
         throw new Error("This source changed before the selected pages could be saved.");
       }
@@ -5670,6 +5771,7 @@ export class LearningApplication {
     if (source.kind === "managedAsset") return validated;
     if (!this.sourceAccess) throw new Error("Local source access is unavailable.");
     const view = await this.sourceAccess.read(source);
+    this.upgradeLegacySourceFingerprint(source, view.fingerprint);
     if (!sameFingerprint(source.link.fingerprint, view.fingerprint)) {
       throw new Error("This source changed before the Source Anchor could be saved.");
     }
@@ -5727,6 +5829,7 @@ export class LearningApplication {
       if (!this.sourceAccess) continue;
       try {
         const view = await this.sourceAccess.read(source);
+        this.upgradeLegacySourceFingerprint(source, view.fingerprint);
         if (!sameFingerprint(source.link.fingerprint, view.fingerprint)) continue;
         addContext({ sourceId, name: source.name, mediaType: view.mediaType, content: view.content });
       } catch {
@@ -5744,7 +5847,18 @@ export class LearningApplication {
     const decision = new Promise<RuntimeAccessDecision>((resolve) => {
       this.accessDecisionWaiters.set(request.id, resolve);
     });
-    await this.publishAndPersist();
+    try {
+      await this.publishAndPersist();
+    } catch {
+      this.persistenceGeneration += 1;
+      this.persistence = this.persistence.catch(() => undefined);
+      const currentSession = this.state.sessions.find((candidate) => candidate.id === session.id);
+      if (currentSession) {
+        currentSession.accessRequests = currentSession.accessRequests.filter((candidate) => candidate.id !== request.id);
+      }
+      this.resolveAccessDecision(request.id, { status: "denied", policy: session.accessPolicy });
+      this.emitState();
+    }
     return decision;
   }
 
@@ -6080,16 +6194,28 @@ export class LearningApplication {
   }
 
   private queuePersistence(): void {
+    this.assertPersistenceWritable();
     const state = this.getState();
-    this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
+    const generation = this.persistenceGeneration;
+    this.persistence = this.persistence.catch(() => undefined)
+      .then(() => this.persistIfCurrentGeneration(state, generation));
   }
 
   private async publishAndPersist(): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     const state = this.getState();
     this.emitState(state);
-    this.persistence = this.persistence.catch(() => undefined).then(() => this.persist(state));
+    const generation = this.persistenceGeneration;
+    this.persistence = this.persistence.catch(() => undefined)
+      .then(() => this.persistIfCurrentGeneration(state, generation));
     await this.persistence;
     return state;
+  }
+
+  private assertPersistenceWritable(): void {
+    if (this.state.persistenceRecovery.status === "blocked") {
+      throw new Error(this.state.persistenceRecovery.message ?? "Stored learner state requires recovery before changes can be saved.");
+    }
   }
 
   private requireActiveSession(): LearningSession {
@@ -6310,6 +6436,16 @@ export class LearningApplication {
     this.state.sourceRevisions.push(sourceRevision(source));
     this.markSourceAnchorsUnresolved(source, fromRevisionId);
     this.removeSourceSearchResults(source.id);
+    return true;
+  }
+
+  private upgradeLegacySourceFingerprint(source: LinkedSource, fingerprint: SourceFingerprint): boolean {
+    if (source.resourceType !== "file" || source.link.fingerprint.contentHash !== undefined || fingerprint.contentHash === undefined
+      || source.link.fingerprint.size !== fingerprint.size
+      || source.link.fingerprint.modifiedAtMs !== fingerprint.modifiedAtMs) return false;
+    source.link.fingerprint = structuredClone(fingerprint);
+    const revision = this.state.sourceRevisions.find((candidate) => candidate.id === source.link.currentRevisionId);
+    if (revision) revision.fingerprint = structuredClone(fingerprint);
     return true;
   }
 
@@ -6643,6 +6779,9 @@ function agentTaskHasRemainingBudget(task: AgentTask): boolean {
 function isMissingFile(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
+
+const atomicWriteTextFile = (destinationPath: string, content: string) =>
+  atomicWriteFile(destinationPath, content, { encoding: "utf8" });
 
 function requiredName(value: string, subject: string): string {
   const name = value.trim();
@@ -7639,6 +7778,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.activeDelayedTransferCheckId = typeof stored.activeDelayedTransferCheckId === "string"
       ? stored.activeDelayedTransferCheckId : null;
     current.authentication ??= signedOutAuthentication();
+    current.persistenceRecovery = { status: "ready", message: null };
     current.intakeError ??= null;
     current.runtimeAvailable ??= false;
     current.modelRuntimePausedForFormalVerification = false;
@@ -9333,6 +9473,22 @@ function interruptedTeachingCard(content: string): LearningSession["teachingCard
   };
 }
 
+function checkpointDetachedModelWork(session: LearningSession): void {
+  if (session.teachingCard.status === "streaming") {
+    replaceTeachingCard(session, interruptedTeachingCard(session.teachingCard.content));
+  }
+  for (const card of session.anchoredTeachingCards) {
+    interruptCardRevision(card.currentRevision);
+    for (const variant of card.variants) interruptCardRevision(variant.revision);
+  }
+  const activeQuestionCard = session.questionCards.find((card) => card.id === session.activeQuestionCardId);
+  if (activeQuestionCard) interruptCardRevision(activeQuestionCard.currentRevision);
+  const activeAgentTask = session.agentTasks.find((task) => task.id === session.activeAgentTaskId);
+  if (activeAgentTask && (activeAgentTask.status === "working" || activeAgentTask.status === "waiting")) {
+    checkpointAgentTaskForRelaunch(activeAgentTask);
+  }
+}
+
 function interruptCardRevision(revision: TeachingCardState): void {
   if (revision.status !== "streaming") return;
   Object.assign(revision, interruptedTeachingCard(revision.content));
@@ -10816,6 +10972,7 @@ function validFingerprint(value: unknown): value is SourceFingerprint {
 
 function initialState(): LearningApplicationState {
   return {
+    persistenceRecovery: { status: "ready", message: null },
     screen: "dashboard",
     quickStudy: {
       workspace: { id: "quick-study-workspace", kind: "system", name: "Quick Study" },

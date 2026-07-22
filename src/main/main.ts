@@ -1,7 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { execFile } from "node:child_process";
-import { appendFile, readFile, readdir, realpath, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, mkdtemp, open, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { dirname, extname, join } from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import {
@@ -10,6 +11,7 @@ import {
   isAgentTaskCoordination,
   isTrailItemKind,
   LearningApplication,
+  learnerSelectedArtifactExportDestination,
   type LearnerAction
 } from "../shared/learning-application";
 import { CodexAppServerRuntime } from "./codex-app-server";
@@ -22,10 +24,12 @@ import { LeanEnvironmentManager } from "./lean-environment-manager";
 import { requireApprovedChatGptAuthenticationUrl } from "./authentication-navigation";
 import { boundedProcessEnvironment } from "./bounded-process-environment";
 import { ExclusiveOperationCoordinator } from "./exclusive-operation-coordinator";
+import { prepareModelRuntimeWorkspaceOrNull } from "./model-runtime-workspace";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
 let applicationShutdown: Promise<void> | null = null;
+let modelRuntimeWorkingDirectory: string | null = null;
 const verifierRuns = new Map<string, AbortController>();
 let verifierCompletion: Promise<void> | null = null;
 const runtimeLeanCoordinator = new ExclusiveOperationCoordinator();
@@ -34,7 +38,7 @@ const sourceAccess = new MacOsSourceAccess({
   showOpenDialog: (options) => dialog.showOpenDialog(options),
   stat,
   realpath,
-  readFile,
+  openFile: (path) => open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW),
   readdir,
   startAccessingSecurityScopedResource: (bookmarkData) => {
     const stopAccess = app.startAccessingSecurityScopedResource(bookmarkData);
@@ -64,16 +68,23 @@ const sourceAccess = new MacOsSourceAccess({
         : {})
     };
   },
-  extractDocument: async (path) => {
+  extractDocument: async (content, sourceName) => {
     const helperPath = join(__dirname, "../helpers/source-index-extractor").replace("app.asar", "app.asar.unpacked");
-    const { stdout } = await execFileAsync(helperPath, [path], {
-      cwd: dirname(helperPath),
-      env: boundedProcessEnvironment(),
-      timeout: 45_000,
-      maxBuffer: 25 * 1024 * 1024,
-      encoding: "utf8"
-    });
-    return JSON.parse(stdout);
+    const stagingDirectory = await mkdtemp(join(app.getPath("temp"), "quick-study-source-index-"));
+    const stagingPath = join(stagingDirectory, `source${extname(sourceName).toLocaleLowerCase()}`);
+    try {
+      await writeFile(stagingPath, content, { flag: "wx", mode: 0o600 });
+      const { stdout } = await execFileAsync(helperPath, [stagingPath], {
+        cwd: dirname(helperPath),
+        env: boundedProcessEnvironment(),
+        timeout: 45_000,
+        maxBuffer: 25 * 1024 * 1024,
+        encoding: "utf8"
+      });
+      return JSON.parse(stdout);
+    } finally {
+      await rm(stagingDirectory, { recursive: true, force: true });
+    }
   }
 });
 
@@ -367,8 +378,8 @@ function registerLearningApplicationHandlers(): void {
           return learningApplication.submit(action);
         }
         try {
-          const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
-          const launchedRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+          if (!modelRuntimeWorkingDirectory) throw new Error("The Model Runtime workspace is unavailable.");
+          const launchedRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
           if (applicationShutdown) {
             await learningApplication.stopModelRuntimeForShutdown(launchedRuntime);
             return learningApplication.getState();
@@ -407,7 +418,9 @@ function registerLearningApplicationHandlers(): void {
       if (result.canceled || !result.filePath) return { status: "canceled" } as const;
       destinationPath = result.filePath;
     }
-    await learningApplication.exportLearningArtifact(sessionId, artifactId, destinationPath);
+    await learningApplication.exportLearningArtifact(
+      sessionId, artifactId, learnerSelectedArtifactExportDestination(destinationPath)
+    );
     return { status: "exported", path: destinationPath } as const;
   });
   ipcMain.handle("artifact:share", async (event, sessionId: unknown, artifactId: unknown) => {
@@ -454,8 +467,8 @@ function registerLearningApplicationHandlers(): void {
         } finally {
           if (restartModelRuntime && !applicationShutdown) {
             try {
-              const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
-              modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
+              if (!modelRuntimeWorkingDirectory) throw new Error("The Model Runtime workspace is unavailable.");
+              modelRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
               await learningApplication.restoreModelRuntime(modelRuntime);
               console.info(`[Lean verification] ${JSON.stringify({
                 runId: request.runId, status: "model-runtime-restored", elapsedMs: Date.now() - startedAt
@@ -603,6 +616,7 @@ function isFormalVerificationRequest(value: unknown): value is import("../shared
 
 void app.whenReady().then(async () => {
   const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+  modelRuntimeWorkingDirectory = await prepareModelRuntimeWorkspaceOrNull(dataDirectory, app.getPath("temp"));
   const seedRegistry = app.isPackaged ? join(process.resourcesPath, "verifiers") : join(process.cwd(), "dist", "verifiers");
   let failRemovalOnce = process.env.QUICK_STUDY_TEST_VERIFIER_REMOVAL_FAILURE === "once";
   const verifierEnvironmentManager = new LeanEnvironmentManager(
@@ -622,10 +636,12 @@ void app.whenReady().then(async () => {
     console.error("The default Lean environment could not be inspected:", error);
     return false;
   });
-  try {
-    modelRuntime = await CodexAppServerRuntime.launch(dataDirectory);
-  } catch (error) {
-    console.error("Codex app-server is unavailable:", error);
+  if (modelRuntimeWorkingDirectory) {
+    try {
+      modelRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
+    } catch (error) {
+      console.error("Codex app-server is unavailable:", error);
+    }
   }
   learningApplication = await LearningApplication.launch(
     dataDirectory,
@@ -672,7 +688,14 @@ function requestApplicationShutdown(): Promise<void> {
   applicationShutdown ??= (async () => {
     await runtimeLeanCoordinator.closeAndDrain();
     await verifierCompletion;
-    await learningApplication.shutdown();
+    try {
+      await learningApplication.shutdown();
+    } finally {
+      if (modelRuntimeWorkingDirectory) {
+        await rm(modelRuntimeWorkingDirectory, { recursive: true, force: true });
+        modelRuntimeWorkingDirectory = null;
+      }
+    }
   })().finally(() => app.quit());
   return applicationShutdown;
 }

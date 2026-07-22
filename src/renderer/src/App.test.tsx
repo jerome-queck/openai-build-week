@@ -32,6 +32,22 @@ describe("anchored teaching workbench", () => {
     expect(api.openExternal).toHaveBeenCalledWith("https://github.com/jerome-queck/openai-build-week/issues/new");
   });
 
+  it("shows a blocking recoverable error when stored learner state cannot be migrated", async () => {
+    const state = workbenchState();
+    state.persistenceRecovery = {
+      status: "blocked",
+      message: "The original file was preserved unchanged. Restore or repair it, then restart Clarifold."
+    };
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const recovery = await screen.findByRole("alert", { name: "Stored work needs recovery" });
+    expect(recovery.textContent).toContain("original file was preserved unchanged");
+    expect(recovery.textContent).toContain("has not overwritten the stored file");
+    expect(screen.queryByRole("button", { name: "Leave session" })).toBeNull();
+  });
+
   it("keeps local work available while truthfully showing that Codex is paused for Lean", async () => {
     const state = workbenchState();
     state.modelRuntimePausedForFormalVerification = true;
@@ -1657,6 +1673,7 @@ function workbenchState(): LearningApplicationState {
     }
   };
   return {
+    persistenceRecovery: { status: "ready", message: null },
     screen: "workbench",
     quickStudy: {
       workspace: { id: "quick-study-workspace", kind: "system", name: "Quick Study" },

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,8 +12,8 @@ const installedEnvironment = {
   sourceArchive: "lean-4.29.1-darwin_aarch64.zip",
   sourceSha256: "c15284adf88ad830c71775b9828cb81f49f7f262cbe1456b25d935855bd70975"
 };
-const runtime = (execute: LeanCommandExecutor) => new LeanVerifierRuntime(
-  "/bundle/bin/lean", execute, 15_000, async () => installedEnvironment
+const runtime = (execute: LeanCommandExecutor, stagingId: () => string = () => crypto.randomUUID()) => new LeanVerifierRuntime(
+  "/bundle/bin/lean", execute, 15_000, async () => installedEnvironment, async () => undefined, stagingId
 );
 
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))));
@@ -51,6 +51,23 @@ describe("LeanVerifierRuntime", () => {
 
     expect(result).toMatchObject({ outcome: "accepted", environment: installedEnvironment });
     expect(await readFile(result.evidenceLocation, "utf8")).toContain("theorem quickStudyNatAddZero");
+  });
+
+  it("fails safely without deleting an exact verifier staging symlink", async () => {
+    const verificationRequest = await request();
+    const outsidePath = join(verificationRequest.evidenceDirectory, "must-remain-unchanged");
+    const stagingPath = join(verificationRequest.evidenceDirectory, "run-1.lean.collision.tmp");
+    await writeFile(outsidePath, "unrelated content", "utf8");
+    await symlink(outsidePath, stagingPath);
+    const verifier = runtime(scripted(
+      { stdout: "Lean (version 4.29.1, aarch64-apple-darwin)", stderr: "", exitCode: 0, signal: null },
+      { stdout: "", stderr: "", exitCode: 0, signal: null }
+    ), () => "collision");
+
+    await expect(verifier.run(verificationRequest)).rejects.toMatchObject({ code: "EEXIST" });
+
+    expect(await readFile(outsidePath, "utf8")).toBe("unrelated content");
+    expect((await lstat(stagingPath)).isSymbolicLink()).toBe(true);
   });
 
   it.each([

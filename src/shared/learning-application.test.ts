@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LearningApplication,
+  learnerSelectedArtifactExportDestination,
   type AcceptedFormalVerification,
   type ClaimCheckRecord,
   type FormalVerificationAuthority,
@@ -16,6 +17,7 @@ import {
 } from "./learning-application";
 import { ModelAccessError, type ArtifactRegenerationRequest, type ArtifactSynthesisRequest, type ModelAccessCause, type ModelRuntime, type RuntimeAccessRequest, type SessionProposal, type SpecialistAgentRequest, type SpecialistAgentResult, type TeachingRequest } from "./model-runtime";
 import type { CorroborationResearchEvidence, ExternalResearch, ExternalResearchRequest, ExternalResearchResult } from "./external-research";
+import { atomicWriteFile } from "./atomic-file";
 import {
   BUNDLED_LEAN_ENVIRONMENT,
   type VerifierEnvironmentManager,
@@ -31,16 +33,123 @@ describe("Learning Application", () => {
     await Promise.all(dataDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
   });
 
-  async function launch() {
+  it("fails safely without deleting a pre-existing staging symlink and rolls back live state", async () => {
+    const writeWithCollision = (path: string, content: string) => atomicWriteFile(path, content, {
+      encoding: "utf8", uniqueId: () => "collision"
+    });
+    const { application, dataDirectory } = await launch(writeWithCollision);
+    const outsidePath = join(dataDirectory, "must-remain-unchanged.json");
+    const stagingPath = join(dataDirectory, "learning-application.json.collision.temporary");
+    await writeFile(outsidePath, "unrelated content", "utf8");
+    await symlink(outsidePath, stagingPath);
+
+    await expect(application.submit({ type: "createWorkspace", name: "Topology" }))
+      .rejects.toThrow("last known-good learner state remains active");
+
+    expect(await readFile(outsidePath, "utf8")).toBe("unrelated content");
+    expect(application.getState().workspaces).not.toContainEqual(expect.objectContaining({ name: "Topology" }));
+    expect((await lstat(stagingPath)).isSymbolicLink()).toBe(true);
+    await expect(readFile(join(dataDirectory, "learning-application.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects rather than silently losing a change queued behind a failed concurrent save", async () => {
+    let writeCount = 0;
+    let releaseFirstWrite!: () => void;
+    const firstWriteReleased = new Promise<void>((resolve) => { releaseFirstWrite = resolve; });
+    const writer = async (path: string, content: string) => {
+      writeCount += 1;
+      if (writeCount === 1) {
+        await firstWriteReleased;
+        throw new Error("synthetic persistence failure");
+      }
+      await atomicWriteFile(path, content, { encoding: "utf8" });
+    };
+    const { application, dataDirectory } = await launch(writer);
+
+    const first = application.submit({ type: "createWorkspace", name: "First" });
+    const second = application.submit({ type: "createWorkspace", name: "Second" });
+    releaseFirstWrite();
+
+    await expect(first).rejects.toThrow("last known-good learner state remains active");
+    await expect(second).rejects.toThrow("last known-good learner state remains active");
+    expect(application.getState().workspaces).not.toContainEqual(expect.objectContaining({ name: "First" }));
+    expect(application.getState().workspaces).not.toContainEqual(expect.objectContaining({ name: "Second" }));
+
+    await application.submit({ type: "createWorkspace", name: "Second" });
+    const stored = JSON.parse(await readFile(join(dataDirectory, "learning-application.json"), "utf8")) as { workspaces: Array<{ name: string }> };
+    expect(stored.workspaces).toContainEqual(expect.objectContaining({ name: "Second" }));
+  });
+
+  async function launch(writeTextFile?: (destinationPath: string, content: string) => Promise<void>) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
     dataDirectories.push(dataDirectory);
-    const application = await LearningApplication.launch(dataDirectory);
+    const application = await LearningApplication.launch(
+      dataDirectory, null, null, null, null, null, null, null, writeTextFile
+    );
     applications.push(application);
     return {
       dataDirectory,
       application
     };
   }
+
+  async function expectBlockedRecovery(dataDirectory: string) {
+    const statePath = join(dataDirectory, "learning-application.json");
+    const stored = await readFile(statePath, "utf8");
+    const recovered = await LearningApplication.launch(dataDirectory);
+    applications.push(recovered);
+    expect(recovered.getState().persistenceRecovery).toMatchObject({ status: "blocked" });
+    expect(await readFile(statePath, "utf8")).toBe(stored);
+    return recovered;
+  }
+
+  it("preserves an unmigratable state file and exposes blocked recovery without accepting new writes", async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-migration-recovery-test-"));
+    dataDirectories.push(dataDirectory);
+    const statePath = join(dataDirectory, "learning-application.json");
+    const stored = '{"unsupported":"future-state"}\n';
+    await writeFile(statePath, stored, "utf8");
+
+    const application = await LearningApplication.launch(dataDirectory);
+    applications.push(application);
+
+    expect(application.getState().persistenceRecovery).toMatchObject({
+      status: "blocked",
+      message: expect.stringContaining("original file was preserved unchanged")
+    });
+    await expect(application.submit({ type: "createWorkspace", name: "Must not overwrite" }))
+      .rejects.toThrow("original file was preserved unchanged");
+    await expect(application.reportModelRuntimeFailure(new Error("runtime unavailable")))
+      .rejects.toThrow("original file was preserved unchanged");
+    await expect(application.linkExternalAttachment(application.getState().quickStudy.workspace.id, {
+      name: "notes.txt",
+      resourceType: "file",
+      lastKnownPath: "/tmp/notes.txt",
+      canonicalPath: "/tmp/notes.txt",
+      accessGrant: null,
+      fingerprint: { size: 5, modifiedAtMs: 1 }
+    })).rejects.toThrow("original file was preserved unchanged");
+    expect(await readFile(statePath, "utf8")).toBe(stored);
+  });
+
+  it.each([
+    ["malformed JSON", "{not-json"],
+    ["invalid current schema", JSON.stringify({ sessions: [] })]
+  ])("preserves %s in blocked recovery instead of aborting launch", async (_label, stored) => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-state-recovery-test-"));
+    dataDirectories.push(dataDirectory);
+    const statePath = join(dataDirectory, "learning-application.json");
+    await writeFile(statePath, stored, "utf8");
+
+    const application = await LearningApplication.launch(dataDirectory);
+    applications.push(application);
+
+    expect(application.getState().persistenceRecovery).toMatchObject({ status: "blocked" });
+    await expect(application.submit({ type: "createWorkspace", name: "Must not persist" }))
+      .rejects.toThrow("original file was preserved");
+    expect(await readFile(statePath, "utf8")).toBe(stored);
+  });
 
   it("governs a durable Learner Model inference without rewriting its source Session Record", async () => {
     const runtime = new DeterministicModelRuntime({
@@ -599,10 +708,15 @@ describe("Learning Application", () => {
       .toBe("Understanding Evidence for compactness: excessive pace.");
   });
 
-  async function launchWithRuntime(runtime: ModelRuntime) {
+  async function launchWithRuntime(
+    runtime: ModelRuntime,
+    writeTextFile?: (destinationPath: string, content: string) => Promise<void>
+  ) {
     const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
     dataDirectories.push(dataDirectory);
-    const application = await LearningApplication.launch(dataDirectory, runtime);
+    const application = await LearningApplication.launch(
+      dataDirectory, runtime, null, null, null, null, null, null, writeTextFile
+    );
     applications.push(application);
     return {
       dataDirectory,
@@ -2903,9 +3017,7 @@ describe("Learning Application", () => {
     const persistedScheduled = JSON.parse(await readFile(join(dataDirectory, "learning-application.json"), "utf8"));
     persistedScheduled.delayedTransferChecks = [];
     await writeFile(join(dataDirectory, "learning-application.json"), JSON.stringify(persistedScheduled), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow(
-      "Stored Delayed Transfer offer does not match its check state"
-    );
+    await expectBlockedRecovery(dataDirectory);
     await expect(application.submit({
       type: "scheduleDelayedTransfer",
       sessionId,
@@ -2936,9 +3048,7 @@ describe("Learning Application", () => {
     const persistedCancelled = JSON.parse(await readFile(join(dataDirectory, "learning-application.json"), "utf8"));
     persistedCancelled.delayedTransferChecks = [];
     await writeFile(join(dataDirectory, "learning-application.json"), JSON.stringify(persistedCancelled), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow(
-      "Stored Delayed Transfer offer does not match its check state"
-    );
+    await expectBlockedRecovery(dataDirectory);
   });
 
   it("generates an unseen Delayed Transfer task only when a due check is launched", async () => {
@@ -3547,9 +3657,27 @@ describe("Learning Application", () => {
     expect(Object.keys(portableCopy)).not.toContain("workspaceId");
 
     const exportPath = join(dataDirectory, "portable-proof.md");
-    await relaunched.exportLearningArtifact(sessionId, artifactId, exportPath);
+    const authorizedExport = learnerSelectedArtifactExportDestination(exportPath);
+    await expect(relaunched.exportLearningArtifact(sessionId, artifactId, {
+      ...authorizedExport,
+      allowedRoot: tmpdir()
+    })).rejects.toThrow("outside the learner-selected file boundary");
+    await relaunched.exportLearningArtifact(
+      sessionId, artifactId, authorizedExport
+    );
     expect(await readFile(exportPath, "utf8")).toBe(portableCopy.content);
     expect(relaunched.getState()).toEqual(beforePortableCopy);
+
+    const outsidePath = join(dataDirectory, "must-not-be-overwritten.md");
+    const symlinkedExportPath = join(dataDirectory, "symlinked-export.md");
+    await writeFile(outsidePath, "unrelated external content", "utf8");
+    await symlink(outsidePath, symlinkedExportPath);
+    await relaunched.exportLearningArtifact(
+      sessionId, artifactId, learnerSelectedArtifactExportDestination(symlinkedExportPath)
+    );
+    expect(await readFile(outsidePath, "utf8")).toBe("unrelated external content");
+    expect((await lstat(symlinkedExportPath)).isSymbolicLink()).toBe(false);
+    expect(await readFile(symlinkedExportPath, "utf8")).toBe(portableCopy.content);
 
     const sharedCopies: unknown[] = [];
     const sharingApplication = await LearningApplication.launch(dataDirectory, null, null, {
@@ -3622,14 +3750,14 @@ describe("Learning Application", () => {
 
     persisted.sessions[0].learningArtifacts[0].kind = "sourceLayer";
     await writeFile(statePath, JSON.stringify(persisted), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Learning Artifact kind is invalid");
+    await expectBlockedRecovery(dataDirectory);
 
     persisted.sessions[0].learningArtifacts[0].kind = "learningArtifact";
     persisted.sessions[0].learningArtifacts[0].currentRevision.provenance = {
       action: "edited", createdAt: "not-a-date", priorRevisionId: null
     };
     await writeFile(statePath, JSON.stringify(persisted), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Learning Artifact revision is invalid");
+    await expectBlockedRecovery(dataDirectory);
   });
 
   it("opens an anchored question in the Contextual Inspector path without dispatching until the learner words it", async () => {
@@ -5044,6 +5172,30 @@ describe("Learning Application", () => {
 
     await expect(application.openLinkedSource(source.id)).resolves.toMatchObject({ status: "available", sourceId: source.id });
     expect(application.getState().sourceRevisions.filter((revision) => revision.sourceId === source.id)).toHaveLength(2);
+  });
+
+  it("upgrades a legacy file content hash after relaunch without claiming a Source Revision", async () => {
+    const sourceAccess = new DeterministicSourceAccess();
+    sourceAccess.fingerprint = { size: 64, modifiedAtMs: 1234, contentHash: "b".repeat(64) };
+    const { application, dataDirectory } = await launchWithSourceAccess(sourceAccess);
+    const source = (await application.linkExternalAttachment(application.getState().quickStudy.workspace.id, {
+      name: "legacy-notes.txt",
+      resourceType: "file",
+      lastKnownPath: "/Users/learner/legacy-notes.txt",
+      canonicalPath: "/Users/learner/legacy-notes.txt",
+      accessGrant: { kind: "securityScopedBookmark", bookmarkData: "legacy-file-bookmark" },
+      fingerprint: { size: 64, modifiedAtMs: 1234 }
+    })).sources.find((candidate): candidate is LinkedSource => candidate.kind === "linkedSource")!;
+    const relaunched = await LearningApplication.launch(dataDirectory, null, sourceAccess);
+    applications.push(relaunched);
+
+    await expect(relaunched.openLinkedSource(source.id)).resolves.toMatchObject({ status: "available" });
+    const upgraded = relaunched.getState();
+    const upgradedSource = upgraded.sources.find(
+      (candidate): candidate is LinkedSource => candidate.id === source.id && candidate.kind === "linkedSource"
+    );
+    expect(upgradedSource?.link.fingerprint.contentHash).toBe("b".repeat(64));
+    expect(upgraded.sourceRevisions.filter((revision) => revision.sourceId === source.id)).toHaveLength(1);
   });
 
   it("proposes an editable Learning Session and pauses materially ambiguous input for confirmation", async () => {
@@ -8105,6 +8257,147 @@ describe("Learning Application", () => {
     expect(reloaded.getState().accessConfirmationPreference.confirmFullAccess).toBe(false);
   });
 
+  it("does not republish an older action snapshot over a concurrent runtime Access Request", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the proof",
+      scope: "Use the attached statement",
+      initialTeachingDirection: "Inspect the hypotheses",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    let blockWrites = false;
+    let releaseWrites!: () => void;
+    const writesReleased = new Promise<void>((resolve) => { releaseWrites = resolve; });
+    const writer = async (path: string, content: string) => {
+      if (blockWrites) await writesReleased;
+      await atomicWriteFile(path, content, { encoding: "utf8" });
+    };
+    const { application } = await launchWithRuntime(runtime, writer);
+    const observed: Array<ReturnType<LearningApplication["getState"]>> = [];
+    application.subscribe((state) => observed.push(state));
+
+    blockWrites = true;
+    const submission = application.submit({ type: "submitSessionIntake", mathematics: "Explain this theorem." });
+    await vi.waitFor(() => expect(runtime.teachingRequests).toHaveLength(1));
+    const accessDecision = runtime.requestAccess({
+      requestedPolicy: "full",
+      reason: "The theorem cites an unattached reference.",
+      exactScope: "/Users/learner/reference.pdf",
+      intendedAction: "Read the cited theorem statement."
+    });
+    await vi.waitFor(() => expect(observed.at(-1)?.sessions[0].accessRequests).toHaveLength(1));
+
+    releaseWrites();
+    const submitted = await submission;
+    expect(submitted.sessions[0].accessRequests).toHaveLength(1);
+    expect(observed.at(-1)?.sessions[0].accessRequests).toHaveLength(1);
+    await application.submit({
+      type: "decideAccessRequest",
+      requestId: submitted.sessions[0].accessRequests[0].id,
+      decision: "deny"
+    });
+    await expect(accessDecision).resolves.toEqual({ status: "denied", policy: "focused" });
+    runtime.completeTeaching();
+    await application.waitForModelWork();
+  });
+
+  it("invalidates a concurrent runtime snapshot when the action it extends cannot persist", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the proof",
+      scope: "Use the attached statement",
+      initialTeachingDirection: "Inspect the hypotheses",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    let failWrites = false;
+    let signalWriteStarted!: () => void;
+    let releaseFailedWrite!: () => void;
+    const writeStarted = new Promise<void>((resolve) => { signalWriteStarted = resolve; });
+    const failedWriteReleased = new Promise<void>((resolve) => { releaseFailedWrite = resolve; });
+    const writer = async (path: string, content: string) => {
+      if (failWrites) {
+        signalWriteStarted();
+        await failedWriteReleased;
+        throw new Error("synthetic persistence failure");
+      }
+      await atomicWriteFile(path, content, { encoding: "utf8" });
+    };
+    const { application, dataDirectory } = await launchWithRuntime(runtime, writer);
+    await application.waitForModelWork();
+    await application.submit({ type: "createWorkspace", name: "Durable baseline" });
+    const statePath = join(dataDirectory, "learning-application.json");
+    const durableState = await readFile(statePath, "utf8");
+
+    failWrites = true;
+    const submission = application.submit({ type: "submitSessionIntake", mathematics: "Explain this theorem." });
+    await writeStarted;
+    await vi.waitFor(() => expect(runtime.teachingRequests).toHaveLength(1));
+    const accessDecision = runtime.requestAccess({
+      requestedPolicy: "full",
+      reason: "The theorem cites an unattached reference.",
+      exactScope: "/Users/learner/reference.pdf",
+      intendedAction: "Read the cited theorem statement."
+    });
+    await vi.waitFor(() => expect(application.getState().sessions[0].accessRequests).toHaveLength(1));
+
+    releaseFailedWrite();
+    await expect(submission).rejects.toThrow("last known-good learner state remains active");
+    failWrites = false;
+    await expect(accessDecision).resolves.toEqual({ status: "denied", policy: "focused" });
+    expect(application.getState().sessions).toHaveLength(0);
+    expect(await readFile(statePath, "utf8")).toBe(durableState);
+    expect(runtime.teachingRequests[0].signal.aborted).toBe(true);
+    await application.waitForModelWork();
+  });
+
+  it("aborts replacement Model Work under the same session id when its revision cannot persist", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand the original goal",
+      scope: "Original scope",
+      initialTeachingDirection: "Original direction",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    let failWrites = false;
+    let releaseWrites!: () => void;
+    const writesReleased = new Promise<void>((resolve) => { releaseWrites = resolve; });
+    const writer = async (path: string, content: string) => {
+      if (failWrites) {
+        await writesReleased;
+        throw new Error("synthetic persistence failure");
+      }
+      await atomicWriteFile(path, content, { encoding: "utf8" });
+    };
+    const { application } = await launchWithRuntime(runtime, writer);
+    const started = await application.submit({ type: "submitSessionIntake", mathematics: "Explain this theorem." });
+    const sessionId = started.activeSessionId!;
+
+    failWrites = true;
+    const revision = application.submit({
+      type: "applySessionProposalRevision",
+      learningGoal: "Understand the revised goal",
+      scope: "Revised scope",
+      initialTeachingDirection: "Revised direction"
+    });
+    await vi.waitFor(() => expect(runtime.teachingRequests).toHaveLength(2));
+    releaseWrites();
+    await expect(revision).rejects.toThrow("last known-good learner state remains active");
+    failWrites = false;
+
+    expect(runtime.teachingRequests[1].sessionId).toBe(sessionId);
+    expect(runtime.teachingRequests[1].signal.aborted).toBe(true);
+    expect(application.getState().sessions[0]).toMatchObject({
+      learningGoal: "Understand the original goal",
+      sessionTarget: "Original scope",
+      teachingCard: {
+        status: "stopped",
+        retryable: true,
+        error: expect.stringContaining("retry")
+      }
+    });
+    await application.waitForModelWork();
+  });
+
   it("handles a runtime Access Request and rebinds active teaching after approval", async () => {
     const runtime = new DeterministicModelRuntime({
       learningGoal: "Understand the proof",
@@ -8322,7 +8615,7 @@ describe("Learning Application", () => {
     }));
   });
 
-  it("rejects an invalid persisted source before its path can reach local source access", async () => {
+  it("blocks recovery for an invalid persisted source before its path can reach local source access", async () => {
     const { application, dataDirectory } = await launch();
     const created = await application.submit({ type: "createWorkspace", name: "Analysis" });
     await application.linkExternalAttachment(created.navigation.workspaceId, {
@@ -8338,10 +8631,10 @@ describe("Learning Application", () => {
     persisted.sources[0].link.lastKnownPath = "../../etc/passwd";
     await writeFile(statePath, JSON.stringify(persisted), "utf8");
 
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Linked Source is invalid");
+    await expectBlockedRecovery(dataDirectory);
   });
 
-  it("rejects persisted Source Anchor references that contradict session ownership", async () => {
+  it("blocks recovery for persisted Source Anchor references that contradict session ownership", async () => {
     const { application, dataDirectory } = await launch();
     const started = await application.submit({ type: "startQuickStudy", mathematics: "Use $a=b$." });
     const sourceId = started.sessions[0].sourceIds[0];
@@ -8365,20 +8658,20 @@ describe("Learning Application", () => {
     const invalidActiveAnchor = structuredClone(valid);
     invalidActiveAnchor.sessions[0].activeSourceAnchorId = "missing-anchor";
     await writeFile(statePath, JSON.stringify(invalidActiveAnchor), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+    await expectBlockedRecovery(dataDirectory);
 
     const invalidRequest = structuredClone(valid);
     invalidRequest.sessions[0].sourceAnchorRequests[0].sourceAnchorId = "missing-anchor";
     await writeFile(statePath, JSON.stringify(invalidRequest), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+    await expectBlockedRecovery(dataDirectory);
 
     const detachedSource = structuredClone(valid);
     detachedSource.sessions[0].sourceAnchors[0].sourceId = "other-source";
     await writeFile(statePath, JSON.stringify(detachedSource), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Source Anchor references are invalid");
+    await expectBlockedRecovery(dataDirectory);
   });
 
-  it("rejects malformed persisted Session Access Policy state", async () => {
+  it("blocks recovery for malformed persisted Session Access Policy state", async () => {
     const { application, dataDirectory } = await launch();
     const started = await application.submit({ type: "startQuickStudy", mathematics: "Check a proof." });
     await application.requestSessionAccess(started.activeSessionId!, {
@@ -8391,17 +8684,17 @@ describe("Learning Application", () => {
     const valid = JSON.parse(await readFile(statePath, "utf8"));
 
     await writeFile(statePath, JSON.stringify({ ...valid, accessConfirmationPreference: { confirmFullAccess: "no" } }), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Access Confirmation Preference is invalid");
+    await expectBlockedRecovery(dataDirectory);
 
     const invalidPolicy = structuredClone(valid);
     invalidPolicy.sessions[0].accessPolicy = "device";
     await writeFile(statePath, JSON.stringify(invalidPolicy), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Session Access Policy is invalid");
+    await expectBlockedRecovery(dataDirectory);
 
     const invalidRequest = structuredClone(valid);
     invalidRequest.sessions[0].accessRequests[0].status = "silentlyApproved";
     await writeFile(statePath, JSON.stringify(invalidRequest), "utf8");
-    await expect(LearningApplication.launch(dataDirectory)).rejects.toThrow("Stored Access Request is invalid");
+    await expectBlockedRecovery(dataDirectory);
   });
 
   it("pauses an active Learning Session when hierarchy navigation returns to the dashboard", async () => {
