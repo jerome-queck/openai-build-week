@@ -29,7 +29,9 @@
     "quality:gate:fixture": "npm run quality:gate -- --evidence evaluation/fixtures/passing-evidence-v2.json --out test-results/quality-gate",
     "package": "npm run build && electron-forge package --platform=darwin",
     "make:beta": "electron-forge make --platform=darwin --skip-package",
-    "test:smoke": "node scripts/install-beta-for-smoke.mjs && playwright test --config=playwright.config.ts",
+    "test:smoke": "node scripts/install-beta-for-smoke.mjs && npm run test:smoke:index-budget && npm run test:smoke:functional",
+    "test:smoke:index-budget": "playwright test --config=playwright.config.ts --grep \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
+    "test:smoke:functional": "playwright test --config=playwright.config.ts --grep-invert \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
     "verify": "npm run lint && npm run typecheck && npm test && npm run quality:gate:fixture && npm run package && npm run make:beta && npm run test:smoke"
   },
   "dependencies": {

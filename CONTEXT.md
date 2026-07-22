@@ -1,8 +1,14 @@
 # Mathematical Learning
 
-This context describes how the product organizes a learner's work to understand advanced mathematics.
+This context describes how Clarifold organizes a learner's work to understand advanced mathematics.
 
 ## Language
+
+### People and scope
+
+**Advanced Mathematics Learner**:
+A person working seriously to understand advanced mathematical material, regardless of age, credential, institutional role, or existing expertise.
+_Avoid_: Student, professor, professional mathematician, age-defined learner
 
 ### Workspaces and sessions
 
@@ -203,6 +209,10 @@ The persistent visible path from an originating Learning Session and Return Poin
 _Avoid_: Raw navigation history, hidden stack
 
 ### Adaptive teaching
+
+**Calibrated Understanding**:
+The context-specific alignment between what a learner feels confident about and the Understanding Evidence available for what they can currently recognize, explain, apply, or prove, including visible uncertainty and gaps.
+_Avoid_: Mastery score, confidence score, correctness guarantee
 
 **Learner Model**:
 A revisable, evidence-backed representation of what helps a learner engage, what they have demonstrated, and where uncertainty or recurring difficulty remains across Learning Sessions.
