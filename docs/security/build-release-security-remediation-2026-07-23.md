@@ -10,7 +10,6 @@ The macOS verification job now has an explicit empty workflow permission baselin
 - `actions/setup-node` v7: `820762786026740c76f36085b0efc47a31fe5020`
 - `actions/cache` v6: `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`
 - `actions/upload-artifact` v7: `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
-- `gitleaks/gitleaks-action` v3: `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`
 
 Dependabot's GitHub Actions update group remains enabled. A pin change is reviewable as a normal pull request and cannot self-approve or publish a release.
 
@@ -30,7 +29,7 @@ The production audit command is a required CI check. The full audit must still b
 
 ## Secret scanning
 
-The macOS CI checkout fetches full history and runs the pinned Gitleaks action with pull-request comments and artifact upload disabled, so it needs only read access. GitHub Secret Scanning remains the repository's hosted alerting control. The 2026-07-22 tracked-content and relevant-history scans reported no known live secret; a future finding must be handled privately and rotated before disclosure.
+The macOS CI checkout fetches full history and runs `npm run security:secrets`. That command downloads Gitleaks v8.30.1 for the runner architecture from the official release URL, verifies the pinned SHA-256 (`b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5` for arm64 and `dfe101a4db2255fc85120ac7f3d25e4342c3c20cf749f2c20a18081af1952709` for x64), and scans the complete Git history with no GitHub write authority or license secret. GitHub Secret Scanning remains the repository's hosted alerting control. The 2026-07-22 tracked-content and relevant-history scans reported no known live secret; a future finding must be handled privately and rotated before disclosure.
 
 ## Swift boundary
 

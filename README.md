@@ -48,6 +48,7 @@ npm run package     # ad-hoc-signed macOS .app under out/
 npm run make:beta   # architecture-native beta zip from the packaged .app
 npm run test:smoke  # install the zip, then exercise start, persist, quit, relaunch, and resume
 npm run security:dependencies # production dependency audit; dev-only exceptions are recorded and expiring
+npm run security:secrets      # full-history secret scan with a hash-pinned Gitleaks release
 npm run security:swift        # warnings-as-errors Swift boundary analysis
 npm run quality:gate -- --evidence /absolute/path/to/release-evidence.json --out /absolute/path/to/report
 npm run verify      # all of the above in release order

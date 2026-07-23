@@ -21,6 +21,7 @@
     "test:watch": "vitest",
     "build:quality-gate": "tsc -p tsconfig.quality-gate.json",
     "security:dependencies": "npm audit --omit=dev --audit-level=high",
+    "security:secrets": "node scripts/run-gitleaks.mjs",
     "security:swift": "xcrun swiftc -warnings-as-errors -typecheck native/source-index-extractor.swift -framework AppKit -framework Foundation -framework ImageIO -framework PDFKit -framework Vision && xcrun swiftc -warnings-as-errors -typecheck native/source-bookmark-helper.swift -framework Foundation && xcrun swiftc -warnings-as-errors -typecheck tests/fixtures/create-scanned-pdf.swift -framework AppKit -framework Foundation -framework PDFKit",
     "quality:gate": "npm run build:quality-gate && node dist/quality-gate/quality-gate-cli.js",
     "quality:collect:model": "npm run build:main && node scripts/collect-model-evaluation.mjs",
