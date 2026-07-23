@@ -127,12 +127,14 @@ function checkPullRequestDeclarations(body, errors) {
   if (securityAffected === securityUnaffected) {
     errors.push("pull request body: select exactly one security-impact declaration");
   }
-  for (const [label, pattern] of [
-    ["documentation", /^Documentation impact details:\s*(?!<!--).+$/m],
-    ["security", /^Security impact details:\s*(?!<!--).+$/m],
+  for (const [label, errorLabel] of [
+    ["Documentation impact details", "documentation-impact"],
+    ["Security impact details", "security-impact"],
   ]) {
-    if (!pattern.test(body)) {
-      errors.push(`pull request body: provide ${label}-impact details`);
+    const detailMatch = new RegExp(`^${label}:\\s*(.*)$`, "m").exec(body);
+    const detail = detailMatch?.[1].replace(/<!--.*?-->/g, "").trim() ?? "";
+    if (detail.length < 12 || ["x", "n/a", "none", "no", "tbd", "todo"].includes(detail.toLowerCase())) {
+      errors.push(`pull request body: provide ${errorLabel} details`);
     }
   }
 }
