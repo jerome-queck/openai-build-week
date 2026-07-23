@@ -13,9 +13,9 @@ describe("macOS source access", () => {
       showOpenDialog,
       stat: vi.fn().mockResolvedValue(fileStat()),
       realpath: vi.fn().mockImplementation(async (path) => path),
-      readFile: vi.fn(),
+      openFile: vi.fn().mockResolvedValue(openedFile(vi.fn().mockResolvedValue(Buffer.from("selected source")))),
       readdir: vi.fn(),
-      startAccessingSecurityScopedResource: vi.fn()
+      startAccessingSecurityScopedResource: vi.fn().mockReturnValue(vi.fn())
     });
 
     const selected = await access.select("file");
@@ -30,7 +30,7 @@ describe("macOS source access", () => {
       lastKnownPath: "/Users/learner/notes/lecture.pdf",
       canonicalPath: "/Users/learner/notes/lecture.pdf",
       accessGrant: { kind: "securityScopedBookmark", bookmarkData: "opaque-bookmark" },
-      fingerprint: { size: 128, modifiedAtMs: 1234 }
+      fingerprint: { size: 128, modifiedAtMs: 1234, contentHash: expect.any(String) }
     });
   });
 
@@ -53,6 +53,25 @@ describe("macOS source access", () => {
     expect(selected).toMatchObject({ name: "/", lastKnownPath: "/", canonicalPath: "/" });
   });
 
+  it("opens a selected file through its canonical path while retaining the bookmark path", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.showOpenDialog.mockResolvedValue({
+      canceled: false,
+      filePaths: ["/var/folders/source.pdf"],
+      bookmarks: ["source-bookmark"]
+    });
+    sourceDependencies.realpath.mockResolvedValue("/private/var/folders/source.pdf");
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("selected source"));
+
+    const selected = await new MacOsSourceAccess(sourceDependencies).select("file");
+
+    expect(selected).toMatchObject({
+      lastKnownPath: "/var/folders/source.pdf",
+      canonicalPath: "/private/var/folders/source.pdf"
+    });
+    expect(sourceDependencies.openFile).toHaveBeenCalledWith("/private/var/folders/source.pdf");
+  });
+
   it("balances security-scoped access around a read-only file view", async () => {
     const stopAccess = vi.fn();
     const readFile = vi.fn().mockResolvedValue(Buffer.from("A compact space admits a finite subcover."));
@@ -61,7 +80,7 @@ describe("macOS source access", () => {
       showOpenDialog: vi.fn(),
       stat: vi.fn().mockResolvedValue(fileStat()),
       realpath: vi.fn().mockImplementation(async (path) => path),
-      readFile,
+      openFile: vi.fn().mockResolvedValue(openedFile(readFile)),
       readdir: vi.fn(),
       startAccessingSecurityScopedResource: startAccess
     });
@@ -97,6 +116,7 @@ describe("macOS source access", () => {
       filePaths: ["/Users/learner/notes/lecture.txt"],
       bookmarks: ["relaunch-bookmark"]
     });
+    first.readFile.mockResolvedValue(Buffer.from("selected"));
     const selected = await new MacOsSourceAccess(first).select("file");
     const second = dependencies();
     const stopAccess = vi.fn();
@@ -112,6 +132,8 @@ describe("macOS source access", () => {
     });
 
     expect(second.startAccessingSecurityScopedResource).toHaveBeenCalledWith("relaunch-bookmark");
+    expect(second.startAccessingSecurityScopedResource.mock.invocationCallOrder[0])
+      .toBeLessThan(second.realpath.mock.invocationCallOrder[0]);
     expect(stopAccess).toHaveBeenCalledOnce();
   });
 
@@ -156,7 +178,7 @@ describe("macOS source access", () => {
       link: { ...linkedFile().link, lastKnownPath: "/Users/learner/old/lecture.pdf" }
     });
 
-    expect(sourceDependencies.extractDocument).toHaveBeenCalledWith("/Users/learner/moved/lecture.pdf");
+    expect(sourceDependencies.extractDocument).toHaveBeenCalledWith(Buffer.from("synthetic-pdf"), "lecture.pdf");
     expect(sourceDependencies.startAccessingSecurityScopedResource).toHaveBeenCalledWith("refreshed-bookmark");
   });
 
@@ -167,7 +189,8 @@ describe("macOS source access", () => {
 
     const view = await access.read({ ...linkedFile(), name: "lecture.pdf", link: {
       ...linkedFile().link,
-      lastKnownPath: "/Users/learner/notes/lecture.pdf"
+      lastKnownPath: "/Users/learner/notes/lecture.pdf",
+      canonicalPath: "/Users/learner/notes/lecture.pdf"
     } });
 
     expect(view.mediaType).toBe("application/pdf");
@@ -194,7 +217,11 @@ describe("macOS source access", () => {
       ...linkedFile(),
       name: "algebra-course",
       resourceType: "folder",
-      link: { ...linkedFile().link, lastKnownPath: "/Users/learner/algebra-course" }
+      link: {
+        ...linkedFile().link,
+        lastKnownPath: "/Users/learner/algebra-course",
+        canonicalPath: "/Users/learner/algebra-course"
+      }
     });
 
     expect(view.mediaType).toBe("text/plain");
@@ -234,19 +261,83 @@ describe("macOS source access", () => {
     expect(changed.fingerprint.contentHash).not.toBe(selected.fingerprint.contentHash);
   });
 
+  it("charges the Primary Folder budget from descriptor bytes instead of stale pathname sizes", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.stat.mockImplementation(async (path: string) => ({
+      size: path.endsWith("course") ? 64 : 1,
+      mtimeMs: 1234,
+      isFile: () => !path.endsWith("course"),
+      isDirectory: () => path.endsWith("course")
+    }));
+    sourceDependencies.readdir.mockResolvedValue(["first.txt", "second.txt"]);
+    sourceDependencies.readFile.mockResolvedValue(Buffer.alloc(13 * 1024 * 1024, 0x61));
+
+    await expect(new MacOsSourceAccess(sourceDependencies).read({
+      ...linkedFile(),
+      name: "course",
+      resourceType: "folder",
+      link: {
+        ...linkedFile().link,
+        lastKnownPath: "/Users/learner/course",
+        canonicalPath: "/Users/learner/course"
+      }
+    })).rejects.toThrow("too large for the read-only preview");
+  });
+
   it("stops security-scoped access when reading fails", async () => {
     const stopAccess = vi.fn();
     const access = new MacOsSourceAccess({
       showOpenDialog: vi.fn(),
       stat: vi.fn().mockResolvedValue(fileStat()),
       realpath: vi.fn().mockImplementation(async (path) => path),
-      readFile: vi.fn().mockRejectedValue(new Error("volume unavailable")),
+      openFile: vi.fn().mockRejectedValue(new Error("volume unavailable")),
       readdir: vi.fn(),
       startAccessingSecurityScopedResource: vi.fn().mockReturnValue(stopAccess)
     });
 
     await expect(access.read(linkedFile())).rejects.toThrow("volume unavailable");
     expect(stopAccess).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unbookmarked Linked Source whose canonical object escapes after selection", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.realpath.mockResolvedValue("/Users/learner/private/personal-notes.json");
+
+    await expect(new MacOsSourceAccess(sourceDependencies).read({
+      ...linkedFile(),
+      link: { ...linkedFile().link, accessGrant: null }
+    })).rejects.toThrow("no longer resolves to the learner-authorized object");
+    expect(sourceDependencies.readFile).not.toHaveBeenCalled();
+  });
+
+  it("reads from the identity-checked descriptor when the pathname is swapped after canonicalization", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("PRIVATE OUTSIDE CONTENT"));
+    sourceDependencies.openFile.mockResolvedValue(openedFile(
+      vi.fn().mockResolvedValue(Buffer.from("Authorized lemma."))
+    ));
+
+    const view = await new MacOsSourceAccess(sourceDependencies).read({
+      ...linkedFile(),
+      link: { ...linkedFile().link, accessGrant: null }
+    });
+
+    expect(view.content).toBe("Authorized lemma.");
+    expect(sourceDependencies.readFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized file from descriptor metadata before reading its bytes", async () => {
+    const sourceDependencies = dependencies();
+    const descriptorRead = vi.fn();
+    sourceDependencies.openFile.mockResolvedValue({
+      stat: vi.fn().mockResolvedValue({ ...fileStat(), size: 25 * 1024 * 1024 + 1 }),
+      readFile: descriptorRead,
+      close: vi.fn().mockResolvedValue(undefined)
+    });
+
+    await expect(new MacOsSourceAccess(sourceDependencies).read(linkedFile()))
+      .rejects.toThrow("too large for the read-only preview");
+    expect(descriptorRead).not.toHaveBeenCalled();
   });
 
   it("captures an exact read-only file payload only when a Source Snapshot is requested", async () => {
@@ -259,9 +350,13 @@ describe("macOS source access", () => {
     expect(snapshot).toEqual({
       mediaType: "text/plain",
       contentBase64: Buffer.from("Exact preserved proof.\n").toString("base64"),
-      fingerprint: { size: 128, modifiedAtMs: 1234 }
+      fingerprint: {
+        size: 128,
+        modifiedAtMs: 1234,
+        contentHash: "e836442fb09dccf955cb086fdb8e7174cc17c607f2eba7ade175a855801eafaf"
+      }
     });
-    expect(sourceDependencies.readFile).toHaveBeenCalledTimes(2);
+    expect(sourceDependencies.readFile).toHaveBeenCalledTimes(1);
     expect(sourceDependencies.readFile).toHaveBeenCalledWith("/Users/learner/notes/lecture.txt");
   });
 
@@ -297,7 +392,11 @@ describe("macOS source access", () => {
       ...linkedFile(),
       name: "course",
       resourceType: "folder" as const,
-      link: { ...linkedFile().link, lastKnownPath: "/Users/learner/course" }
+      link: {
+        ...linkedFile().link,
+        lastKnownPath: "/Users/learner/course",
+        canonicalPath: "/Users/learner/course"
+      }
     };
 
     const snapshot = await new MacOsSourceAccess(sourceDependencies).snapshot(source);
@@ -338,6 +437,33 @@ describe("macOS source access", () => {
     });
   });
 
+  it("rejects an embedded-text source over the Source Index page budget", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from(Array.from({ length: 257 }, () => "lemma").join("\f")));
+
+    await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex(linkedFile()))
+      .rejects.toThrow("too complex to index safely");
+  });
+
+  it("keeps the pinned 50,000-line text corpus within the Source Index budget", async () => {
+    const sourceDependencies = dependencies();
+    const content = Array.from({ length: 50_000 }, (_, index) => `Reference ${index + 1}: retain its assumptions.`).join("\n");
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from(content));
+
+    const extraction = await new MacOsSourceAccess(sourceDependencies).extractForIndex(linkedFile());
+
+    expect(extraction.pages).toHaveLength(1);
+    expect(extraction.pages[0].regions).toHaveLength(50_000);
+  });
+
+  it("stops building embedded-text regions as soon as the Source Index budget is exceeded", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("line\n".repeat(100_001)));
+
+    await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex(linkedFile()))
+      .rejects.toThrow("too complex to index safely");
+  });
+
   it("uses the bounded native extractor for OCR and image geometry", async () => {
     const sourceDependencies = {
       ...dependencies(),
@@ -361,12 +487,16 @@ describe("macOS source access", () => {
     const image = {
       ...linkedFile(),
       name: "proof.png",
-      link: { ...linkedFile().link, lastKnownPath: "/Users/learner/notes/proof.png" }
+      link: {
+        ...linkedFile().link,
+        lastKnownPath: "/Users/learner/notes/proof.png",
+        canonicalPath: "/Users/learner/notes/proof.png"
+      }
     };
 
     const extraction = await access.extractForIndex(image);
 
-    expect(sourceDependencies.extractDocument).toHaveBeenCalledWith("/Users/learner/notes/proof.png");
+    expect(sourceDependencies.extractDocument).toHaveBeenCalledWith(Buffer.from("synthetic-image"), "proof.png");
     expect(extraction).toMatchObject({
       extractionMethod: "ocr",
       pages: [{ thumbnailDataUrl: "data:image/png;base64,c21hbGw=", regions: [expect.objectContaining({
@@ -385,7 +515,34 @@ describe("macOS source access", () => {
     const source = { ...linkedFile(), name: "lecture.pdf" };
 
     await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex(source))
-      .rejects.toThrow("changed while its Source Index was being built");
+      .rejects.toThrow(/changed while/);
+  });
+
+  it("rejects native extraction results that exceed the retained Source Index budget", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("synthetic-pdf"));
+    sourceDependencies.extractDocument = vi.fn().mockResolvedValue({
+      extractionMethod: "pdfText",
+      pages: Array.from({ length: 257 }, (_, index) => ({
+        pageNumber: index + 1,
+        width: 612,
+        height: 792,
+        thumbnailDataUrl: "data:image/png;base64,c21hbGw=",
+        regions: []
+      }))
+    });
+
+    await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex({ ...linkedFile(), name: "lecture.pdf" }))
+      .rejects.toThrow("too complex to index safely");
+  });
+
+  it("rejects structurally invalid native extractor output at the process boundary", async () => {
+    const sourceDependencies = dependencies();
+    sourceDependencies.readFile.mockResolvedValue(Buffer.from("synthetic-pdf"));
+    sourceDependencies.extractDocument = vi.fn().mockResolvedValue({ extractionMethod: "pdfText", pages: "invalid" });
+
+    await expect(new MacOsSourceAccess(sourceDependencies).extractForIndex({ ...linkedFile(), name: "lecture.pdf" }))
+      .rejects.toThrow("native source extractor returned an invalid response");
   });
 });
 
@@ -394,14 +551,35 @@ function fileStat() {
 }
 
 function dependencies() {
-  return {
+  const result = {
     showOpenDialog: vi.fn(),
     stat: vi.fn().mockResolvedValue(fileStat()),
     realpath: vi.fn().mockImplementation(async (path) => path),
     readFile: vi.fn(),
+    openFile: vi.fn(),
     readdir: vi.fn().mockResolvedValue([]),
     startAccessingSecurityScopedResource: vi.fn(),
     resolveSecurityScopedBookmark: vi.fn().mockResolvedValue(null)
+  };
+  result.openFile.mockImplementation(async (path: string) => openedFile(result.readFile, result.stat, path));
+  return result;
+}
+
+function openedFile(
+  readFile: ReturnType<typeof vi.fn>,
+  stat: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue(fileStat()),
+  path = "/Users/learner/notes/lecture.txt"
+) {
+  let content: Promise<Buffer> | null = null;
+  return {
+    stat: vi.fn().mockImplementation(() => stat(path)),
+    read: vi.fn().mockImplementation(async (buffer: Buffer, offset: number, length: number, position: number) => {
+      content ??= readFile(path);
+      const source = await content;
+      const bytesRead = source.copy(buffer, offset, position, Math.min(position + length, source.byteLength));
+      return { bytesRead };
+    }),
+    close: vi.fn().mockResolvedValue(undefined)
   };
 }
 

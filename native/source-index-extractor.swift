@@ -1,7 +1,13 @@
 import AppKit
 import Foundation
+import ImageIO
 import PDFKit
 import Vision
+
+let maxSourceIndexPages = 256
+let maxSourceIndexRegions = 100_000
+let maxSourceIndexTextBytes = 8 * 1024 * 1024
+let maxSourceImagePixels = 40_000_000
 
 struct Bounds: Codable {
     let x: Double
@@ -33,12 +39,14 @@ enum ExtractionError: Error, LocalizedError {
     case unsupported
     case unreadable
     case empty
+    case tooComplex
 
     var errorDescription: String? {
         switch self {
         case .unsupported: return "This source type does not have indexable mathematical content."
         case .unreadable: return "The source could not be opened for indexing."
         case .empty: return "No searchable text could be extracted from this source."
+        case .tooComplex: return "This source is too complex to index safely. Choose a smaller document or split it into parts."
         }
     }
 }
@@ -128,8 +136,11 @@ func cgImage(_ image: NSImage) throws -> CGImage {
 
 func extractPdf(_ url: URL) throws -> Extraction {
     guard let document = PDFDocument(url: url) else { throw ExtractionError.unreadable }
+    guard document.pageCount <= maxSourceIndexPages else { throw ExtractionError.tooComplex }
     var pages: [Page] = []
     var usedOcr = false
+    var retainedRegions = 0
+    var retainedTextBytes = 0
     for pageIndex in 0..<document.pageCount {
         guard let page = document.page(at: pageIndex) else { continue }
         let pageBounds = page.bounds(for: .mediaBox)
@@ -162,6 +173,10 @@ func extractPdf(_ url: URL) throws -> Extraction {
             pageRegions = try recognizedRegions(VNImageRequestHandler(cgImage: cgImage(renderedPage)))
             usedOcr = true
         }
+        retainedRegions += pageRegions.count
+        retainedTextBytes += pageRegions.reduce(0) { $0 + $1.text.lengthOfBytes(using: .utf8) }
+        guard retainedRegions <= maxSourceIndexRegions,
+              retainedTextBytes <= maxSourceIndexTextBytes else { throw ExtractionError.tooComplex }
         let thumbnail = page.thumbnail(of: NSSize(width: 160, height: 200), for: .mediaBox)
         pages.append(Page(
             pageNumber: pageIndex + 1,
@@ -176,8 +191,18 @@ func extractPdf(_ url: URL) throws -> Extraction {
 }
 
 func extractImage(_ url: URL) throws -> Extraction {
+    guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, nil) as? [CFString: Any],
+          let pixelWidth = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+          let pixelHeight = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+          pixelWidth.intValue > 0,
+          pixelHeight.intValue > 0 else { throw ExtractionError.unreadable }
+    guard pixelWidth.intValue <= maxSourceImagePixels / pixelHeight.intValue else { throw ExtractionError.tooComplex }
     guard let image = NSImage(contentsOf: url) else { throw ExtractionError.unreadable }
     let pageRegions = try recognizedRegions(VNImageRequestHandler(url: url))
+    guard pageRegions.count <= maxSourceIndexRegions,
+          pageRegions.reduce(0, { $0 + $1.text.lengthOfBytes(using: .utf8) }) <= maxSourceIndexTextBytes
+    else { throw ExtractionError.tooComplex }
     guard !pageRegions.isEmpty else { throw ExtractionError.empty }
     return Extraction(extractionMethod: "ocr", pages: [Page(
         pageNumber: 1,

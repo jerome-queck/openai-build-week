@@ -2,8 +2,10 @@ import AppKit
 import Foundation
 import PDFKit
 
-guard CommandLine.arguments.count == 2 else { exit(1) }
+guard CommandLine.arguments.count == 2 || CommandLine.arguments.count == 3 else { exit(1) }
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
+let pageCount = CommandLine.arguments.count == 3 ? Int(CommandLine.arguments[2]) ?? 0 : 1
+guard pageCount > 0 else { exit(1) }
 let image = NSImage(size: NSSize(width: 612, height: 792))
 image.lockFocus()
 NSColor.white.setFill()
@@ -18,7 +20,9 @@ NSString(string: "Heine Borel compactness theorem.\nx^2 + y^2 = 1").draw(
 )
 image.unlockFocus()
 
-guard let page = PDFPage(image: image) else { exit(1) }
 let document = PDFDocument()
-document.insert(page, at: 0)
+for pageIndex in 0..<pageCount {
+    guard let page = PDFPage(image: image) else { exit(1) }
+    document.insert(page, at: pageIndex)
+}
 guard document.write(to: output) else { exit(1) }

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { boundedProcessEnvironment } from "./bounded-process-environment";
 import {
@@ -10,6 +10,7 @@ import {
   type VerifierRunResult,
   type VerifierRuntime
 } from "../shared/verifier-runtime";
+import { atomicWriteFile } from "../shared/atomic-file";
 
 export interface LeanCommandResult {
   stdout: string;
@@ -61,16 +62,17 @@ export class LeanVerifierRuntime implements VerifierRuntime {
     private readonly execute: LeanCommandExecutor = executeLean,
     private readonly timeoutMs = 15_000,
     private readonly loadEnvironment: (executablePath: string) => Promise<VerificationEnvironment> = loadEnvironmentBeside,
-    private readonly validateInstallation: (signal?: AbortSignal, environmentId?: string) => Promise<void> = async () => undefined
+    private readonly validateInstallation: (signal?: AbortSignal, environmentId?: string) => Promise<void> = async () => undefined,
+    private readonly stagingId: () => string = () => crypto.randomUUID()
   ) {}
 
   async run(request: VerifierRunRequest, signal?: AbortSignal): Promise<VerifierRunResult> {
     const executablePath = typeof this.executablePath === "function" ? this.executablePath(request.environmentId) : this.executablePath;
     await mkdir(request.evidenceDirectory, { recursive: true });
     const evidenceLocation = join(request.evidenceDirectory, `${safeRunId(request.runId)}.lean`);
-    const stagingPath = `${evidenceLocation}.tmp`;
-    await writeFile(stagingPath, request.proofSource, { encoding: "utf8", mode: 0o600 });
-    await rename(stagingPath, evidenceLocation);
+    await atomicWriteFile(evidenceLocation, request.proofSource, {
+      encoding: "utf8", stagingSuffix: ".tmp", uniqueId: this.stagingId
+    });
     const command = `${basename(executablePath)} ${basename(evidenceLocation)}`;
 
     let environment: VerificationEnvironment;

@@ -40,6 +40,7 @@ export function App() {
   }, []);
 
   if (!state) return <main className="loading">Opening Quick Study…</main>;
+  if (state.persistenceRecovery.status === "blocked") return <StorageRecovery state={state} />;
   if (state.screen === "delayedTransfer" && state.activeDelayedTransferCheckId) {
     return <DelayedTransferCheckScreen state={state} onState={setState} />;
   }
@@ -58,6 +59,20 @@ export function App() {
     />;
   }
   return <Dashboard state={state} onState={setState} />;
+}
+
+function StorageRecovery({ state }: { state: LearningApplicationState }) {
+  return (
+    <main className="shell">
+      <Brand />
+      <section className="history-card" role="alert" aria-labelledby="storage-recovery-title">
+        <p className="eyebrow">Learner state preserved</p>
+        <h1 id="storage-recovery-title">Stored work needs recovery</h1>
+        <p>{state.persistenceRecovery.message}</p>
+        <p>Clarifold has not overwritten the stored file or accepted new durable changes.</p>
+      </section>
+    </main>
+  );
 }
 
 function Brand() {
@@ -2669,12 +2684,12 @@ function SessionAccessPanel({ state, session, onState }: {
         />
         Confirm before Full Access
       </label>
-      <small>Full Access never permits arbitrary source modification or deletion.</small>
+      <small>Every policy uses only sources already linked or added through learner-authorized application access.</small>
       {session.pendingFullAccessConfirmation && (
         <section className="access-request" aria-labelledby="full-access-confirmation-title">
           <p className="eyebrow">Additional confirmation</p>
           <h3 id="full-access-confirmation-title">Full Access confirmation</h3>
-          <p>Allow broader read-only local-file and agent-tool access for this Learning Session only?</p>
+          <p>Allow all learner-authorized Linked Sources and Managed Assets across Clarifold for this Learning Session only?</p>
           <div className="teaching-actions">
             <button className="primary" onClick={() => void submitAccessAction({
               type: "decideFullAccessConfirmation", decision: "confirm"
@@ -2712,7 +2727,7 @@ function accessPolicyDescription(policy: LearningSession["accessPolicy"]): strin
   return {
     focused: "Only material explicitly attached, pasted, highlighted, or selected for this Learning Session.",
     workspace: "Current session material and supported sources owned by this Study Workspace; unrelated workspaces and device content stay excluded.",
-    full: "Broader local-file and agent-tool access for this Learning Session only."
+    full: "All learner-authorized Linked Sources and Managed Assets across Clarifold for this Learning Session; application state and other device content stay excluded."
   }[policy];
 }
 

@@ -10,7 +10,7 @@ let serverRequestNumber = 1_000;
 const threadPolicies = new Map();
 const threadKinds = new Map();
 const pendingAccessRequests = new Map();
-const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? process.cwd();
+const dataDirectory = process.env.CODEX_HOME ?? process.cwd();
 
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 
@@ -120,7 +120,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       );
       threadPolicies.set(
         `fake-thread-${threadNumber}`,
-        message.params.baseInstructions.includes("Full Access permits") ? "full" : "bounded"
+        message.params.baseInstructions.includes("Full Access supplies") ? "full" : "bounded"
       );
       send({ id: message.id, result: { thread: { id: `fake-thread-${threadNumber}` } } });
       break;

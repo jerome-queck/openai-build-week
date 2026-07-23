@@ -11,10 +11,14 @@ import type {
 } from "../shared/learning-application";
 
 const MAX_SOURCE_VIEW_BYTES = 25 * 1024 * 1024;
+const MAX_SOURCE_INDEX_PAGES = 256;
+const MAX_SOURCE_INDEX_REGIONS = 100_000;
 
 interface FileStat {
   size: number;
   mtimeMs: number;
+  dev?: number | bigint;
+  ino?: number | bigint;
   isFile(): boolean;
   isDirectory(): boolean;
 }
@@ -28,7 +32,11 @@ interface SourceAccessDependencies {
   }): Promise<{ canceled: boolean; filePaths: string[]; bookmarks?: string[] }>;
   stat(path: string): Promise<FileStat>;
   realpath(path: string): Promise<string>;
-  readFile(path: string): Promise<Buffer>;
+  openFile(path: string): Promise<{
+    stat(): Promise<FileStat>;
+    read(buffer: Buffer, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+    close(): Promise<void>;
+  }>;
   readdir(path: string): Promise<string[]>;
   startAccessingSecurityScopedResource(bookmarkData: string): () => void;
   resolveSecurityScopedBookmark?(bookmarkData: string): Promise<{
@@ -36,7 +44,7 @@ interface SourceAccessDependencies {
     stale: boolean;
     refreshedBookmarkData?: string;
   } | null>;
-  extractDocument?(path: string): Promise<SourceIndexExtraction>;
+  extractDocument?(content: Buffer, sourceName: string): Promise<unknown>;
 }
 
 export class MacOsSourceAccess implements LocalSourceAccess {
@@ -50,7 +58,13 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       buttonLabel: resourceType === "file" ? "Link Attachment" : "Link Primary Folder"
     });
     if (result.canceled || !result.filePaths[0]) return null;
-    return this.describePath(result.filePaths[0], resourceType, result.bookmarks?.[0]);
+    const bookmarkData = result.bookmarks?.[0];
+    const stopAccess = bookmarkData ? this.dependencies.startAccessingSecurityScopedResource(bookmarkData) : null;
+    try {
+      return await this.describePath(result.filePaths[0], resourceType, bookmarkData);
+    } finally {
+      stopAccess?.();
+    }
   }
 
   async selectDirectPath(path: string, resourceType: "file" | "folder"): Promise<SelectedLocalSource> {
@@ -58,24 +72,27 @@ export class MacOsSourceAccess implements LocalSourceAccess {
   }
 
   async read(source: LinkedSource): Promise<AvailableLinkedSourceView> {
-    const location = await this.resolveSourceLocation(source);
-    const stopAccess = location.bookmarkData
-      ? this.dependencies.startAccessingSecurityScopedResource(location.bookmarkData)
+    const unresolvedLocation = await this.resolveSourceLocation(source);
+    const stopAccess = unresolvedLocation.bookmarkData
+      ? this.dependencies.startAccessingSecurityScopedResource(unresolvedLocation.bookmarkData)
       : null;
     try {
-      return await this.readAtLocation(source, location);
+      const location = await this.canonicalizeSourceLocation(source, unresolvedLocation);
+      return (await this.readAtLocation(source, location)).view;
     } finally {
       stopAccess?.();
     }
   }
 
   async extractForIndex(source: LinkedSource): Promise<SourceIndexExtractionResult> {
-    const location = await this.resolveSourceLocation(source);
-    const stopAccess = location.bookmarkData
-      ? this.dependencies.startAccessingSecurityScopedResource(location.bookmarkData)
+    const unresolvedLocation = await this.resolveSourceLocation(source);
+    const stopAccess = unresolvedLocation.bookmarkData
+      ? this.dependencies.startAccessingSecurityScopedResource(unresolvedLocation.bookmarkData)
       : null;
     try {
-      const view = await this.readAtLocation(source, location);
+      const location = await this.canonicalizeSourceLocation(source, unresolvedLocation);
+      const opened = await this.readAtLocation(source, location);
+      const view = opened.view;
       const extractionMethod = view.mediaType === "text/plain"
         ? "embeddedText"
         : view.mediaType === "application/pdf"
@@ -87,11 +104,14 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       let extraction: SourceIndexExtraction;
       if (view.mediaType !== "text/plain") {
         if (!this.dependencies.extractDocument) throw new Error("Native document indexing is unavailable.");
-        extraction = await this.dependencies.extractDocument(location.path);
+        extraction = validatedSourceIndexExtraction(
+          await this.dependencies.extractDocument(opened.fileContent!, source.name)
+        );
       } else {
         extraction = textSourceIndexExtraction(view.content, EMPTY_THUMBNAIL_DATA_URL);
       }
-      const afterExtraction = await this.readAtLocation(source, location);
+      requireBoundedSourceIndexExtraction(extraction);
+      const afterExtraction = (await this.readAtLocation(source, location)).view;
       if (!sameFingerprint(view.fingerprint, afterExtraction.fingerprint)) {
         throw new Error("This source changed while its Source Index was being built. Retry after the source is stable.");
       }
@@ -106,27 +126,24 @@ export class MacOsSourceAccess implements LocalSourceAccess {
   }
 
   async snapshot(source: LinkedSource) {
-    const location = await this.resolveSourceLocation(source);
-    const stopAccess = location.bookmarkData
-      ? this.dependencies.startAccessingSecurityScopedResource(location.bookmarkData)
+    const unresolvedLocation = await this.resolveSourceLocation(source);
+    const stopAccess = unresolvedLocation.bookmarkData
+      ? this.dependencies.startAccessingSecurityScopedResource(unresolvedLocation.bookmarkData)
       : null;
     try {
-      const view = await this.readAtLocation(source, location);
+      const location = await this.canonicalizeSourceLocation(source, unresolvedLocation);
+      const opened = await this.readAtLocation(source, location);
+      const view = opened.view;
       if (source.resourceType === "file") {
-        const content = await this.dependencies.readFile(location.path);
-        const afterSnapshotFingerprint = fingerprint(await this.dependencies.stat(location.path));
-        if (!sameFingerprint(view.fingerprint, afterSnapshotFingerprint)) {
-          throw new Error("This source changed while its Source Snapshot was being preserved. Retry after the source is stable.");
-        }
         return {
           mediaType: view.mediaType,
-          contentBase64: content.toString("base64"),
+          contentBase64: opened.fileContent!.toString("base64"),
           fingerprint: view.fingerprint,
           ...(view.linkRefresh ? { linkRefresh: view.linkRefresh } : {})
         };
       }
       const revision = await this.readSupportedFolderRevision(location.path);
-      const afterSnapshot = await this.readAtLocation(source, location);
+      const afterSnapshot = (await this.readAtLocation(source, location)).view;
       if (!sameFingerprint(view.fingerprint, afterSnapshot.fingerprint)) {
         throw new Error("This source changed while its Source Snapshot was being preserved. Retry after the source is stable.");
       }
@@ -146,6 +163,7 @@ export class MacOsSourceAccess implements LocalSourceAccess {
 
   private async resolveSourceLocation(source: LinkedSource): Promise<{
     path: string;
+    lastKnownPath: string;
     bookmarkData?: string;
     refreshed: boolean;
   }> {
@@ -156,18 +174,34 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       ? resolved.refreshedBookmarkData
       : source.link.accessGrant?.bookmarkData;
     if (resolved?.stale && !bookmarkData) throw new Error("The stale source bookmark could not be refreshed.");
+    const lastKnownPath = resolved?.path ?? source.link.lastKnownPath;
     return {
-      path: resolved?.path ?? source.link.lastKnownPath,
+      path: lastKnownPath,
+      lastKnownPath,
       ...(bookmarkData ? { bookmarkData } : {}),
       refreshed: Boolean(resolved)
     };
   }
 
+  private async canonicalizeSourceLocation(
+    source: LinkedSource,
+    location: { path: string; lastKnownPath: string; bookmarkData?: string; refreshed: boolean }
+  ): Promise<{ path: string; lastKnownPath: string; bookmarkData?: string; refreshed: boolean }> {
+    const canonicalPath = await this.dependencies.realpath(location.path);
+    if (!location.refreshed && canonicalPath !== source.link.canonicalPath) {
+      throw new Error("This Linked Source no longer resolves to the learner-authorized object. Locate it again explicitly.");
+    }
+    return { ...location, path: canonicalPath };
+  }
+
   private async readAtLocation(
     source: LinkedSource,
-    location: { path: string; bookmarkData?: string; refreshed: boolean }
-  ): Promise<AvailableLinkedSourceView> {
-    const stat = await this.dependencies.stat(location.path);
+    location: { path: string; lastKnownPath: string; bookmarkData?: string; refreshed: boolean }
+  ): Promise<{ view: AvailableLinkedSourceView; fileContent?: Buffer }> {
+    const openedFile = source.resourceType === "file"
+      ? await this.readIdentityBoundFile(location.path)
+      : null;
+    const stat = openedFile?.stat ?? await this.dependencies.stat(location.path);
     if (source.resourceType === "file" && stat.size > MAX_SOURCE_VIEW_BYTES) {
       throw new Error("This source is too large for the read-only preview.");
     }
@@ -175,24 +209,62 @@ export class MacOsSourceAccess implements LocalSourceAccess {
     const folderRevision = source.resourceType === "folder"
       ? await this.readSupportedFolderRevision(location.path)
       : null;
-    const content = folderRevision?.preview
-      ?? sourceContent(await this.dependencies.readFile(location.path), mediaType);
-    return {
+    const content = folderRevision?.preview ?? sourceContent(openedFile!.content, mediaType);
+    return { view: {
       sourceId: source.id,
       resourceType: source.resourceType,
       content,
       mediaType,
-      fingerprint: fingerprint(stat, folderRevision?.fingerprintContent),
+      fingerprint: fingerprint(stat, folderRevision?.fingerprintContent ?? openedFile?.content),
       ...(location.refreshed ? {
         linkRefresh: {
-          lastKnownPath: location.path,
-          canonicalPath: await this.dependencies.realpath(location.path),
+          lastKnownPath: location.lastKnownPath,
+          canonicalPath: location.path,
           accessGrant: location.bookmarkData
             ? { kind: "securityScopedBookmark" as const, bookmarkData: location.bookmarkData }
             : null
         }
       } : {})
-    };
+    }, ...(openedFile ? { fileContent: openedFile.content } : {}) };
+  }
+
+  private async readIdentityBoundFile(path: string): Promise<{ content: Buffer; stat: FileStat }> {
+    const handle = await this.dependencies.openFile(path);
+    try {
+      const before = await handle.stat();
+      if (!before.isFile()) throw new Error("This Linked Source is no longer a regular file.");
+      if (before.size > MAX_SOURCE_VIEW_BYTES) {
+        throw new Error("This source is too large for the read-only preview.");
+      }
+      const currentCanonicalPath = await this.dependencies.realpath(path);
+      if (currentCanonicalPath !== path) {
+        throw new Error("This Linked Source changed while it was being opened. Retry after the source is stable.");
+      }
+      const current = await this.dependencies.stat(currentCanonicalPath);
+      if (!sameFileIdentity(before, current)) {
+        throw new Error("This Linked Source changed while it was being opened. Retry after the source is stable.");
+      }
+      const chunks: Buffer[] = [];
+      let position = 0;
+      while (position <= MAX_SOURCE_VIEW_BYTES) {
+        const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, MAX_SOURCE_VIEW_BYTES + 1 - position));
+        const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, position);
+        if (bytesRead === 0) break;
+        chunks.push(chunk.subarray(0, bytesRead));
+        position += bytesRead;
+      }
+      if (position > MAX_SOURCE_VIEW_BYTES) {
+        throw new Error("This source is too large for the read-only preview.");
+      }
+      const content = Buffer.concat(chunks, position);
+      const after = await handle.stat();
+      if (!sameFingerprint(fingerprint(before), fingerprint(after))) {
+        throw new Error("This source changed while it was being read. Retry after the source is stable.");
+      }
+      return { content, stat: after };
+    } finally {
+      await handle.close();
+    }
   }
 
   private async readSupportedFolderRevision(rootPath: string): Promise<{
@@ -238,9 +310,10 @@ export class MacOsSourceAccess implements LocalSourceAccess {
           continue;
         }
         if (!stat.isFile() || !include(name)) continue;
-        totalBytes += stat.size;
+        const openedFile = await this.readIdentityBoundFile(canonicalPath);
+        totalBytes += openedFile.content.byteLength;
         if (totalBytes > MAX_SOURCE_VIEW_BYTES) throw new Error(tooLargeMessage);
-        files.push({ path: relativePath, content: await this.dependencies.readFile(canonicalPath) });
+        files.push({ path: relativePath, content: openedFile.content });
       }
     };
     await visit(canonicalRoot);
@@ -252,7 +325,9 @@ export class MacOsSourceAccess implements LocalSourceAccess {
     resourceType: "file" | "folder",
     bookmarkData?: string
   ): Promise<SelectedLocalSource> {
-    const stat = await this.dependencies.stat(path);
+    const canonicalPath = await this.dependencies.realpath(path);
+    const openedFile = resourceType === "file" ? await this.readIdentityBoundFile(canonicalPath) : null;
+    const stat = openedFile?.stat ?? await this.dependencies.stat(canonicalPath);
     if (resourceType === "file" ? !stat.isFile() : !stat.isDirectory()) {
       throw new Error(resourceType === "file" ? "Choose an existing file." : "Choose an existing folder.");
     }
@@ -260,15 +335,86 @@ export class MacOsSourceAccess implements LocalSourceAccess {
       name: basename(path) || path,
       resourceType,
       lastKnownPath: path,
-      canonicalPath: await this.dependencies.realpath(path),
+      canonicalPath,
       accessGrant: bookmarkData
         ? { kind: "securityScopedBookmark", bookmarkData }
         : null,
       fingerprint: fingerprint(stat, resourceType === "folder"
-        ? (await this.readSupportedFolderRevision(path)).fingerprintContent
-        : undefined)
+        ? (await this.readSupportedFolderRevision(canonicalPath)).fingerprintContent
+        : openedFile?.content)
     };
   }
+}
+
+function requireBoundedSourceIndexExtraction(extraction: SourceIndexExtraction): void {
+  const regionCount = extraction.pages.reduce((total, page) => total + page.regions.length, 0);
+  if (extraction.pages.length > MAX_SOURCE_INDEX_PAGES || regionCount > MAX_SOURCE_INDEX_REGIONS) {
+    throw new Error("This source is too complex to index safely. Choose a smaller document or split it into parts.");
+  }
+}
+
+function validatedSourceIndexExtraction(value: unknown): SourceIndexExtraction {
+  if (!isRecord(value) || !["embeddedText", "pdfText", "ocr"].includes(String(value.extractionMethod))
+    || !Array.isArray(value.pages)) {
+    throw new Error("The native source extractor returned an invalid response.");
+  }
+  const pages = value.pages.map((page) => {
+    if (!isRecord(page) || !Number.isInteger(page.pageNumber) || (page.pageNumber as number) < 1
+      || !positiveFinite(page.width) || !positiveFinite(page.height)
+      || typeof page.thumbnailDataUrl !== "string" || !page.thumbnailDataUrl.startsWith("data:image/png;base64,")
+      || !Array.isArray(page.regions)) {
+      throw new Error("The native source extractor returned an invalid response.");
+    }
+    return {
+      pageNumber: page.pageNumber as number,
+      width: page.width as number,
+      height: page.height as number,
+      thumbnailDataUrl: page.thumbnailDataUrl,
+      regions: page.regions.map((region) => {
+        if (!isRecord(region) || (region.kind !== "text" && region.kind !== "equation")
+          || typeof region.text !== "string" || !validBounds(region.bounds)
+          || !validSourceOffsets(region.sourceStartOffset, region.sourceEndOffset)) {
+          throw new Error("The native source extractor returned an invalid response.");
+        }
+        return {
+          kind: region.kind as "text" | "equation",
+          text: region.text,
+          bounds: region.bounds,
+          ...(region.sourceStartOffset === undefined ? {} : {
+            sourceStartOffset: region.sourceStartOffset as number,
+            sourceEndOffset: region.sourceEndOffset as number
+          })
+        };
+      })
+    };
+  });
+  if (new Set(pages.map((page) => page.pageNumber)).size !== pages.length) {
+    throw new Error("The native source extractor returned an invalid response.");
+  }
+  return { extractionMethod: value.extractionMethod as SourceIndexExtraction["extractionMethod"], pages };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function positiveFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function validBounds(value: unknown): value is { x: number; y: number; width: number; height: number } {
+  if (!isRecord(value)) return false;
+  const coordinates = [value.x, value.y, value.width, value.height];
+  return coordinates.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
+    && (value.x as number) >= 0 && (value.y as number) >= 0
+    && (value.width as number) > 0 && (value.height as number) > 0
+    && (value.x as number) + (value.width as number) <= 1
+    && (value.y as number) + (value.height as number) <= 1;
+}
+
+function validSourceOffsets(start: unknown, end: unknown): boolean {
+  return (start === undefined && end === undefined)
+    || (Number.isInteger(start) && Number.isInteger(end) && (start as number) >= 0 && (end as number) > (start as number));
 }
 
 const EMPTY_THUMBNAIL_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==";
@@ -278,17 +424,25 @@ function textSourceIndexExtraction(
   thumbnailDataUrl: string
 ): SourceIndexExtraction {
   let pageStartOffset = 0;
+  let regionCount = 0;
+  const pageTexts = content.split("\f");
+  if (pageTexts.length > MAX_SOURCE_INDEX_PAGES) {
+    throw new Error("This source is too complex to index safely. Choose a smaller document or split it into parts.");
+  }
   return {
     extractionMethod: "embeddedText",
-    pages: content.split("\f").map((pageText, pageIndex) => {
-      const lines = [...pageText.matchAll(/[^\r\n]+/g)];
-      const lineHeight = 1 / Math.max(lines.length, 1);
-      const regions = lines.flatMap((lineMatch, lineIndex) => {
+    pages: pageTexts.map((pageText, pageIndex) => {
+      let lineCount = 0;
+      for (const _line of pageText.matchAll(/[^\r\n]+/g)) lineCount += 1;
+      const lineHeight = 1 / Math.max(lineCount, 1);
+      const regions: SourceIndexExtraction["pages"][number]["regions"] = [];
+      let lineIndex = 0;
+      for (const lineMatch of pageText.matchAll(/[^\r\n]+/g)) {
         const line = lineMatch[0];
         const trimmed = line.trim();
         const leadingWhitespace = line.indexOf(trimmed);
         const startOffset = pageStartOffset + lineMatch.index + Math.max(leadingWhitespace, 0);
-        if (!trimmed) return [];
+        if (!trimmed) continue;
         const bounds = {
           x: 0.05,
           y: lineIndex * lineHeight,
@@ -297,10 +451,19 @@ function textSourceIndexExtraction(
         };
         const offsets = { sourceStartOffset: startOffset, sourceEndOffset: startOffset + trimmed.length };
         const textRegion = { kind: "text" as const, text: trimmed, bounds, ...offsets };
-        const equations = [...trimmed.matchAll(/\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$\n]+?\$|\\\([\s\S]+?\\\)/g)].map((match) => {
+        regionCount += 1;
+        if (regionCount > MAX_SOURCE_INDEX_REGIONS) {
+          throw new Error("This source is too complex to index safely. Choose a smaller document or split it into parts.");
+        }
+        regions.push(textRegion);
+        for (const match of trimmed.matchAll(/\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\$[^$\n]+?\$|\\\([\s\S]+?\\\)/g)) {
           const equationStart = match.index;
           const equationWidth = Math.max(0.03, Math.min(0.9, match[0].length / Math.max(trimmed.length, 1) * 0.9));
-          return {
+          regionCount += 1;
+          if (regionCount > MAX_SOURCE_INDEX_REGIONS) {
+            throw new Error("This source is too complex to index safely. Choose a smaller document or split it into parts.");
+          }
+          regions.push({
             kind: "equation" as const,
             text: match[0],
             bounds: {
@@ -313,10 +476,10 @@ function textSourceIndexExtraction(
               sourceStartOffset: startOffset + equationStart,
               sourceEndOffset: startOffset + equationStart + match[0].length
             })
-          };
-        });
-        return [textRegion, ...equations];
-      });
+          });
+        }
+        lineIndex += 1;
+      }
       pageStartOffset += pageText.length + 1;
       return {
         pageNumber: pageIndex + 1,
@@ -329,7 +492,7 @@ function textSourceIndexExtraction(
   };
 }
 
-function fingerprint(stat: FileStat, content?: string): SourceFingerprint {
+function fingerprint(stat: FileStat, content?: string | Buffer): SourceFingerprint {
   return {
     size: stat.size,
     modifiedAtMs: stat.mtimeMs,
@@ -340,6 +503,14 @@ function fingerprint(stat: FileStat, content?: string): SourceFingerprint {
 function sameFingerprint(left: SourceFingerprint, right: SourceFingerprint): boolean {
   return left.size === right.size && left.modifiedAtMs === right.modifiedAtMs
     && left.contentHash === right.contentHash;
+}
+
+function sameFileIdentity(left: FileStat, right: FileStat): boolean {
+  if (left.dev !== undefined && left.ino !== undefined && right.dev !== undefined && right.ino !== undefined) {
+    return left.dev === right.dev && left.ino === right.ino;
+  }
+  return left.size === right.size && left.mtimeMs === right.mtimeMs
+    && left.isFile() === right.isFile() && left.isDirectory() === right.isDirectory();
 }
 
 function sourceMediaType(name: string): AvailableLinkedSourceView["mediaType"] {
