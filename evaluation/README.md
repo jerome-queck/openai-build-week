@@ -10,18 +10,16 @@ A passing automated report answers only the first question. The automated eviden
 
 ## Run a release gate
 
-Use the supported Node 24 release lane. Copy `evaluation/fixtures/passing-evidence-v2.json` outside the fixture directory, replace every sentinel version and measurement, and replace every trial with evidence collected from the candidate. Do not present fixture values as measurements.
+Use the supported Node 24 release lane and complete the [development guide's verification commands](../docs/development.md#verification-commands) from a clean checkout first. Copy `evaluation/fixtures/passing-evidence-v2.json` outside the fixture directory, replace every sentinel version and measurement, and replace every trial with evidence collected from the candidate. Do not present fixture values as measurements.
 
 ```sh
-npm ci
-npm run verify
 npm run quality:gate -- \
   --benchmark evaluation/benchmarks/v2/benchmark.json \
   --evidence /absolute/path/to/release-evidence.json \
   --out /absolute/path/to/quality-report
 ```
 
-The command validates both files, writes JSON and Markdown reports, and exits `1` for a failed decision (`2` for invalid input). `--evidence` is mandatory and never defaults to the passing fixture. `npm run verify` runs `quality:gate:fixture` only as a deterministic harness regression.
+The command validates both files, writes JSON and Markdown reports, and exits `1` for a failed decision (`2` for invalid input). `--evidence` is mandatory and never defaults to the passing fixture. The development verification lane runs `quality:gate:fixture` only as a deterministic harness regression.
 
 For the macOS beta candidate, first build and smoke-test a clean committed candidate, run the opt-in installed live-Codex smoke, and collect the fixed stochastic and real-agent sample. After two blinded evaluators record and reconcile their independent verdicts, assemble and run the candidate gate:
 
@@ -69,3 +67,7 @@ The v2 numbers are explicit provisional engineering budgets for the supported be
 ## Run the learning protocol
 
 Use `studies/v1/moderated-learning-study.md` and its instrument. Moderated observations can diagnose product behavior, but a causal learning claim still requires the randomized, time-matched, blinded design described in `docs/research/math-learning-evaluation-framework.md`. Store consented study data outside the repository and never commit learner records.
+
+## Maintenance
+
+The maintainer reviews this guide when benchmark schemas, recovery procedures, evidence requirements, operational budgets, or learning-study instruments change. The development guide remains the authority for source setup and the base verification lane.

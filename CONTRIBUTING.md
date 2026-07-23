@@ -9,6 +9,19 @@
 - Keep one active implementer per Issue. Follow the claim and entry checks in the [engineering workflow](docs/agents/engineering-workflow.md) and [issue-tracker guide](docs/agents/issue-tracker.md).
 - For tracked work, reference the ticket as `Refs #<number>` in at least one branch commit and `Closes #<number>` in the pull request.
 
+## Documentation ownership
+
+Keep each kind of repository guidance in its canonical home and link to it instead of copying a second command matrix or architecture description:
+
+- [`README.md`](README.md) is the product-facing gateway for identity, capabilities, beta status, trust, accessibility, and feedback.
+- [`docs/development.md`](docs/development.md) owns supported development setup, commands, verification, packaging, smoke testing, and developer troubleshooting.
+- [`docs/architecture.md`](docs/architecture.md) owns stable runtime responsibilities, public engineering seams, persistence, and trust boundaries.
+- [`docs/beta-release.md`](docs/beta-release.md) owns user-facing beta installation limitations, privacy, recovery, and feedback guidance.
+- [`evaluation/README.md`](evaluation/README.md) owns candidate evidence and learning-evaluation procedures.
+- `package.json` and [macOS CI](.github/workflows/macos-ci.yml) are the executable sources for scripts and hosted verification order.
+
+Update the owning document in the same pull request when a change affects its contract. The pull-request template records the documentation-impact decision; a change that affects more than one owner should link the related sections rather than restating them.
+
 ## Branches
 
 Keep `main` stable and demo-ready. Create each branch from an up-to-date `main`:

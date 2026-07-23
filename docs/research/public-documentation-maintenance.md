@@ -4,7 +4,7 @@
 
 Can Clarifold make its README product-first by moving detailed development, verification, and architecture material into dedicated documents without making the Matt-based engineering workflow prone to documentation drift?
 
-## Current contracts
+## Contracts before the migration
 
 - `README.md` currently owns human-facing requirements, development and verification commands, environment guidance, packaging, demo evidence, and the architecture overview.
 - `docs/agents/engineering-workflow.md` explicitly requires stack or delivery changes to update executable configuration and README guidance together.
@@ -18,6 +18,18 @@ The installed Matt skills do not independently maintain this documentation archi
 - `/to-spec` can preserve documentation decisions under its implementation and testing decisions, but only when those decisions are explicit in the planning context.
 - `/to-tickets` turns the approved spec into independently verifiable slices; it does not infer a repository-wide documentation migration that the spec omitted.
 - `/code-review` checks the diff against repository standards and the originating spec. It can catch documentation drift only when the relevant ownership and update rules are present in those sources.
+
+## Resulting authority
+
+Issue #88 establishes the authority split described below:
+
+- [`README.md`](../../README.md) is the product-facing gateway.
+- [`docs/development.md`](../../docs/development.md) owns development setup, commands, verification, packaging, smoke tests, and troubleshooting.
+- [`docs/architecture.md`](../../docs/architecture.md) owns stable component responsibilities and public engineering seams.
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) owns participation and maintainer workflow, while [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) owns judgement-based review obligations.
+- `package.json` and [macOS CI](../../.github/workflows/macos-ci.yml) remain the executable sources.
+
+The beta guide and evaluation guide link to these owners for their user-facing and evidence-specific concerns. They do not replace the development or architecture owners.
 
 ## Verdict
 

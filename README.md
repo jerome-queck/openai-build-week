@@ -1,72 +1,40 @@
 # Quick Study
 
-Quick Study is a local-first macOS mathematical learning workbench. It starts durable Learning Sessions directly from typed mathematics without requiring setup, organizes them under Study Workspaces and Study Missions, and restores the latest resumable work after quit and relaunch. Substantial teaching output can become a source-linked Learning Artifact or Reformulated Proof with recoverable revision provenance, previewed Section Regeneration that preserves protected content and invalidates only changed claims, portable Markdown export, and a macOS share handoff that exposes only the export.
+Quick Study is a local-first macOS mathematical learning workbench for Advanced Mathematics Learners. It turns typed mathematics, source material, and learner questions into a durable Learning Session that can be examined, practised, and consolidated into evidence.
 
-Bounded Agent Tasks may continue while the learner navigates elsewhere in the running app. Their current purpose and status remain visible, cancellation preserves useful partial results, failures offer an explicit retry, and quitting checkpoints unfinished work. Relaunch never restarts model usage automatically; the learner must explicitly resume the existing Agent Task and Learning Session.
+The built-in Quick Study Study Workspace is the home for loose work. Learners can later file a session into a named Study Workspace and Study Mission without replacing the session or losing its Learning Goal, Session Target, or return context.
 
-The built-in Quick Study workspace remains the immediate home for loose work. A learner can later file a Quick Study session into a named Study Workspace and Study Mission without replacing the session or losing its Learning Goal, Session Target, or return context.
+Quick Study keeps learner work local by default. Linked Sources remain at their original locations, Personal Notes stay private from ordinary teaching, and model-dependent work is explicit, bounded, cancellable, and recoverable. Teaching output can become a source-linked Learning Artifact or Reformulated Proof with revision provenance, while exact formal verification is shown only for claims actually checked by the recorded Verifier Environment.
 
-Study Workspaces can link one Primary Folder and individual External Attachments without copying or modifying them. Fileless typed mathematics is retained as a Managed Asset. Linked Sources reopen through a read-only Source Layer. Stale bookmarks are refreshed when they still resolve; an unavailable source keeps its identity and associations while offering Retry and Locate again. Fingerprint changes create visible Source Revisions and rebuild derived search data. Strong, unique Re-anchoring matches advance automatically, while uncertain and missing matches remain visible as Unresolved Anchors with their affected Teaching Cards, annotations, and Trail Items until the learner accepts, replaces, or leaves them unresolved. Unresolved Anchors are excluded from current model context. Exact Source Snapshots are Managed Assets created only when the learner explicitly requests one; unsnapshotted historical content is reported as unavailable rather than reconstructed from fingerprints or indexes.
+## Current status
 
-Supported Linked Sources can build a separate local Source Index containing searchable extracted or recognized text, page and equation geometry, and small thumbnails. Search results identify the source and exact location before reopening the original. Clearing or rebuilding this derived cache never changes the Linked Source, Source Anchors, or Learning Session records, and unavailable originals cannot be reconstructed through search.
+This is an early macOS beta and a technical-evaluation build, not a public production download. It has no hosted preview or deployment. The architecture-native package is the evaluation artifact; the current build is ad-hoc signed and is not Developer ID signed or notarized for ordinary internet distribution.
+
+The project does not promise mastery, mathematical correctness, or academic outcomes. AI teaching and analysis may be incomplete or wrong. Formal verification applies only to the exact statement and assumptions checked by the Verifier Runtime. Learners control what they save, send, export, and delete.
 
 ## Requirements
 
-- macOS
-- Apple Silicon (validated beta baseline)
-- macOS 14 Sonoma or later
-- 16 GB memory and 12 GB free disk space
-- Node.js 22 or 24 and npm 11
+The validated beta baseline is an Apple Silicon Mac running macOS 14 Sonoma or later with at least 16 GB memory and 12 GB free disk space. Developers need Node.js 22 or 24 and npm 11; Node.js 26 is not supported by the Electron packaging toolchain.
 
-Node.js 26 is not currently supported by the Electron packaging toolchain.
+## For developers
 
-## Development
+The repository keeps each kind of guidance in one canonical place:
 
-Before contributing, read [`CONTRIBUTING.md`](CONTRIBUTING.md) for the GitHub workflow and [`CODING_STANDARDS.md`](CODING_STANDARDS.md) for the repository-wide engineering contract.
+- [Development guide](docs/development.md): supported setup, commands, verification, packaging, smoke testing, and troubleshooting.
+- [Architecture guide](docs/architecture.md): stable runtime responsibilities, public seams, persistence, and trust boundaries.
+- [macOS beta guide](docs/beta-release.md): user-facing evaluation limitations, privacy, recovery, and feedback.
+- [Quality and learning evaluation](evaluation/README.md): candidate evidence, benchmark procedures, and the limits of learning claims.
+- [Contributing](CONTRIBUTING.md): participation boundary, maintainer workflow, branches, review, and attribution.
+- [Coding standards](CODING_STANDARDS.md): the judgement-based engineering and review contract.
 
-Install the pinned dependencies and launch the renderer and Electron main process:
+Start with the [development guide](docs/development.md) for a build-from-source checkout. Read [CONTEXT.md](CONTEXT.md) for the domain vocabulary and the relevant [architecture decisions](docs/adr/) before changing a boundary.
 
-```sh
-npm ci
-npm run dev
-```
+## Privacy, trust, and feedback
 
-The development command builds the native Source Index and security-scoped bookmark helpers before starting Electron. Restart it after changing either helper under `native/` so it is rebuilt.
+Application state uses Electron's local `userData` directory. The supported `QUICK_STUDY_DATA_DIR` override is for isolated development or diagnosis and must not point at imported learner sources. Do not commit learner data, credentials, or local `.env` files. Optional model access and external research are separate from local source and session work; see the [beta guide](docs/beta-release.md) for the current boundaries and recovery paths.
 
-The first development or production build downloads the official Lean 4.29.1 archive for the current Mac architecture, verifies its pinned SHA-256 digest, checks out mathlib 4.29.1 at its pinned commit, and uses mathlib's cache tool to prepare the transitive precompiled support closure for the immutable `lean-4.29.1-mathlib-4.29.1-quick-study-v1` environment. Its undergraduate-foundations profile spans naturals, reals, algebraic groups, topology, and differential calculus; this release exposes one app-supported exact formalization. The staged environment must accept the app's real reference proof before atomic activation. Downloads are reused from `node_modules/.cache/quick-study-lean`; learners do not need a separate Lean or `elan` installation. On first application launch, Quick Study atomically installs the validated default into its local Verifier Environment Registry. Before reporting formal verification as ready, it content-verifies the installed tree against the signed application payload under a hard, observable preparation bound; later execution checks validate a process-local tamper-sensitive metadata seal and fail closed on any drift before Lean launches. The registry shows installed versions, logical storage, the active default, pins, retained Verifier Manifest references, and the distinct integrity-preparation state; it switches versions only after validation and allows a rollback to a retained version. Cleanup removes only inactive, unpinned versions without retained Manifest references. Learners can remove the active logical-size registry copy and reinstall it later from the signed application payload; the interface notes that macOS determines the actual disk space freed because the installer payload remains. Interrupted staging is kept inactive and exposed through cleanup or retry actions.
+Use [GitHub Issues](https://github.com/jerome-queck/openai-build-week/issues/new) for public product feedback. Do not attach learner records, source documents, credentials, Personal Notes, or other private data. Include the beta version, macOS version, Mac model, action attempted, visible error, and whether recovery succeeded.
 
-Local application data uses Electron's standard `userData` directory. Set `QUICK_STUDY_DATA_DIR` to isolate it when developing or diagnosing persistence.
+## Maintenance
 
-## Verification
-
-```sh
-npm run lint        # renderer and shared-code static analysis
-npm run typecheck   # renderer, Learning Application, preload, and main process
-npm test            # deterministic Learning Application behavior
-npm run build       # production renderer and Electron main-process bundles
-npm run package     # ad-hoc-signed macOS .app under out/
-npm run make:beta   # architecture-native beta zip from the packaged .app
-npm run test:smoke  # install the zip, then exercise start, persist, quit, relaunch, and resume
-npm run security:dependencies # production dependency audit; dev-only exceptions are recorded and expiring
-npm run security:secrets      # full-history secret scan with a hash-pinned Gitleaks release
-npm run security:swift        # warnings-as-errors Swift boundary analysis
-npm run quality:gate -- --evidence /absolute/path/to/release-evidence.json --out /absolute/path/to/report
-npm run verify      # all of the above in release order
-```
-
-The versioned mathematical and failure-recovery release gate, operational budgets, evidence-collection procedure, and moderated learning-study instruments live under [`evaluation/`](evaluation/README.md). `npm run verify` exercises the gate with a clearly labelled deterministic fixture; a real release decision must supply separately collected evidence and can never default to that fixture. The CI workflow also runs full-history Gitleaks scanning; dependency exception scope and review dates are recorded in [`docs/security/build-release-security-remediation-2026-07-23.md`](docs/security/build-release-security-remediation-2026-07-23.md).
-
-The smoke test expects `npm run package` and `npm run make:beta` to have completed first. Packaging targets the current Mac architecture; the maker produces `out/make/zip/darwin/<arch>/Quick Study-darwin-<arch>-0.1.0.zip`. The smoke lane extracts that archive into an isolated installation directory, verifies its code signature and bundled verifier, and launches the installed copy. See the [macOS beta guide](docs/beta-release.md) for support, install, privacy, recovery, known-limitation, and feedback guidance. The build is ad-hoc signed for local and CI evaluation; Developer ID signing and notarization remain required before public internet distribution.
-
-## Environment and demo evidence
-
-This walking skeleton needs no API keys or application secrets. `QUICK_STUDY_DATA_DIR` is the only supported user-facing runtime override; it selects an isolated local data directory and must not point at imported learner sources. Do not commit learner data or local `.env` files. `QUICK_STUDY_LEAN_PATH` exists only for deterministic adapter tests and diagnosis; normal installations always use the packaged, pinned verifier. The packaged smoke test supplies isolated `QUICK_STUDY_TEST_*` fixture paths and a stubbed external-research handoff; those variables are test harness inputs, not product configuration.
-
-There is no hosted preview or deployment for this local-first desktop beta. The architecture-native zip is the evaluation artifact. A successful `npm run test:smoke` is the expected demo evidence. Its release-critical packaged scenarios are independently named and isolated: source/index and access transitions, verifier removal/reinstall and artifact export, delayed-transfer due/reload persistence, and the separate cold-start/resource budget measurement. The lane also validates Background Agent Task checkpoint, cancellation, failure, quit, and explicit post-relaunch resumption; Local Working Mode without automatic submission; and authentication-navigation policy. Every IPC-triggering learner action is bounded at its local Playwright boundary with an operation receipt, visible/backend failure snapshot, packaged lifecycle log, and retained trace. Source-index and verifier budgets remain separate; a scenario timeout is not a product-operation timeout. Full Access confirmation cancellation/reconfirmation remains the separate #115 product-race seam. GitHub's macOS CI runs the full `npm run verify` lane for pull requests.
-
-## Architecture
-
-- `src/shared/learning-application.ts` is the public Learning Application boundary and owns Study Workspace, Study Mission, Learning Session, Managed Asset and Linked Source relationships, Source Index lifecycle and search, filing, navigation, Local Working Mode, Pending Questions, privacy-minimized external-research receipts, evidence-weighted Corroboration Passes and Source Discrepancies, cancellation, session-scoped permissions, the recoverable Verifier Environment lifecycle, exact-claim Verifier Manifests, section-scoped Learning Artifact regeneration and claim-level invalidation, Learning Artifact revisions and portable-copy construction, session metadata search, and durable state transitions. `src/shared/external-research.ts` and `src/shared/verifier-runtime.ts` are provider-neutral external-research and formal-verifier contracts; both remain separate from the Model Runtime boundary. Canonical application state and the clearable `source-index.json` cache are persisted separately and atomically.
-- `src/main/` owns filesystem persistence and narrow macOS adapters for source access, Artifact Share, disclosed browser research, the atomic Verifier Environment Registry, and the bounded local Lean process. It requests and refreshes security-scoped bookmarks when the Mac App Store runtime supports them, records no synthetic permission grant in the current non-App-Sandbox preview package, balances scoped access around read-only, indexing, and explicit snapshot operations, uses bounded native helpers for bookmark resolution and PDFKit/Vision extraction, hands only a temporary Artifact Export to the native share menu, opens only the inspectable DuckDuckGo HTTPS research destination constructed by the Learning Application, installs a new pinned verifier through isolated staging, content-verifies it before readiness, records phase-labelled lifecycle timing, activates an immutable registry version only after success, checks its prepared metadata seal at every execution boundary, executes it against atomically retained proof evidence, and exposes typed operations through a sandboxed preload bridge. The last-known path lets that unrestricted preview reopen a source but is never presented as sandbox authority.
-- `src/renderer/` is the React Mathematical Workbench.
-- `tests/packaged-quick-study.spec.ts` launches the packaged application through isolated release-critical scenarios and verifies Source Index build/search/clear/rebuild, moved and changed Linked Source recovery, access transitions, source non-mutation across relaunch, Local Working Mode, explicit Pending Question submission, Lean removal/unavailable/reinstall behavior with preserved evidence, source-linked Reformulated Proof export, delayed transfer persistence, Agent Task recovery, and action-level lifecycle diagnostics through the visible UI.
+This README is the product-facing gateway. The maintainer updates it when product identity, supported-user expectations, trust boundaries, screenshots, licensing, or feedback routes change; development and architecture detail belongs in the linked canonical guides.

@@ -35,6 +35,19 @@ After the user approves a one-session change, create a concise GitHub Issue that
 
 For multi-session work, `/to-spec` creates the parent planning issue and `/to-tickets` creates implementation children. The parent is the planning index and shared acceptance contract. Each child is an independently claimable implementation unit.
 
+## Route documentation changes
+
+Tracked implementation work updates the owning human document in the same change when it affects public behavior, supported setup, a command, verification, packaging, release evidence, architecture responsibilities, trust boundaries, licensing, or contribution policy. Use the repository's canonical routes:
+
+- [`README.md`](../../README.md) for the product-facing gateway and user expectations.
+- [`docs/development.md`](../../docs/development.md) for development setup, commands, verification, packaging, smoke tests, and troubleshooting.
+- [`docs/architecture.md`](../../docs/architecture.md) for stable component responsibilities, public seams, persistence, and trust boundaries.
+- [`docs/beta-release.md`](../../docs/beta-release.md) for user-facing beta installation, privacy, recovery, and feedback guidance.
+- [`evaluation/README.md`](../../evaluation/README.md) for candidate evidence and learning-evaluation procedures.
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for public participation and maintainer workflow; [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) remains the review contract.
+
+Use links between these owners rather than introducing a competing command matrix or architecture overview. `package.json` and [macOS CI](../../.github/workflows/macos-ci.yml) are the executable sources and must be checked when their documented behavior changes. Do not edit the vendored Matt skills to encode these repository routes.
+
 ## Gate `/implement`
 
 Before changing product code:
@@ -95,6 +108,6 @@ Review every changed skill, lockfile entry, and Claude compatibility symlink bef
 
 ## Keep stack-specific guidance current
 
-The application scaffold and macOS CI now exist. [`README.md`](../../README.md) owns the human-facing requirements, development and verification commands, environment guidance, packaging, and expected demo evidence. `package.json` and [`.github/workflows/macos-ci.yml`](../../.github/workflows/macos-ci.yml) are the executable sources for local commands and CI order, while [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) owns the judgement-based engineering contract.
+The application scaffold and macOS CI now exist. [`README.md`](../../README.md) is the product-facing gateway; [`docs/development.md`](../../docs/development.md) owns development and verification commands, environment guidance, packaging, smoke tests, and developer troubleshooting; [`docs/architecture.md`](../../docs/architecture.md) owns the stable architecture overview; and [`docs/beta-release.md`](../../docs/beta-release.md) owns user-facing beta guidance. `package.json` and [`.github/workflows/macos-ci.yml`](../../.github/workflows/macos-ci.yml) are the executable sources for local commands and CI order, while [`CODING_STANDARDS.md`](../../CODING_STANDARDS.md) owns the judgement-based engineering contract.
 
-When the stack or delivery workflow changes, update the executable configuration and README guidance in the same change. Do not duplicate command matrices in agent documentation. Add preview, deployment, signing, or release policy only when the corresponding real surface exists; until then, the packaged application and its smoke test remain the preview artifact and demo evidence described in the README.
+When the stack or delivery workflow changes, update the executable configuration and its owning canonical guide in the same change. Do not duplicate command matrices in agent documentation. Add preview, deployment, signing, or release policy only when the corresponding real surface exists; until then, the packaged application and its smoke test remain the preview artifact and demo evidence described in the README and [development guide](../../docs/development.md).

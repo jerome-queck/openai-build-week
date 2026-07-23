@@ -6,7 +6,7 @@ Contributors must also follow the workflow in [`CONTRIBUTING.md`](CONTRIBUTING.m
 
 ## Preserve the product boundaries
 
-- Route durable product state and behaviour through the typed `LearningApplication` and `LearnerAction` boundary described in the [README architecture](README.md#architecture). Renderer components may own transient view state, but they must not duplicate persistence, session lifecycle, access-policy, or model-orchestration rules.
+- Route durable product state and behaviour through the typed `LearningApplication` and `LearnerAction` boundary described in the [architecture guide](docs/architecture.md). Renderer components may own transient view state, but they must not duplicate persistence, session lifecycle, access-policy, or model-orchestration rules.
 - Keep Electron main and preload code as narrow adapters. The renderer must use the typed preload API rather than importing Node or Electron capabilities directly.
 - Treat IPC, model output, persisted data, URLs, and other process or service inputs as untrusted. Validate payloads at runtime, verify IPC senders, allow only intended protocols and destinations, and retain Electron sandboxing, context isolation, navigation protection, and disabled Node integration.
 - Keep domain state, persisted formats, and renderer behaviour platform-neutral. Isolate macOS-specific facilities behind narrow adapters in accordance with [ADR-0002](docs/adr/0002-build-macos-first-with-a-portable-electron-core.md).
@@ -47,7 +47,7 @@ These rules preserve public seams, not today's file sizes. Internal modules may 
 - Test Model Runtime transports at their adapter boundary with scripted protocol fixtures. Unit and integration tests must not depend on live model, network, account, or learner data.
 - Reserve packaged Playwright coverage for critical behaviour that crosses the renderer, preload, main process, filesystem, packaging, or relaunch boundary. Use exact accessible role and name locators for primary journeys instead of styling or DOM-structure selectors.
 - Add a regression test when fixing a behavioural defect. Persisted-schema and lifecycle changes require restoration coverage; cancellation and failure paths require deterministic terminal-state coverage.
-- Follow the vertical red-green workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md#implementation). The full current command set and release-order verification live in [`README.md`](README.md#verification) and `package.json`.
+- Follow the vertical red-green workflow in [`CONTRIBUTING.md`](CONTRIBUTING.md#implementation). The full current command set and release-order verification live in the [development guide](docs/development.md) and `package.json`.
 
 ## Evolve these standards deliberately
 
