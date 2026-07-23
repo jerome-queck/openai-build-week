@@ -1343,14 +1343,16 @@ describe("Learning Application", () => {
     const paused = await application.pauseModelRuntimeForFormalVerification(operationId);
     expect(paused).toBe(true);
     expect(application.getState().modelRuntimeLifecycle).toMatchObject({ status: "paused", operationId });
-    const checked = await application.runFormalVerification(current.originatingSessionId, request, undefined, { publish: false });
+    const checked = await application.runFormalVerification(current.originatingSessionId, request, undefined, {
+      publish: false, operationId
+    });
     expect(checked.verifierManifests).toHaveLength(1);
     expect(events.at(-1)?.verifierManifests).toHaveLength(0);
 
     const restoring = await application.beginModelRuntimeRestoration(operationId);
     expect(restoring.modelRuntimeLifecycle).toMatchObject({ status: "restoring", operationId });
-    expect(restoring.verifierManifests).toHaveLength(1);
-    expect(events.at(-1)).toMatchObject({ modelRuntimeLifecycle: { status: "paused", operationId }, verifierManifests: [] });
+    expect(restoring.verifierManifests).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({ modelRuntimeLifecycle: { status: "restoring", operationId }, verifierManifests: [] });
 
     let releaseAuthentication!: () => void;
     const authenticationGate = new Promise<void>((resolve) => { releaseAuthentication = resolve; });
@@ -1374,6 +1376,10 @@ describe("Learning Application", () => {
       modelRuntimeLifecycle: { status: "available", operationId },
       verifierManifests: expect.arrayContaining([expect.objectContaining({ id: request.runId })])
     });
+    const relaunched = await LearningApplication.launch(dataDirectory);
+    applications.push(relaunched);
+    expect(relaunched.getState().modelRuntimeLifecycle).toMatchObject({ status: "unavailable", operationId: null });
+    expect(relaunched.getState().verifierManifests).toEqual(restored.verifierManifests);
   });
 
   it("removes and reinstalls Lean without relabeling historical verification evidence", async () => {

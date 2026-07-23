@@ -56,6 +56,10 @@ describe("anchored teaching workbench", () => {
       cause: "runtime",
       message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
     };
+    state.modelRuntimeLifecycle = {
+      status: "paused", operationId: "verification-1",
+      message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
+    };
     window.quickStudy = quickStudyApi(state);
 
     render(<App />);
@@ -465,6 +469,27 @@ describe("anchored teaching workbench", () => {
     });
   });
 
+  it("keeps model actions blocked while Codex restoration is still settling", async () => {
+    const state = workbenchState();
+    state.runtimeAvailable = true;
+    state.modelAccess = { status: "available" };
+    state.modelRuntimeLifecycle = {
+      status: "restoring", operationId: "restoration-1",
+      message: "Codex is restoring after the Bundled Lean Runtime completed its exact-claim check."
+    };
+    const artifact = state.sessions[0].learningArtifacts[0];
+    artifact.currentRevision.claims[0].claimStatement = "For every natural number n, n + 0 = n.";
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const artifactRegion = await screen.findByRole("article", { name: "Pinned Learning Artifact Explain compact subset" });
+    expect(within(artifactRegion).getByRole("button", { name: "Synthesize Learning Artifact Explain compact subset" })
+      .hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("heading", { name: "Local Working Mode" })).toBeTruthy();
+    expect(screen.getByText("Codex is restoring after the Bundled Lean Runtime completed its exact-claim check.")).toBeTruthy();
+  });
+
   it("keeps formal checks unavailable while installed Lean integrity is preparing", async () => {
     const state = workbenchState();
     state.verifierEnvironment.status = "preparing";
@@ -585,6 +610,7 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     state.runtimeAvailable = true;
     state.modelAccess = { status: "available" };
+    state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
     const artifact = state.sessions[0].learningArtifacts[0];
     artifact.currentRevision.content = "## Strategy\nUse a finite subcover.\n\n## Conclusion\nThe complement is open.";
     const selectedText = "Use a finite subcover.";
@@ -655,6 +681,7 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     state.modelAccess = { status: "available" };
     state.runtimeAvailable = true;
+    state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
     state.sessions[0].learningArtifacts[0].regenerationTask = {
       id: "task-1", status: "working", retryable: false,
       statusMessage: "Preparing the regeneration preview with Codex.",
@@ -689,6 +716,7 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     state.modelAccess = { status: "available" };
     state.runtimeAvailable = true;
+    state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
     state.sessions[0].proposal.status = "awaitingConfirmation";
     state.sessions[0].learningSlice = {
       roadmapId: "roadmap-1", stageId: "stage-1", boundary: "Prove only the compactness claim",
@@ -854,6 +882,7 @@ describe("anchored teaching workbench", () => {
       status: "signedIn", method: "chatgpt", accountLabel: "Learner", loginUrl: null, error: null
     };
     state.modelAccess = { status: "available" };
+    state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
     window.quickStudy = quickStudyApi(state);
 
     render(<App />);
@@ -903,6 +932,7 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     state.runtimeAvailable = true;
     state.modelAccess = { status: "available" };
+    state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
     window.quickStudy = quickStudyApi(state);
     render(<App />);
 

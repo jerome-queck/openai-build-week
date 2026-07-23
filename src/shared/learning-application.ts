@@ -1499,6 +1499,10 @@ export class LearningApplication {
   private readonly accessDecisionWaiters = new Map<string, (decision: RuntimeAccessDecision) => void>();
   private activeModelRuntimeOperations = 0;
   private readonly modelRuntimesPendingShutdown = new Set<ModelRuntime>();
+  private deferredFormalVerification: {
+    operationId: string | null;
+    state: LearningApplicationState;
+  } | null = null;
   private readonly researchWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
   private readonly queuedLearnerActions: Array<{
@@ -2055,8 +2059,12 @@ export class LearningApplication {
     sessionId: string,
     request: FormalVerificationRequest,
     signal?: AbortSignal,
-    options: { publish?: boolean } = {}
+    options: { publish?: boolean; operationId?: string | null } = {}
   ): Promise<LearningApplicationState> {
+    const publishedState = options.publish === false ? this.getState() : null;
+    if (options.publish === false && this.deferredFormalVerification) {
+      throw new Error("A formal verification result is already awaiting Model Runtime restoration.");
+    }
     const session = this.requireSession(sessionId);
     const revision = claimCheckRevision(session, request.target, request.targetId);
     const claim = requireClaimVerification(revision, request.claimId);
@@ -2130,7 +2138,11 @@ export class LearningApplication {
       });
       claim.verificationEscalation = escalationForEvidence(claim.verificationEvidence, claim.verificationGaps);
     }
-    return options.publish === false ? this.getState() : this.publishAndPersist();
+    if (options.publish !== false) return this.publishAndPersist();
+    const completedState = this.getState();
+    this.deferredFormalVerification = { operationId: options.operationId ?? null, state: completedState };
+    this.state = publishedState!;
+    return completedState;
   }
 
   async assessVerificationEscalation(
@@ -2611,8 +2623,8 @@ export class LearningApplication {
       }
     }
     this.modelRuntimesPendingShutdown.delete(modelRuntime);
-    this.modelRuntime = modelRuntime;
     if (operationId) {
+      this.assertModelRuntimeOperation(operationId, "restoring");
       this.state.runtimeAvailable = false;
       this.state.modelRuntimePausedForFormalVerification = true;
       this.state.modelAccess = {
@@ -2624,6 +2636,7 @@ export class LearningApplication {
         "restoring", operationId, this.state.modelAccess.message
       );
     }
+    this.modelRuntime = modelRuntime;
     let authentication: AuthenticationState | undefined;
     let capabilities: ModelRuntimeCapabilities | undefined;
     let restorationError: unknown;
@@ -2648,7 +2661,7 @@ export class LearningApplication {
       this.state.modelRuntimeLifecycle = modelRuntimeLifecycleState(
         "failed", operationId, usefulRuntimeError(restorationError)
       );
-      await this.publishAndPersist();
+      await this.reportModelRuntimeFailure(restorationError, operationId);
       throw restorationError;
     }
     this.state.runtimeAvailable = true;
@@ -2657,11 +2670,21 @@ export class LearningApplication {
     this.updateAuthentication(authentication!);
     this.state.runtimeCapabilities = capabilities!;
     clearUnsupportedRuntimeOverrides(this.state.sessions, this.state.runtimeCapabilities);
+    this.commitDeferredFormalVerification(operationId);
+    this.state.runtimeAvailable = true;
+    this.state.modelRuntimePausedForFormalVerification = false;
+    this.state.modelRuntimeLifecycle = modelRuntimeLifecycleState(
+      this.state.modelAccess.status === "available" ? "available" : "failed",
+      operationId,
+      this.state.modelAccess.status === "available" ? null : this.state.modelAccess.message
+    );
     return this.publishAndPersist();
   }
 
   async reportModelRuntimeFailure(error: unknown, operationId: string | null = this.state.modelRuntimeLifecycle.operationId): Promise<LearningApplicationState> {
     this.assertPersistenceWritable();
+    if (operationId) this.assertModelRuntimeOperation(operationId, this.state.modelRuntimeLifecycle.status);
+    this.commitDeferredFormalVerification(operationId);
     this.state.runtimeAvailable = false;
     this.state.modelRuntimePausedForFormalVerification = false;
     this.state.modelAccess = unavailableModelAccess(
@@ -2716,6 +2739,7 @@ export class LearningApplication {
 
   async beginModelRuntimeRestoration(operationId: string): Promise<LearningApplicationState> {
     this.assertPersistenceWritable();
+    this.assertModelRuntimeOperation(operationId, "restoring");
     this.state.runtimeAvailable = false;
     this.state.modelRuntimePausedForFormalVerification = true;
     this.state.modelAccess = {
@@ -2726,7 +2750,35 @@ export class LearningApplication {
     this.state.modelRuntimeLifecycle = modelRuntimeLifecycleState(
       "restoring", operationId, this.state.modelAccess.message
     );
-    return this.getState();
+    return this.publishAndPersist();
+  }
+
+  private assertModelRuntimeOperation(operationId: string, expectedStatus: ModelRuntimeLifecycleStatus): void {
+    const lifecycle = this.state.modelRuntimeLifecycle;
+    if (lifecycle.operationId !== operationId
+      || (expectedStatus !== "restoring" && lifecycle.status !== expectedStatus)
+      || (expectedStatus === "restoring" && lifecycle.status !== "paused" && lifecycle.status !== "restoring")) {
+      throw new Error("The Codex restoration operation is stale or no longer active.");
+    }
+  }
+
+  private commitDeferredFormalVerification(operationId: string | null): void {
+    const deferred = this.deferredFormalVerification;
+    if (!deferred) return;
+    if (deferred.operationId !== operationId) {
+      throw new Error("The formal-verification result belongs to a different Codex restoration operation.");
+    }
+    const runtimeState = {
+      runtimeAvailable: this.state.runtimeAvailable,
+      modelRuntimePausedForFormalVerification: this.state.modelRuntimePausedForFormalVerification,
+      modelRuntimeLifecycle: this.state.modelRuntimeLifecycle,
+      runtimeCapabilities: this.state.runtimeCapabilities,
+      authentication: this.state.authentication,
+      modelAccess: this.state.modelAccess
+    };
+    this.state = deferred.state;
+    Object.assign(this.state, runtimeState);
+    this.deferredFormalVerification = null;
   }
 
   async linkPrimaryFolder(
@@ -6256,6 +6308,7 @@ export class LearningApplication {
         loginUrl: null,
         error: error.message
       };
+      this.state.modelRuntimeLifecycle = modelRuntimeLifecycleState("failed", this.state.modelRuntimeLifecycle.operationId, error.message);
     }
   }
 
@@ -6263,19 +6316,25 @@ export class LearningApplication {
     const modelAccess = unavailableModelAccess(error);
     this.state.modelAccess = modelAccess;
     if (modelAccess.cause === "runtime") this.state.runtimeAvailable = false;
+    this.state.modelRuntimeLifecycle = modelRuntimeLifecycleState("failed", this.state.modelRuntimeLifecycle.operationId, modelAccess.message);
   }
 
   private updateAuthentication(authentication: AuthenticationState): void {
     this.state.authentication = authenticationView(authentication);
-    this.state.modelAccess = authentication.status === "signedIn"
+    const message = authentication.status === "signedIn" ? null : authenticationMessage(authentication);
+    this.state.modelAccess = message === null
       ? { status: "available" }
-      : { status: "unavailable", cause: "authentication", message: authenticationMessage(authentication) };
+      : { status: "unavailable", cause: "authentication", message };
+    this.state.modelRuntimeLifecycle = authentication.status === "signedIn"
+      ? modelRuntimeLifecycleState("available", this.state.modelRuntimeLifecycle.operationId)
+      : modelRuntimeLifecycleState("failed", this.state.modelRuntimeLifecycle.operationId, message);
   }
 
   private requireModelAccess(): void {
-    if (!this.modelRuntime || this.state.modelAccess.status === "unavailable") {
-      throw new Error(this.state.modelAccess.status === "unavailable"
-        ? this.state.modelAccess.message
+    const modelAccess = this.state.modelAccess;
+    if (!this.modelRuntime || modelAccess.status === "unavailable") {
+      throw new Error(modelAccess.status === "unavailable"
+        ? modelAccess.message
         : "Connect a Model Runtime before starting model-backed teaching.");
     }
   }
@@ -7977,12 +8036,14 @@ function migrateModelRuntimeLifecycle(value: unknown, runtimeAvailable: boolean)
   if (value && typeof value === "object") {
     const stored = value as Record<string, unknown>;
     const statuses: ModelRuntimeLifecycleStatus[] = ["unavailable", "available", "paused", "restoring", "failed"];
+    const operationId = typeof stored.operationId === "string" && stored.operationId.trim() ? stored.operationId : null;
     if (typeof stored.status === "string" && statuses.includes(stored.status as ModelRuntimeLifecycleStatus)
-      && (stored.operationId === null || typeof stored.operationId === "string")
+      && (stored.operationId === undefined || stored.operationId === null || operationId !== null)
+      && (!(["paused", "restoring"].includes(stored.status)) || operationId !== null)
       && (stored.message === null || typeof stored.message === "string")) {
       return {
         status: stored.status as ModelRuntimeLifecycleStatus,
-        operationId: stored.operationId as string | null,
+        operationId,
         message: stored.message as string | null
       };
     }

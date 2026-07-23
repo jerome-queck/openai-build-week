@@ -462,10 +462,11 @@ function registerLearningApplicationHandlers(): void {
             })}`);
           }
           if (controller.signal.aborted) throw new Error("Formal verification was canceled before Lean started.");
-          await learningApplication.runFormalVerification(sessionId, request, controller.signal, {
-            publish: !restartModelRuntime
+          const checked = await learningApplication.runFormalVerification(sessionId, request, controller.signal, {
+            publish: !restartModelRuntime,
+            operationId: restartModelRuntime ? restorationOperationId : null
           });
-          const outcome = learningApplication.getState().verifierManifests
+          const outcome = checked.verifierManifests
             .find((manifest) => manifest.id === request.runId)?.commandOutcome ?? "unknown";
           console.info(`[Lean verification] ${JSON.stringify({
             runId: request.runId, status: "completed", outcome, elapsedMs: Date.now() - startedAt
@@ -486,6 +487,11 @@ function registerLearningApplicationHandlers(): void {
               await learningApplication.reportModelRuntimeFailure(error, restorationOperationId);
               console.error("Codex app-server could not restart after formal verification:", error);
             }
+          } else if (restartModelRuntime && applicationShutdown) {
+            await learningApplication.reportModelRuntimeFailure(
+              new Error("Codex restoration was skipped because the application is shutting down."),
+              restorationOperationId
+            );
           }
         }
       });

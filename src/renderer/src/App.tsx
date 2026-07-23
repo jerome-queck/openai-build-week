@@ -966,7 +966,7 @@ function SourceGroup({ title, empty, sources, revisions, assets, onOpen, onLocat
 }
 
 function ModelAccessPanel({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
-  if (state.modelAccess.status === "available") {
+  if (modelRuntimeAvailable(state)) {
     return (
       <section className="model-access available" role="status" aria-labelledby="model-access-title">
         <div><p className="eyebrow">Model access</p><h2 id="model-access-title">Model teaching available</h2></div>
@@ -979,7 +979,8 @@ function ModelAccessPanel({ state, onState }: { state: LearningApplicationState;
       <div>
         <p className="eyebrow">Local capabilities remain available</p>
         <h2 id="model-access-title">Local Working Mode</h2>
-        <p>{state.modelAccess.message}</p>
+        <p>{state.modelRuntimeLifecycle.message
+          ?? (state.modelAccess.status === "available" ? "Model teaching is unavailable." : state.modelAccess.message)}</p>
         <small>You can open, resume, search, and edit local sessions. Model teaching is unavailable.</small>
       </div>
       <button className="secondary" disabled={state.modelRuntimePausedForFormalVerification}
@@ -988,6 +989,10 @@ function ModelAccessPanel({ state, onState }: { state: LearningApplicationState;
       </button>
     </section>
   );
+}
+
+function modelRuntimeAvailable(state: LearningApplicationState): boolean {
+  return state.modelRuntimeLifecycle.status === "available";
 }
 
 function AuthenticationPanel({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
@@ -1175,7 +1180,7 @@ function ResumeCard({ state, session, onState }: {
       {checkpointedTask && (
         <div className="background-work" role="status" aria-label="Checkpointed Agent Task">
           <span>Useful partial output is saved. Resume only when you are ready to use the model again.</span>
-          <button className="primary" disabled={state.modelAccess.status !== "available"}
+          <button className="primary" disabled={!modelRuntimeAvailable(state)}
             onClick={() => void window.quickStudy.submit({
               type: "resumeAgentTask", taskId: checkpointedTask.id
             }).then(onState).catch((cause: unknown) => setBackgroundError(
@@ -1284,7 +1289,7 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
   const [mathematics, setMathematics] = useState("");
   const [ignoreLearnerModel, setIgnoreLearnerModel] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const modelAvailable = state.modelAccess.status === "available";
+  const modelAvailable = modelRuntimeAvailable(state);
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
   const location = workspace.kind === "named" && mission
@@ -1427,7 +1432,7 @@ function MissionHistory({ workspace, mission, state, onState }: {
                   cause instanceof Error ? cause.message : "The model work could not be stopped."
                 ))}>{backgroundModelWorkStopLabel(session)}</button>}
                 {checkpointedAgentTask(session) && <button className="secondary"
-                  disabled={state.modelAccess.status !== "available"}
+                  disabled={!modelRuntimeAvailable(state)}
                   aria-label={`Resume checkpointed Agent Task for ${session.learningGoal}`}
                   onClick={() => void window.quickStudy.submit({
                     type: "resumeAgentTask", taskId: checkpointedAgentTask(session)!.id
@@ -1524,15 +1529,15 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <label htmlFor="target">Session Target</label>
             <textarea id="target" className="field" value={target} onChange={(event) => setTarget(event.target.value)} />
             <label htmlFor="direction">Initial teaching direction</label>
-            <textarea id="direction" className="field" value={direction} disabled={state.modelAccess.status === "unavailable"} onChange={(event) => setDirection(event.target.value)} />
-            {state.modelAccess.status === "available" && session.proposal.status === "awaitingConfirmation" ? (
+            <textarea id="direction" className="field" value={direction} disabled={!modelRuntimeAvailable(state)} onChange={(event) => setDirection(event.target.value)} />
+            {modelRuntimeAvailable(state) && session.proposal.status === "awaitingConfirmation" ? (
               <>
                 <p className="confirmation-reason">{session.proposal.confirmationReason}</p>
                 <button className="primary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void acceptProposal()}>
                   Accept and start teaching
                 </button>
               </>
-            ) : state.modelAccess.status === "available" ? (
+            ) : modelRuntimeAvailable(state) ? (
               <button className="secondary proposal-action" disabled={!goal.trim() || !target.trim() || !direction.trim()} onClick={() => void saveProposal(true).then(onState)}>
                 Apply proposal changes
               </button>
@@ -1596,7 +1601,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               }} />
             {workbenchError && <p className="failure-message" role="alert">{workbenchError}</p>}
             {session.learningArtifacts.map((artifact) => <PinnedLearningArtifact artifact={artifact} onState={onState}
-              verifierManifests={state.verifierManifests} modelAvailable={state.modelAccess.status === "available"}
+              verifierManifests={state.verifierManifests} modelAvailable={modelRuntimeAvailable(state)}
               verifierEnvironmentStatus={state.verifierEnvironment.status} key={artifact.id} />)}
             {!session.consolidationDraft && <TrailDraft session={session} onAction={async (action) => {
               onState(await window.quickStudy.submit(action));
@@ -1616,12 +1621,12 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <ExternalResearchPanel state={state} session={session} onState={onState} />
             <ModelAccessPanel state={state} onState={onState} />
             <SessionRecord session={session} />
-            <TeachingCard session={session} modelAvailable={state.modelAccess.status === "available"} onState={onState} />
+            <TeachingCard session={session} modelAvailable={modelRuntimeAvailable(state)} onState={onState} />
             <AdaptiveTeaching session={session} onState={onState} />
             <LearnerModelLedger state={state} session={session} onState={onState} />
             <AskBar
               session={session}
-              modelAvailable={state.modelAccess.status === "available"}
+              modelAvailable={modelRuntimeAvailable(state)}
               onSetContext={async (contextId, included) => onState(await window.quickStudy.submit({
                 type: "setAskBarContextItem", contextId, included
               }))}
@@ -1882,7 +1887,7 @@ function ConsolidatedOutcome({ state, session, onState }: {
         {includedArtifacts.length ? includedArtifacts.map((artifact) => (
           <PinnedLearningArtifact key={artifact.id} artifact={artifact} sessionId={session.id}
             verifierManifests={state.verifierManifests}
-            modelAvailable={state.modelAccess.status === "available"}
+            modelAvailable={modelRuntimeAvailable(state)}
             verifierEnvironmentStatus={state.verifierEnvironment.status}
             statusLabel="Included in this Consolidated Session Outcome" onState={onState} />
         )) : <p>None included.</p>}
