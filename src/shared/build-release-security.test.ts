@@ -15,6 +15,15 @@ describe("build and release security contract", () => {
 
     expect(actionRefs).toHaveLength(8);
     expect(actionRefs.every((ref) => /^[^@]+@[0-9a-f]{40}$/.test(ref))).toBe(true);
+    for (const pin of [
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e"
+    ]) {
+      expect(workflow).toContain(`uses: ${pin}`);
+    }
     expect(workflow).toMatch(/permissions:\s*\{\}/);
     expect(workflow).toMatch(/verify:\n\s+permissions:\n\s+contents: read/);
   });

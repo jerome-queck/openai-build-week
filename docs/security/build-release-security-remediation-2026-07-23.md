@@ -6,10 +6,10 @@ Issue #86 turns the disclosure-safe triage in [`build-release-security-triage-20
 
 The macOS verification job now has an explicit empty workflow permission baseline and grants only `contents: read` to its job. Pull requests, including untrusted fork contributions, receive no write, release, signing, or secret authority. Every third-party action is pinned to a reviewed full commit SHA, with its maintained version retained in a comment so Dependabot can propose pin updates:
 
-- `actions/checkout` v7: `fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09`
-- `actions/setup-node` v7: `a0853c24544627f65ddf259abe73b1d18a591444`
-- `actions/cache` v6: `0057852bfaa89a56745cba8c7296529d2fc39830`
-- `actions/upload-artifact` v7: `ea165f8d65b6e75b540449e92b4886f43607fa02`
+- `actions/checkout` v7: `3d3c42e5aac5ba805825da76410c181273ba90b1`
+- `actions/setup-node` v7: `820762786026740c76f36085b0efc47a31fe5020`
+- `actions/cache` v6: `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`
+- `actions/upload-artifact` v7: `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
 - `gitleaks/gitleaks-action` v3: `e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e`
 
 Dependabot's GitHub Actions update group remains enabled. A pin change is reviewable as a normal pull request and cannot self-approve or publish a release.
