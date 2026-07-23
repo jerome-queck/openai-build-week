@@ -9,7 +9,7 @@ const artifactDigest = process.env.ARTIFACT_DIGEST;
 const artifactName = process.env.ARTIFACT_NAME;
 const candidateCommit = process.env.CANDIDATE_COMMIT;
 if (!/^[a-f0-9]{64}$/.test(artifactDigest ?? "")
-  || !/^[a-z0-9-]+$/.test(artifactName ?? "")
+  || !/^[A-Za-z0-9-]+$/.test(artifactName ?? "")
   || !/^[a-f0-9]{40}$/.test(candidateCommit ?? "")) {
   throw new Error("The uploaded beta binding requires a valid artifact name, SHA-256, and candidate commit.");
 }
