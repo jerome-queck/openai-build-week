@@ -81,6 +81,8 @@ Use Node 24 for the release lane and confirm the active version before diagnosin
 
 The first build may download and prepare the pinned Lean/mathlib environment. Check the reported digest, architecture, and staged preparation error. A failed preparation must not be treated as a ready Verifier Environment; retry the build or use the application's visible recovery action.
 
+After formal verification, wait for the learner-visible Codex runtime lifecycle to reach `available` or `failed`; the verifier result and runtime restoration are deliberately separate correlated states. Packaged tests should wait on that named terminal state rather than a fixed delay or an incidental manifest count.
+
 ### Isolated data and smoke runs
 
 Set `QUICK_STUDY_DATA_DIR` to a fresh temporary directory when reproducing persistence or packaged behavior. The smoke installer creates its own isolated paths. Linked Sources remain externally owned; never use a source fixture as the application-data directory.

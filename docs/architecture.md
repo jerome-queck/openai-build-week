@@ -18,6 +18,8 @@ flowchart LR
 
 The renderer can request learner-visible state and actions through the typed preload API. The main process owns Electron capabilities and constructs the application with narrow adapters. The `LearningApplication` remains the public domain boundary for durable learner behavior; it does not expose Electron, Codex protocol, or native-helper details to the renderer.
 
+Formal verification and Codex restoration are one coordinated lifecycle from the learner's perspective. Verification may pause the Model Runtime, but completion is not published to the renderer until restoration reaches the correlated `available` or explicit `failed` terminal state. Renderer model controls must use `modelRuntimeLifecycle`, rather than inferring readiness from a verifier manifest or an individual capability field.
+
 ## Responsibility map
 
 | Area | Canonical responsibility | Safe-change seam |
@@ -47,6 +49,7 @@ Agent Work Logs retain internal specialist messages and tool execution records. 
 - Renderer input, IPC payloads, model output, persisted data, URLs, and native-helper output are untrusted. Validate them at the boundary and fail closed on malformed or unadvertised values.
 - The preload bridge uses context isolation and does not provide Node integration to the renderer. Main-process IPC checks the sender before handling privileged requests.
 - Model access, external research, filesystem source access, native helpers, and formal verification are separate capabilities. Loss of model access does not disable local work.
+- The Model Runtime lifecycle is explicit and operation-correlated: `paused` during verification, `restoring` while Codex capabilities are re-established, and `available` or `failed` only after the restoration handshake settles. A Verifier Manifest never acts as an implicit readiness signal.
 - Model and browser work is bounded and cancellable. Cancellation, transport loss, shutdown, and relaunch must produce an honest terminal or resumable state; relaunch never silently restarts model spending.
 - The Verifier Runtime may establish an exact formal receipt for the checked statement and assumptions. Model output, source agreement, and a failed checker are not formal verification or universal mathematical truth.
 - macOS-specific facilities stay behind narrow adapters so shared state, persisted formats, and renderer behavior remain portable.

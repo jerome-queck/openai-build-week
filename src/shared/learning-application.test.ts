@@ -8,6 +8,7 @@ import {
   type AcceptedFormalVerification,
   type ClaimCheckRecord,
   type FormalVerificationAuthority,
+  type LearningApplicationState,
   type LinkedSource,
   type LocalSourceAccess,
   type SelectedLocalSource,
@@ -1301,6 +1302,78 @@ describe("Learning Application", () => {
     const relaunched = await LearningApplication.launch(dataDirectory);
     applications.push(relaunched);
     expect(relaunched.getState().verifierManifests).toEqual(checked.verifierManifests);
+  });
+
+  it("keeps formal-verification completion behind the Codex restoration boundary", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Check one arithmetic identity", scope: "One exact claim",
+      initialTeachingDirection: "Formalize the statement", requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const verifier: VerifierRuntime = {
+      run: vi.fn(async (request) => ({
+        outcome: "accepted" as const,
+        diagnostics: "Lean completed without diagnostics.",
+        evidenceLocation: join(request.evidenceDirectory, `${request.runId}.lean`),
+        command: "lean exact-claim.lean",
+        environment: BUNDLED_LEAN_ENVIRONMENT
+      }))
+    };
+    const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-test-"));
+    dataDirectories.push(dataDirectory);
+    const application = await LearningApplication.launch(dataDirectory, runtime, null, null, null, null, verifier);
+    applications.push(application);
+    const { artifactId } = await createPinnedArtifact(application, runtime);
+    const artifact = application.getState().sessions[0].learningArtifacts[0];
+    await application.submit({
+      type: "editLearningArtifact", artifactId, content: artifact.currentRevision.content,
+      claimEdits: [{
+        claimId: artifact.currentRevision.claims[0].claimId,
+        statement: "For every natural number n, n + 0 = n."
+      }]
+    });
+    const current = application.getState().sessions[0].learningArtifacts[0];
+    const request = {
+      runId: "restoration-boundary-run",
+      target: "learningArtifact" as const, targetId: artifactId, claimId: current.currentRevision.claims[0].claimId
+    };
+    const events: LearningApplicationState[] = [];
+    const unsubscribe = application.subscribe((state) => events.push(state));
+    const operationId = "formal-verification-restoration-1";
+
+    const paused = await application.pauseModelRuntimeForFormalVerification(operationId);
+    expect(paused).toBe(true);
+    expect(application.getState().modelRuntimeLifecycle).toMatchObject({ status: "paused", operationId });
+    const checked = await application.runFormalVerification(current.originatingSessionId, request, undefined, { publish: false });
+    expect(checked.verifierManifests).toHaveLength(1);
+    expect(events.at(-1)?.verifierManifests).toHaveLength(0);
+
+    const restoring = await application.beginModelRuntimeRestoration(operationId);
+    expect(restoring.modelRuntimeLifecycle).toMatchObject({ status: "restoring", operationId });
+    expect(restoring.verifierManifests).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ modelRuntimeLifecycle: { status: "paused", operationId }, verifierManifests: [] });
+
+    let releaseAuthentication!: () => void;
+    const authenticationGate = new Promise<void>((resolve) => { releaseAuthentication = resolve; });
+    const replacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    const getAuthentication = replacement.getAuthentication.bind(replacement);
+    replacement.getAuthentication = async () => {
+      await authenticationGate;
+      return getAuthentication();
+    };
+    const restoration = application.restoreModelRuntime(replacement, operationId);
+    await vi.waitFor(() => expect(application.getState().modelRuntimeLifecycle.status).toBe("restoring"));
+    releaseAuthentication();
+    const restored = await restoration;
+    unsubscribe();
+
+    expect(restored.modelRuntimeLifecycle).toMatchObject({ status: "available", operationId });
+    expect(events.at(-1)).toMatchObject({
+      modelRuntimeLifecycle: { status: "available", operationId },
+      verifierManifests: expect.arrayContaining([expect.objectContaining({ id: request.runId })])
+    });
   });
 
   it("removes and reinstalls Lean without relabeling historical verification evidence", async () => {

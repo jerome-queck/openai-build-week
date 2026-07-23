@@ -1851,6 +1851,7 @@ function workbenchState(): LearningApplicationState {
     intakeError: null,
     runtimeAvailable: false,
     modelRuntimePausedForFormalVerification: false,
+    modelRuntimeLifecycle: { status: "unavailable", operationId: null, message: "Unavailable" },
     runtimeCapabilities: { models: [] },
     modelAccess: { status: "unavailable", cause: "runtime", message: "Unavailable" },
     accessConfirmationPreference: { confirmFullAccess: true },

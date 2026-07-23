@@ -268,6 +268,11 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     await scenario.action("Resume session after Lean reinstall", () => page.getByRole("button", { name: "Resume Learning Session", exact: true }).press("Enter"));
     await scenario.action("Check exact claim after Lean reinstall", () => claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter"));
     await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toHaveCount(2, { timeout: 60_000 });
+    await scenario.action("Wait for Codex runtime restoration after Lean verification", () =>
+      expect.poll(() => page.evaluate(() => window.quickStudy.getState().modelRuntimeLifecycle.status), {
+        timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
+      }).toBe("available")
+    );
     const synthesizeArtifact = reformulatedProof.getByRole("button", { name: /Synthesize Learning Artifact/ });
     await scenario.action("Confirm whole Learning Artifact synthesis scope", () =>
       reformulatedProof.getByRole("checkbox", { name: "Confirm this proposal may replace the whole Learning Artifact" }).check());
