@@ -68,6 +68,26 @@ describe("anchored teaching workbench", () => {
     expect(screen.getByRole("button", { name: "Leave session" }).hasAttribute("disabled")).toBe(false);
   });
 
+  it("shows authoritative busy, queued, and blocked learner-operation state", async () => {
+    const state = workbenchState();
+    state.learnerOperation = {
+      active: { id: "operation-1", kind: "modelTeaching", phase: "streamingTeaching", sessionId: "session-1", label: "Model teaching" },
+      queued: [{ id: "queued-1", type: "createSourceAnchor", sessionId: "session-1", label: "anchored explanation" }],
+      feedback: {
+        id: "feedback-1", actionType: "selectSessionAccessPolicy", disposition: "blocked",
+        message: "Model teaching is active. Finish it before changing the Session Access Policy."
+      }
+    };
+    window.quickStudy = quickStudyApi(state);
+
+    render(<App />);
+
+    const notice = await screen.findByRole("region", { name: "Learner action status" });
+    expect(notice.textContent).toContain("Busy: Model teaching");
+    expect(notice.textContent).toContain("Queued: anchored explanation");
+    expect(notice.textContent).toContain("Blocked: Model teaching is active");
+  });
+
   it("confirms Lean removal with capability and storage impact, then offers reinstall", async () => {
     const user = userEvent.setup();
     const installed = workbenchState();
@@ -1717,6 +1737,7 @@ function workbenchState(): LearningApplicationState {
       accessPolicy: "focused",
       accessRequests: [],
       pendingFullAccessConfirmation: false,
+      pendingFullAccessConfirmationId: null,
       researchEgressPermission: { status: "notGranted" },
       researchActions: [],
       corroborationPass: null,
@@ -1835,7 +1856,8 @@ function workbenchState(): LearningApplicationState {
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true },
     sourceExcerptEgressPreference: { enabled: false },
-    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null }
+    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null },
+    learnerOperation: { active: null, queued: [], feedback: null }
   };
 }
 

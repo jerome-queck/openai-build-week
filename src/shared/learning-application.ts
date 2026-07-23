@@ -49,6 +49,30 @@ import {
   type VerifierEnvironmentManager,
   type VerifierRuntime
 } from "./verifier-runtime";
+import {
+  idleLearnerOperationState,
+  learnerActionAvailability,
+  learnerActionLabel,
+  type LearnerOperationKind,
+  type LearnerOperationPhase,
+  type LearnerOperationState,
+  type QueuedLearnerAction
+} from "./learner-operation";
+export {
+  idleLearnerOperationState,
+  learnerActionAvailability,
+  learnerActionLabel
+} from "./learner-operation";
+export type {
+  LearnerActionAvailability,
+  LearnerActionDisposition,
+  LearnerOperationKind,
+  LearnerOperationPhase,
+  LearnerOperationRecord,
+  LearnerOperationState,
+  LearnerOperationFeedback,
+  QueuedLearnerAction
+} from "./learner-operation";
 export type { SessionAccessPolicy } from "./session-access";
 
 const MAX_TEACHING_SOURCE_CONTEXT_CHARACTERS = 60_000;
@@ -1131,6 +1155,7 @@ export interface LearningSession {
   accessPolicy: SessionAccessPolicy;
   accessRequests: SessionAccessRequest[];
   pendingFullAccessConfirmation: boolean;
+  pendingFullAccessConfirmationId: string | null;
   researchEgressPermission: { status: "notGranted" | "granted" | "revoked" };
   researchActions: ResearchAction[];
   corroborationPass: CorroborationPass | null;
@@ -1209,6 +1234,7 @@ export interface LearningApplicationState {
     enabled: boolean;
   };
   learnerModel: LearnerModel;
+  learnerOperation: LearnerOperationState;
 }
 
 export interface VerifierEnvironmentState {
@@ -1398,7 +1424,7 @@ export type LearnerAction =
   | { type: "setResearchEgressPermission"; enabled: boolean }
   | { type: "researchWeb"; query: DerivedResearchQueryInput; sourceAnchorIds: string[] }
   | { type: "cancelExternalResearch"; researchActionId: string }
-  | { type: "decideFullAccessConfirmation"; decision: "confirm" | "cancel" }
+  | { type: "decideFullAccessConfirmation"; confirmationId: string; decision: "confirm" | "cancel" }
   | {
       type: "decideAccessRequest";
       requestId: string;
@@ -1466,6 +1492,13 @@ export class LearningApplication {
   private readonly modelRuntimesPendingShutdown = new Set<ModelRuntime>();
   private readonly researchWorks = new Map<string, { controller: AbortController; promise: Promise<void> }>();
   private readonly stateListeners = new Set<(state: LearningApplicationState) => void>();
+  private readonly queuedLearnerActions: Array<{
+    id: string;
+    action: LearnerAction;
+    resolve: (state: LearningApplicationState) => void;
+    reject: (error: unknown) => void;
+  }> = [];
+  private drainingLearnerActions = false;
   private agentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
   private durableAgentWorkLogs: Record<string, Array<ModelRuntimeEvent & { sequence: number }>> = {};
   private sourceIndexDocuments = new Map<string, SourceIndexDocument>();
@@ -1512,6 +1545,7 @@ export class LearningApplication {
         if (session.status === "active") session.status = "paused";
         session.pendingConceptPeek = null;
         session.pendingFullAccessConfirmation = false;
+        session.pendingFullAccessConfirmationId = null;
         for (const request of session.accessRequests) {
           if (request.status === "pending") request.status = "denied";
         }
@@ -2828,6 +2862,23 @@ export class LearningApplication {
 
   async submit(action: LearnerAction): Promise<LearningApplicationState> {
     this.assertPersistenceWritable();
+    const availability = learnerActionAvailability(this.state, action);
+    if (availability.disposition === "blocked" || availability.disposition === "superseded") {
+      return this.acknowledgeLearnerAction(action, availability.disposition, availability.message);
+    }
+    const canBypassQueue = action.type === "cancelModelWork"
+      || action.type === "cancelSessionModelWork"
+      || action.type === "retrySessionModelStop"
+      || action.type === "decideAccessRequest"
+      || (action.type === "decideFullAccessConfirmation" && action.decision === "cancel");
+    if (availability.disposition === "queued" || (this.queuedLearnerActions.length > 0 && !canBypassQueue)) {
+      return this.queueLearnerAction(action, availability.message);
+    }
+    return this.executeLearnerAction(action);
+  }
+
+  private async executeLearnerAction(action: LearnerAction): Promise<LearningApplicationState> {
+    this.assertPersistenceWritable();
     const lastKnownGoodModelWorks = new Map(this.modelWorks);
     const lastKnownGoodResearchWorks = new Map(this.researchWorks);
     switch (action.type) {
@@ -3060,9 +3111,6 @@ export class LearningApplication {
       case "createSourceAnchor": {
         const session = this.requireActiveSession();
         if (!isSourceAnchorPaletteAction(action.paletteAction)) throw new Error("Choose an available Selection Palette action.");
-        if (action.paletteAction === "explain" && this.state.modelAccess.status === "available" && this.modelWorks.has(session.id)) {
-          throw new Error("Wait for the current model teaching to finish before requesting an anchored explanation.");
-        }
         const source = this.state.sources.find((candidate) => candidate.id === action.sourceId);
         if (!source || !session.sourceIds.includes(source.id)) {
           throw new Error("Choose a source attached to the active Learning Session.");
@@ -4334,6 +4382,9 @@ export class LearningApplication {
         const mathematics = action.mathematics.trim();
         if (!mathematics) throw new Error("Typed mathematics is required to start Quick Study.");
         this.requireModelAccess();
+        const proposalOperationId = this.beginLearnerOperation(
+          "sessionProposal", "proposing", this.state.activeSessionId, "Session Proposal"
+        );
         let proposal: SessionProposal;
         const pendingLog: Array<ModelRuntimeEvent & { sequence: number }> = [];
         const proposalAttemptId = `proposal:${crypto.randomUUID()}`;
@@ -4363,6 +4414,7 @@ export class LearningApplication {
           });
           this.state.intakeError = message;
           this.recordModelAccessLoss(error);
+          this.endLearnerOperation(proposalOperationId);
           break;
         }
         this.pauseActiveSession();
@@ -4384,6 +4436,7 @@ export class LearningApplication {
           this.state.navigation = { workspaceId: selectedSession.workspaceId, missionId: selectedSession.missionId };
           this.state.screen = "workbench";
           await this.beginAutomaticCorroboration(selectedSession);
+          this.endLearnerOperation(proposalOperationId);
           break;
         }
         const session = createLearningSession({
@@ -4419,6 +4472,7 @@ export class LearningApplication {
         this.state.navigation = { workspaceId: session.workspaceId, missionId: session.missionId };
         this.state.screen = "workbench";
         if (!proposal.requiresConfirmation) await this.beginTeaching(session);
+        else this.endLearnerOperation(proposalOperationId);
         break;
       }
       case "reviseSessionProposal": {
@@ -4821,6 +4875,10 @@ export class LearningApplication {
         if (action.policy === session.accessPolicy) break;
         if (action.policy === "full" && this.state.accessConfirmationPreference.confirmFullAccess) {
           session.pendingFullAccessConfirmation = true;
+          session.pendingFullAccessConfirmationId = crypto.randomUUID();
+          this.beginLearnerOperation(
+            "accessTransition", "awaitingFullAccessConfirmation", session.id, "Full Access confirmation"
+          );
           break;
         }
         await this.changeSessionAccessPolicy(session, action.policy);
@@ -4828,9 +4886,15 @@ export class LearningApplication {
       }
       case "decideFullAccessConfirmation": {
         const session = this.requireActiveSession();
-        if (!session.pendingFullAccessConfirmation) throw new Error("There is no pending Full Access confirmation.");
+        if (!session.pendingFullAccessConfirmation || session.pendingFullAccessConfirmationId !== action.confirmationId) {
+          throw new Error("This Full Access confirmation is stale or no longer current.");
+        }
+        const confirmationOperationId = this.state.learnerOperation.active?.kind === "accessTransition"
+          ? this.state.learnerOperation.active.id : null;
         session.pendingFullAccessConfirmation = false;
+        session.pendingFullAccessConfirmationId = null;
         if (action.decision === "confirm") await this.changeSessionAccessPolicy(session, "full");
+        if (confirmationOperationId) this.endLearnerOperation(confirmationOperationId);
         break;
       }
       case "decideAccessRequest": {
@@ -5128,12 +5192,102 @@ export class LearningApplication {
     return currentState;
   }
 
+  private acknowledgeLearnerAction(
+    action: LearnerAction,
+    disposition: "blocked" | "superseded",
+    message: string
+  ): LearningApplicationState {
+    this.state.learnerOperation.feedback = {
+      id: crypto.randomUUID(),
+      actionType: action.type,
+      disposition,
+      message
+    };
+    this.emitState();
+    return this.getState();
+  }
+
+  private queueLearnerAction(action: LearnerAction, reason: string): Promise<LearningApplicationState> {
+    const id = crypto.randomUUID();
+    const message = reason || "This learner action is queued behind the current operation and will be preserved.";
+    return new Promise<LearningApplicationState>((resolve, reject) => {
+      this.queuedLearnerActions.push({ id, action, resolve, reject });
+      this.state.learnerOperation.queued.push({
+        id,
+        type: action.type,
+        sessionId: "sessionId" in action && typeof action.sessionId === "string" ? action.sessionId : this.state.activeSessionId,
+        label: learnerActionLabel(action)
+      });
+      this.state.learnerOperation.feedback = {
+        id,
+        actionType: action.type,
+        disposition: "queued",
+        message
+      };
+      this.emitState();
+    });
+  }
+
+  private async drainLearnerActions(): Promise<void> {
+    if (this.drainingLearnerActions || this.state.learnerOperation.active || this.queuedLearnerActions.length === 0) return;
+    this.drainingLearnerActions = true;
+    const next = this.queuedLearnerActions.shift()!;
+    this.state.learnerOperation.queued = this.state.learnerOperation.queued.filter((entry) => entry.id !== next.id);
+    this.emitState();
+    try {
+      const availability = learnerActionAvailability(this.state, next.action);
+      if (availability.disposition === "blocked" || availability.disposition === "superseded") {
+        next.resolve(this.acknowledgeLearnerAction(next.action, availability.disposition, availability.message));
+      } else {
+        next.resolve(await this.executeLearnerAction(next.action));
+      }
+    } catch (error) {
+      next.reject(error);
+    } finally {
+      this.drainingLearnerActions = false;
+      if (!this.state.learnerOperation.active && this.queuedLearnerActions.length > 0) {
+        void this.drainLearnerActions();
+      }
+    }
+  }
+
+  private beginLearnerOperation(
+    kind: LearnerOperationKind,
+    phase: LearnerOperationPhase,
+    sessionId: string | null,
+    label: string
+  ): string {
+    const id = crypto.randomUUID();
+    this.state.learnerOperation = {
+      active: { id, kind, phase, sessionId, label },
+      queued: this.state.learnerOperation.queued,
+      feedback: null
+    };
+    this.emitState();
+    return id;
+  }
+
+  private updateLearnerOperation(operationId: string, phase: LearnerOperationPhase): void {
+    const active = this.state.learnerOperation.active;
+    if (!active || active.id !== operationId) return;
+    this.state.learnerOperation.active = { ...active, phase };
+    this.emitState();
+  }
+
+  private endLearnerOperation(operationId: string): void {
+    if (this.state.learnerOperation.active?.id !== operationId) return;
+    this.state.learnerOperation.active = null;
+    this.emitState();
+    void this.drainLearnerActions();
+  }
+
   private async persist(state: LearningApplicationState): Promise<void> {
     const directory = dirname(this.statePath);
     const agentWorkLogs = structuredClone(this.agentWorkLogs);
+    const { learnerOperation: _learnerOperation, ...durableState } = state;
     await mkdir(directory, { recursive: true });
-    await this.writeTextFile(this.statePath, JSON.stringify({ ...state, agentWorkLogs }, null, 2));
-    this.durableState = structuredClone(state);
+    await this.writeTextFile(this.statePath, JSON.stringify({ ...durableState, agentWorkLogs }, null, 2));
+    this.durableState = structuredClone({ ...durableState, learnerOperation: idleLearnerOperationState() });
     this.durableAgentWorkLogs = agentWorkLogs;
   }
 
@@ -5662,17 +5816,29 @@ export class LearningApplication {
     questionContext?: QuestionContextItem[],
     questionRevision?: TeachingRequest["questionRevision"]
   ): Promise<void> {
-    const corroborationMathematics = focus
-      ? [session.learningGoal, session.sessionTarget, focus.instruction, mathematics].join("\n")
-      : mathematics;
-    const corroborationPass = await this.beginAutomaticCorroboration(
-      session,
-      corroborationMathematics,
-      focus ? [focus.sourceId] : []
+    const operationId = this.beginLearnerOperation(
+      "modelTeaching", "preparingTeaching", session.id, "Model teaching"
     );
-    const sourceContext = await this.buildTeachingSourceContext(session, undefined, questionContext);
-    const log = this.agentWorkLogs[session.id] ??= [];
-    target.start(sourceContext, log.length + 1);
+    let corroborationPass: CorroborationPass | null;
+    let sourceContext: TeachingSourceContext[];
+    let log: Array<ModelRuntimeEvent & { sequence: number }>;
+    try {
+      const corroborationMathematics = focus
+        ? [session.learningGoal, session.sessionTarget, focus.instruction, mathematics].join("\n")
+        : mathematics;
+      corroborationPass = await this.beginAutomaticCorroboration(
+        session,
+        corroborationMathematics,
+        focus ? [focus.sourceId] : []
+      );
+      sourceContext = await this.buildTeachingSourceContext(session, undefined, questionContext);
+      log = this.agentWorkLogs[session.id] ??= [];
+      this.updateLearnerOperation(operationId, "streamingTeaching");
+      target.start(sourceContext, log.length + 1);
+    } catch (error) {
+      this.endLearnerOperation(operationId);
+      throw error;
+    }
     const controller = new AbortController();
     const runtime = this.modelRuntime!;
     const roadmap = session.learningSlice
@@ -5712,7 +5878,7 @@ export class LearningApplication {
       ...(focus ? { focus } : {}),
       onAccessRequest: (request) => controller.signal.aborted
         ? Promise.resolve({ status: "denied", policy: session.accessPolicy })
-        : this.handleRuntimeAccessRequest(session, request),
+        : this.handleRuntimeAccessRequest(session, request, operationId),
       signal: controller.signal,
       onDelta: (delta) => {
         if (controller.signal.aborted || !target.isStreaming()) return;
@@ -5734,6 +5900,7 @@ export class LearningApplication {
       this.recordModelAccessLoss(error);
     }).finally(() => {
       if (this.modelWorks.get(session.id)?.promise === promise) this.modelWorks.delete(session.id);
+      this.endLearnerOperation(operationId);
       this.queuePersistence();
       this.emitState();
     });
@@ -5841,8 +6008,10 @@ export class LearningApplication {
 
   private async handleRuntimeAccessRequest(
     session: LearningSession,
-    details: RuntimeAccessRequest
+    details: RuntimeAccessRequest,
+    modelOperationId: string
   ): Promise<RuntimeAccessDecision> {
+    this.updateLearnerOperation(modelOperationId, "waitingForAccessDecision");
     const request = this.addAccessRequest(session, details);
     const decision = new Promise<RuntimeAccessDecision>((resolve) => {
       this.accessDecisionWaiters.set(request.id, resolve);
@@ -5888,6 +6057,10 @@ export class LearningApplication {
   private resolveAccessDecision(requestId: string, decision: RuntimeAccessDecision): void {
     this.accessDecisionWaiters.get(requestId)?.(decision);
     this.accessDecisionWaiters.delete(requestId);
+    if (this.state.learnerOperation.active?.phase === "waitingForAccessDecision") {
+      this.state.learnerOperation.active.phase = "streamingTeaching";
+      this.emitState();
+    }
   }
 
   private denyPendingAccessRequests(session: LearningSession): void {
@@ -5905,14 +6078,21 @@ export class LearningApplication {
     preservePendingAccessRequest = false
   ): Promise<void> {
     if (policy === session.accessPolicy) return;
+    const operationId = this.beginLearnerOperation(
+      "accessTransition", "changingAccessPolicy", session.id, "Session Access Policy transition"
+    );
     const work = this.modelWorks.get(session.id);
     const restartTeaching = Boolean(work);
-    if (restartTeaching && !await this.stopModelWork(session, !preservePendingAccessRequest)) {
-      throw new Error(`Codex did not confirm interruption. ${sessionAccessPolicyLabel(session.accessPolicy)} remains active.`);
+    try {
+      if (restartTeaching && !await this.stopModelWork(session, !preservePendingAccessRequest)) {
+        throw new Error(`Codex did not confirm interruption. ${sessionAccessPolicyLabel(session.accessPolicy)} remains active.`);
+      }
+      session.accessPolicy = policy;
+      refreshAskBarContext(this.state, session);
+      if (work) await work.restart();
+    } finally {
+      this.endLearnerOperation(operationId);
     }
-    session.accessPolicy = policy;
-    refreshAskBarContext(this.state, session);
-    if (work) await work.restart();
   }
 
   private async stopModelWork(session: LearningSession, denyPendingRequests = true): Promise<boolean> {
@@ -7792,6 +7972,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
     current.personalNoteSynthesisPreference = migratePersonalNoteSynthesisPreference(stored.personalNoteSynthesisPreference);
     current.sourceExcerptEgressPreference = migrateSourceExcerptEgressPreference(stored.sourceExcerptEgressPreference);
     current.learnerModel = migrateLearnerModel(stored.learnerModel);
+    current.learnerOperation = idleLearnerOperationState();
     current.argumentRoadmaps = migrateArgumentRoadmaps(stored.argumentRoadmaps);
     current.sessions = current.sessions.map((session) => ({
       ...session,
@@ -7820,6 +8001,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       accessPolicy: migrateSessionAccessPolicy(session.accessPolicy),
       accessRequests: migrateAccessRequests(session.accessRequests),
       pendingFullAccessConfirmation: false,
+      pendingFullAccessConfirmationId: null,
       researchEgressPermission: migrateResearchEgressPermission(session.researchEgressPermission),
       researchActions: migrateResearchActions(session.researchActions),
       corroborationPass: migrateCorroborationPass(session.corroborationPass),
@@ -7904,6 +8086,7 @@ function migratePersistedState(value: unknown): LearningApplicationState {
       accessPolicy: "focused",
       accessRequests: [],
       pendingFullAccessConfirmation: false,
+      pendingFullAccessConfirmationId: null,
       researchEgressPermission: { status: "notGranted" },
       researchActions: [],
       corroborationPass: null,
@@ -8864,6 +9047,7 @@ function createLearningSession(details: NewLearningSession): LearningSession {
     activeQuestionCardId: null,
     accessRequests: [],
     pendingFullAccessConfirmation: false,
+    pendingFullAccessConfirmationId: null,
     researchEgressPermission: { status: "notGranted" },
     researchActions: [],
     corroborationPass: null,
@@ -11026,7 +11210,8 @@ function initialState(): LearningApplicationState {
     accessConfirmationPreference: { confirmFullAccess: true },
     personalNoteSynthesisPreference: { includePersonalNotes: true },
     sourceExcerptEgressPreference: { enabled: false },
-    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null }
+    learnerModel: { entries: [], adaptiveReuseEnabled: true, lastResetAt: null },
+    learnerOperation: idleLearnerOperationState()
   };
 }
 

@@ -5,6 +5,7 @@ import type {
   SourceAnchorSelection,
   NormalizedSourceRegionBounds
 } from "../../shared/learning-application";
+import type { LearnerActionDisposition } from "../../shared/learner-operation";
 
 const SOURCE_CONTEXT_CHARACTERS = 32;
 
@@ -15,6 +16,7 @@ interface SourceLayerProps {
   anchors: SourceAnchor[];
   highlight?: { startOffset: number; endOffset: number; exactText: string };
   onChooseAction?(selection: SourceAnchorSelection, action: SourceAnchorPaletteAction): void;
+  actionAvailability?(action: SourceAnchorPaletteAction): LearnerActionDisposition;
   onChooseReplacement?(selection: SourceAnchorSelection): void;
   onActivateAnchor?(sourceAnchorId: string): void;
   focusAnchorId?: string | null;
@@ -44,7 +46,7 @@ interface PercentSourceRegionBounds {
   height: number;
 }
 
-export function SourceLayer({ sourceId, content, mediaType = "text/plain", anchors, highlight, onChooseAction, onChooseReplacement, onActivateAnchor, focusAnchorId }: SourceLayerProps) {
+export function SourceLayer({ sourceId, content, mediaType = "text/plain", anchors, highlight, onChooseAction, actionAvailability, onChooseReplacement, onActivateAnchor, focusAnchorId }: SourceLayerProps) {
   const sourceRef = useRef<HTMLElement>(null);
   const originRef = useRef<HTMLElement | null>(null);
   const drawStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -226,14 +228,16 @@ export function SourceLayer({ sourceId, content, mediaType = "text/plain", ancho
         </section>
       )}
       {selection && <SelectionPalette selection={selection} onChoose={onChooseAction ? chooseAction : undefined}
+        actionAvailability={actionAvailability}
         onChooseReplacement={onChooseReplacement ? chooseReplacement : undefined} onClose={closePalette} />}
     </section>
   );
 }
 
-function SelectionPalette({ selection, onChoose, onChooseReplacement, onClose }: {
+function SelectionPalette({ selection, onChoose, actionAvailability, onChooseReplacement, onClose }: {
   selection: SourceAnchorSelection;
   onChoose?(action: SourceAnchorPaletteAction): void;
+  actionAvailability?(action: SourceAnchorPaletteAction): LearnerActionDisposition;
   onChooseReplacement?(): void;
   onClose(): void;
 }) {
@@ -255,11 +259,16 @@ function SelectionPalette({ selection, onChoose, onChooseReplacement, onClose }:
       <div className="selection-palette-actions">
         {onChooseReplacement ? <button ref={firstActionRef} className="primary"
           aria-label={`Use ${selectionLabel} as replacement location`} onClick={onChooseReplacement}>Use as replacement location</button> : <>
-          <button ref={firstActionRef} className="primary" aria-label={`Explain or unpack ${selectionLabel}`} onClick={() => onChoose?.("explain")}>Explain or unpack</button>
-          <button className="secondary" aria-label={`Ask about ${selectionLabel}`} onClick={() => onChoose?.("question")}>Ask about this</button>
-          <button className="secondary" aria-label={`Add note to ${selectionLabel}`} onClick={() => onChoose?.("addNote")}>Add note</button>
-          <button className="secondary" aria-label={`Tell tutor about ${selectionLabel}`} onClick={() => onChoose?.("tellTutor")}>Tell tutor</button>
-          <button className="secondary" aria-label={`Add ${selectionLabel} to the Learning Trail`} onClick={() => onChoose?.("addToLearningTrail")}>Add to Learning Trail</button>
+          <button ref={firstActionRef} className="primary" disabled={actionAvailability?.("explain") === "blocked"}
+            aria-label={`Explain or unpack ${selectionLabel}`} onClick={() => onChoose?.("explain")}>Explain or unpack</button>
+          <button className="secondary" disabled={actionAvailability?.("question") === "blocked"}
+            aria-label={`Ask about ${selectionLabel}`} onClick={() => onChoose?.("question")}>Ask about this</button>
+          <button className="secondary" disabled={actionAvailability?.("addNote") === "blocked"}
+            aria-label={`Add note to ${selectionLabel}`} onClick={() => onChoose?.("addNote")}>Add note</button>
+          <button className="secondary" disabled={actionAvailability?.("tellTutor") === "blocked"}
+            aria-label={`Tell tutor about ${selectionLabel}`} onClick={() => onChoose?.("tellTutor")}>Tell tutor</button>
+          <button className="secondary" disabled={actionAvailability?.("addToLearningTrail") === "blocked"}
+            aria-label={`Add ${selectionLabel} to the Learning Trail`} onClick={() => onChoose?.("addToLearningTrail")}>Add to Learning Trail</button>
         </>}
       </div>
       <button className="text-button" aria-label="Close Selection Palette" onClick={onClose}>Cancel</button>

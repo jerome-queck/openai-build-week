@@ -96,7 +96,7 @@ function trailSession(): LearningSession {
     teachingCard: { status: "completed", content: "Overview", error: null, retryable: false }, teachingCardHistory: [],
     submittedPendingQuestions: [], currentTeachingInput: { kind: "sessionIntake", text: "Every compact subset is closed." },
     pendingQuestion: null, askBarContext: { items: [], includedIds: [], customized: false }, questionCards: [], activeQuestionCardId: null,
-    accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false,
+    accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false, pendingFullAccessConfirmationId: null,
     researchEgressPermission: { status: "notGranted" }, researchActions: [],
     corroborationPass: null,
     corroborationPassHistory: [],

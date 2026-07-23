@@ -67,7 +67,49 @@ test("packaged critical source and access journey has an isolated release bounda
       page.getByRole("button", { name: "Open Linked Source algebra-course" }).press("Enter"));
     await expect(page.getByText(/Historical content unavailable/)).toContainText("Source Index and Source Fingerprint are not backups");
 
-    await page.getByLabel("Typed mathematics").fill("TRIGGER_ACCESS_REQUEST: Explain orbit-stabilizer using the workspace sources.");
+    await writeFile(join(scenario.paths.runtimeControlDirectory, "fake-codex-teaching-control.json"),
+      JSON.stringify({ holdTeaching: true }), "utf8");
+    await page.getByLabel("Typed mathematics").fill("Explain orbit-stabilizer without requesting new access.");
+    await scenario.action("Start held teaching for operation-state coverage", () =>
+      page.getByRole("button", { name: "Propose Learning Session" }).press("Enter"));
+    const operationNotice = page.getByRole("region", { name: "Learner action status" });
+    await expect(operationNotice).toContainText("Busy: Model teaching");
+    await scenario.action("Request Full Access confirmation during held teaching", () =>
+      page.getByRole("radio", { name: "Full Access" }).click());
+    const fullAccessConfirmation = page.getByRole("region", { name: "Full Access confirmation" });
+    await expect(fullAccessConfirmation).toBeVisible();
+    await scenario.action("Cancel Full Access confirmation", () =>
+      fullAccessConfirmation.getByRole("button", { name: "Cancel Full Access" }).press("Enter"));
+    await expect(fullAccessConfirmation).not.toBeVisible();
+    await scenario.action("Re-request Full Access confirmation", () =>
+      page.getByRole("radio", { name: "Full Access" }).click());
+    await expect(fullAccessConfirmation).toBeVisible();
+    await scenario.action("Confirm fresh Full Access confirmation", () =>
+      fullAccessConfirmation.getByRole("button", { name: "Confirm Full Access" }).press("Enter"));
+    const workbenchSource = page.getByRole("region", { name: "Workbench Source Layer" });
+    const sourceLayer = workbenchSource.getByRole("article", { name: "Read-only Source Layer" });
+    await sourceLayer.evaluate((node) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      const text = walker.nextNode();
+      if (!text) throw new Error("The held teaching source had no selectable text.");
+      const range = document.createRange();
+      range.setStart(text, 0);
+      range.setEnd(text, Math.min(text.textContent?.length ?? 0, 18));
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    await scenario.action("Queue anchored explanation during held teaching", () =>
+      page.getByRole("button", { name: /Explain or unpack selected text/ }).press("Enter"));
+    await expect(operationNotice).toContainText("Queued: anchored explanation");
+    await writeFile(join(scenario.paths.runtimeControlDirectory, "fake-codex-teaching-control.json"),
+      JSON.stringify({ holdTeaching: false }), "utf8");
+    await expect(page.getByRole("region", { name: /Current anchored Teaching Card/ })).toBeVisible({ timeout: 30_000 });
+    await scenario.action("Leave held operation session", () => page.getByRole("button", { name: "Leave session" }).press("Enter"));
+    await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
+
+    await page.getByRole("textbox", { name: "Typed mathematics" }).fill("TRIGGER_ACCESS_REQUEST: Explain orbit-stabilizer using the workspace sources.");
     await scenario.action("Propose Learning Session with workspace sources", () =>
       page.getByRole("button", { name: "Propose Learning Session" }).press("Enter"));
     const accessRequest = page.getByRole("region", { name: "Request Full Access" });
@@ -79,9 +121,6 @@ test("packaged critical source and access journey has an isolated release bounda
       page.getByRole("button", { name: "Apply proposal changes" }).press("Enter"));
     await scenario.action("Approve Access Request", () =>
       page.getByRole("button", { name: "Approve Access Request" }).press("Enter"));
-    await expect(page.getByRole("region", { name: "Full Access", exact: true })).toBeVisible();
-    // Full Access confirmation cancel/reconfirm remains an explicit #115 product-race seam;
-    // this harness records the bounded access transition without pretending to repair it here.
 
     await scenario.action("Leave source and access session", () => page.getByRole("button", { name: "Leave session" }).press("Enter"));
     await scenario.quit();

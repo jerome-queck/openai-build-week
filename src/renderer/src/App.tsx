@@ -27,6 +27,7 @@ import { ReanchoringReview } from "./ReanchoringReview";
 import { AdaptiveTeaching } from "./AdaptiveTeaching";
 import { LearnerModelLedger } from "./LearnerModelLedger";
 import { toDateTimeLocal } from "./date-time";
+import { learnerActionAvailability } from "../../shared/learner-operation";
 
 type StateHandler = (state: LearningApplicationState) => void;
 
@@ -65,6 +66,7 @@ function StorageRecovery({ state }: { state: LearningApplicationState }) {
   return (
     <main className="shell">
       <Brand />
+      <LearnerOperationNotice state={state} />
       <section className="history-card" role="alert" aria-labelledby="storage-recovery-title">
         <p className="eyebrow">Learner state preserved</p>
         <h1 id="storage-recovery-title">Stored work needs recovery</h1>
@@ -85,6 +87,19 @@ function Brand() {
   );
 }
 
+function LearnerOperationNotice({ state }: { state: LearningApplicationState }) {
+  const operation = state.learnerOperation;
+  if (!operation.active && operation.queued.length === 0 && !operation.feedback) return null;
+  const feedback = operation.feedback;
+  return <section className="operation-notice" aria-label="Learner action status" aria-live="polite">
+    {operation.active && <p role="status"><strong>Busy:</strong> {operation.active.label} · {operation.active.phase.replace(/[A-Z]/g, (letter) => ` ${letter.toLocaleLowerCase()}`)}.</p>}
+    {operation.queued.length > 0 && <p role="status"><strong>Queued:</strong> {operation.queued.map((entry) => entry.label).join(", ")}.</p>}
+    {feedback && <p role={feedback.disposition === "blocked" || feedback.disposition === "superseded" ? "alert" : "status"}>
+      <strong>{feedback.disposition === "queued" ? "Queued" : feedback.disposition === "superseded" ? "Superseded" : "Blocked"}:</strong> {feedback.message}
+    </p>}
+  </section>;
+}
+
 function Dashboard({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
@@ -94,6 +109,7 @@ function Dashboard({ state, onState }: { state: LearningApplicationState; onStat
   return (
     <main className="shell">
       <Brand />
+      <LearnerOperationNotice state={state} />
       <div className="dashboard-grid">
         <Hierarchy state={state} onState={onState} />
         <section className="dashboard-content" aria-labelledby="dashboard-title">
@@ -1267,6 +1283,7 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
 function Intake({ state, onState }: { state: LearningApplicationState; onState: StateHandler }) {
   const [mathematics, setMathematics] = useState("");
   const [ignoreLearnerModel, setIgnoreLearnerModel] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const modelAvailable = state.modelAccess.status === "available";
   const workspace = state.workspaces.find((candidate) => candidate.id === state.navigation.workspaceId)!;
   const mission = state.missions.find((candidate) => candidate.id === state.navigation.missionId) ?? null;
@@ -1274,14 +1291,21 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
     ? { workspaceId: workspace.id, missionId: mission.id }
     : undefined;
   const initialAccess = location ? "Workspace Access" : "Focused Access";
+  const action = {
+    type: modelAvailable ? "submitSessionIntake" as const : "startQuickStudy" as const,
+    mathematics,
+    ignoreLearnerModel,
+    ...(location ? { location } : {})
+  };
+  const availability = learnerActionAvailability(state, action);
   const start = async (event: FormEvent) => {
     event.preventDefault();
-    onState(await window.quickStudy.submit({
-      type: modelAvailable ? "submitSessionIntake" : "startQuickStudy",
-      mathematics,
-      ignoreLearnerModel,
-      ...(location ? { location } : {})
-    }));
+    setError(null);
+    try {
+      onState(await window.quickStudy.submit(action));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The Learning Session request could not be submitted.");
+    }
   };
   return (
     <section className="intake-card" aria-labelledby="intake-title">
@@ -1303,9 +1327,11 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
         </label>
         <div className="intake-actions">
           <span>{modelAvailable ? `${initialAccess} · ${location ? `${workspace.name} · ${mission!.name}` : "no workspace setup required"}` : `Local Working Mode · ${initialAccess}`}</span>
-          <button className="primary" disabled={!mathematics.trim()}>{modelAvailable ? "Propose Learning Session" : "Start local Learning Session"}</button>
+          <button className="primary" disabled={!mathematics.trim() || availability.disposition === "blocked"}>
+            {availability.disposition === "queued" ? "Queue Learning Session" : modelAvailable ? "Propose Learning Session" : "Start local Learning Session"}
+          </button>
         </div>
-        {state.intakeError && <p className="failure-message" role="alert">{state.intakeError}</p>}
+        {(state.intakeError || error) && <p className="failure-message" role="alert">{state.intakeError ?? error}</p>}
       </form>
     </section>
   );
@@ -1485,6 +1511,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
   return (
     <main className="shell">
       <Brand />
+      <LearnerOperationNotice state={state} />
       <div className="workbench-layout">
         <Hierarchy state={state} onState={onState} />
         <div className="workbench-grid">
@@ -2208,14 +2235,17 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
           mediaType={mediaType}
           anchors={session.sourceAnchors.filter((anchor) => anchor.sourceId === source.id
             && (source.kind === "managedAsset" || anchor.sourceRevisionId === source.link.currentRevisionId))}
+          actionAvailability={(paletteAction) => learnerActionAvailability(state, {
+            type: "createSourceAnchor",
+            sourceId: source.id,
+            selection: { kind: "diagramRegion", bounds: { x: 0, y: 0, width: 1, height: 1 } },
+            paletteAction
+          }).disposition}
           onActivateAnchor={onActivateAnchor}
           focusAnchorId={focusAnchorId}
           onChooseAction={(selection, paletteAction) => {
             void window.quickStudy.submit({
-              type: "createSourceAnchor",
-              sourceId: source.id,
-              selection,
-              paletteAction
+              type: "createSourceAnchor", sourceId: source.id, selection, paletteAction
             }).then((nextState) => {
               onState(nextState);
               const activeSession = nextState.sessions.find((candidate) => candidate.id === nextState.activeSessionId);
@@ -2226,7 +2256,9 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
                 onAnnotationRequested(activeSession.activeSourceAnchorId,
                   paletteAction === "addNote" ? "personalNote" : "tutorFeedback");
               }
-            });
+            }).catch((cause: unknown) => setSourceError(
+              cause instanceof Error ? cause.message : "The Source Anchor action could not be submitted."
+            ));
           }}
         />
       ) : source?.kind === "linkedSource" && content === null ? (
@@ -2628,6 +2660,9 @@ function SessionAccessPanel({ state, session, onState }: {
 }) {
   const [accessError, setAccessError] = useState<string | null>(null);
   const pendingRequest = session.accessRequests.find((request) => request.status === "pending") ?? null;
+  const policyAvailability = (policy: LearningSession["accessPolicy"]) => learnerActionAvailability(state, {
+    type: "selectSessionAccessPolicy", policy
+  });
   const submitAccessAction = async (action: LearnerAction) => {
     setAccessError(null);
     try {
@@ -2667,6 +2702,8 @@ function SessionAccessPanel({ state, session, onState }: {
               name="session-access-policy"
               value={policy}
               checked={session.accessPolicy === policy}
+              disabled={Boolean(pendingRequest) || Boolean(session.pendingFullAccessConfirmation)
+                || policyAvailability(policy).disposition === "blocked"}
               onChange={() => choosePolicy(policy)}
             />
             {sessionAccessPolicyLabel(policy)}
@@ -2691,11 +2728,19 @@ function SessionAccessPanel({ state, session, onState }: {
           <h3 id="full-access-confirmation-title">Full Access confirmation</h3>
           <p>Allow all learner-authorized Linked Sources and Managed Assets across Clarifold for this Learning Session only?</p>
           <div className="teaching-actions">
-            <button className="primary" onClick={() => void submitAccessAction({
-              type: "decideFullAccessConfirmation", decision: "confirm"
+            <button className="primary" disabled={learnerActionAvailability(state, {
+              type: "decideFullAccessConfirmation", confirmationId: session.pendingFullAccessConfirmationId!, decision: "confirm"
+            }).disposition !== "allowed"} onClick={() => void submitAccessAction({
+              type: "decideFullAccessConfirmation",
+              confirmationId: session.pendingFullAccessConfirmationId!,
+              decision: "confirm"
             })}>Confirm Full Access</button>
-            <button className="secondary" onClick={() => void submitAccessAction({
-              type: "decideFullAccessConfirmation", decision: "cancel"
+            <button className="secondary" disabled={learnerActionAvailability(state, {
+              type: "decideFullAccessConfirmation", confirmationId: session.pendingFullAccessConfirmationId!, decision: "cancel"
+            }).disposition !== "allowed"} onClick={() => void submitAccessAction({
+              type: "decideFullAccessConfirmation",
+              confirmationId: session.pendingFullAccessConfirmationId!,
+              decision: "cancel"
             })}>Cancel Full Access</button>
           </div>
         </section>
@@ -2710,11 +2755,17 @@ function SessionAccessPanel({ state, session, onState }: {
             <div><dt>Intended action</dt><dd>{pendingRequest.intendedAction}</dd></div>
           </dl>
           <div className="teaching-actions">
-            <button className="primary" onClick={() => decide("approve")}>Approve Access Request</button>
+            <button className="primary" disabled={learnerActionAvailability(state, {
+              type: "decideAccessRequest", requestId: pendingRequest.id, decision: "approve"
+            }).disposition !== "allowed"} onClick={() => decide("approve")}>Approve Access Request</button>
             {session.accessPolicy === "focused" && pendingRequest.requestedPolicy === "full" && (
-              <button className="secondary" onClick={() => decide("narrow")}>Narrow to Workspace Access</button>
+              <button className="secondary" disabled={learnerActionAvailability(state, {
+                type: "decideAccessRequest", requestId: pendingRequest.id, decision: "narrow", narrowedPolicy: "workspace"
+              }).disposition !== "allowed"} onClick={() => decide("narrow")}>Narrow to Workspace Access</button>
             )}
-            <button className="secondary" onClick={() => decide("deny")}>Deny Access Request</button>
+            <button className="secondary" disabled={learnerActionAvailability(state, {
+              type: "decideAccessRequest", requestId: pendingRequest.id, decision: "deny"
+            }).disposition !== "allowed"} onClick={() => decide("deny")}>Deny Access Request</button>
           </div>
         </section>
       )}

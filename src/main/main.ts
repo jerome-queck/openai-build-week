@@ -308,7 +308,8 @@ function isLearnerAction(value: unknown): value is LearnerAction {
         && "sourceAnchorIds" in action && Array.isArray(action.sourceAnchorIds)
         && action.sourceAnchorIds.every((id) => typeof id === "string");
     case "decideFullAccessConfirmation":
-      return "decision" in action && ["confirm", "cancel"].includes(String(action.decision));
+      return "confirmationId" in action && typeof action.confirmationId === "string"
+        && "decision" in action && ["confirm", "cancel"].includes(String(action.decision));
     case "decideAccessRequest":
       return "requestId" in action && typeof action.requestId === "string"
         && "decision" in action && ["approve", "deny", "narrow"].includes(String(action.decision))

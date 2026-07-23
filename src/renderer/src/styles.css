@@ -66,6 +66,11 @@ h2 { margin: 0; font-size: 27px; }
 .model-access h2 { font-size: 23px; }
 .model-access p { margin: 7px 0; color: #557069; }
 .model-access small { color: #704a32; }
+.operation-notice { margin: 0 0 18px; padding: 13px 17px; border: 1px solid #c8d4c7; border-radius: 13px; background: #f1f6ef; color: #385950; }
+.operation-notice p { margin: 0; line-height: 1.45; }
+.operation-notice p + p { margin-top: 5px; }
+.operation-notice strong { color: #294d43; }
+.operation-notice [role="alert"] { color: #8d3d2b; }
 .api-key-form { flex: 1 1 250px; }
 .api-key-form > div { display: flex; gap: 7px; }
 .api-key-form input { min-width: 140px; }

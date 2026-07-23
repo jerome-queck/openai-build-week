@@ -42,7 +42,7 @@ function adaptiveSession(id: string, learningGoal: string): LearningSession {
     teachingCard: { status: "completed", content: "Use compactness after separating an exterior point.", error: null, retryable: false },
     teachingCardHistory: [], submittedPendingQuestions: [], currentTeachingInput: { kind: "sessionIntake", text: "Every compact subset is closed." },
     pendingQuestion: null, askBarContext: { items: [], includedIds: [], customized: false }, questionCards: [], activeQuestionCardId: null,
-    accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false, researchEgressPermission: { status: "notGranted" },
+    accessPolicy: "focused", accessRequests: [], pendingFullAccessConfirmation: false, pendingFullAccessConfirmationId: null, researchEgressPermission: { status: "notGranted" },
     researchActions: [], corroborationPass: null, corroborationPassHistory: [], sourceAnchors: [], sourceAnchorRequests: [], annotations: [],
     activeSourceAnchorId: null, anchoredTeachingCards: [], activeTeachingCardId: null, learningArtifacts: [], trailDraft: { items: [] },
     consolidationDraft: null, consolidatedOutcome: null, delayedTransferOffer: null,

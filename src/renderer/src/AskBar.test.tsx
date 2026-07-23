@@ -160,7 +160,7 @@ function questionSession(): LearningSession {
     teachingCard: { status: "completed", content: "Initial teaching", error: null, retryable: false },
     teachingCardHistory: [], submittedPendingQuestions: [], currentTeachingInput: { kind: "sessionIntake", text: "Every compact subset is closed." },
     pendingQuestion: null, askBarContext: { items, includedIds: items.slice(0, 4).map((item) => item.id), customized: true },
-    questionCards: [], activeQuestionCardId: null, accessPolicy: "workspace", accessRequests: [], pendingFullAccessConfirmation: false,
+    questionCards: [], activeQuestionCardId: null, accessPolicy: "workspace", accessRequests: [], pendingFullAccessConfirmation: false, pendingFullAccessConfirmationId: null,
     researchEgressPermission: { status: "notGranted" }, researchActions: [],
     corroborationPass: null,
     corroborationPassHistory: [],

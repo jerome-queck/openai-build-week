@@ -5874,9 +5874,11 @@ describe("Learning Application", () => {
     const { application, dataDirectory } = await launchWithRuntime(runtime);
     await application.submit({ type: "submitSessionIntake", mathematics: "Prove compact subsets are closed." });
 
-    await expect(application.submit({ type: "requestSpecialistReview" })).rejects.toThrow(
-      "Complete a Teaching Card before requesting a Specialist Agent review."
-    );
+    const blockedSpecialistReview = await application.submit({ type: "requestSpecialistReview" });
+    expect(blockedSpecialistReview.learnerOperation.feedback).toMatchObject({
+      disposition: "blocked",
+      message: expect.stringContaining("Model teaching is active")
+    });
     expect(runtime.specialistRequests).toEqual([]);
 
     runtime.emitTeaching("For each exterior point, choose disjoint neighbourhoods from every point of the compact set.");
@@ -7211,12 +7213,17 @@ describe("Learning Application", () => {
     let state = await application.submit({ type: "submitSessionIntake", mathematics: "Explain proof one." });
     const firstSessionId = state.activeSessionId!;
     await application.submit({ type: "leaveSession" });
-    state = await application.submit({ type: "submitSessionIntake", mathematics: "Explain proof two." });
+    const secondSubmission = application.submit({ type: "submitSessionIntake", mathematics: "Explain proof two." });
+    expect(application.getState().learnerOperation.queued).toEqual([
+      expect.objectContaining({ type: "submitSessionIntake", label: "new Learning Session" })
+    ]);
+    runtime.completeTeaching(firstSessionId);
+    state = await secondSubmission;
     const secondSessionId = state.activeSessionId!;
 
     await application.shutdown();
-    expect(runtime.canceledSessionIds).toEqual(expect.arrayContaining([firstSessionId, secondSessionId]));
-    expect(application.getState().sessions.map((session) => session.teachingCard.status)).toEqual(["stopped", "stopped"]);
+    expect(runtime.canceledSessionIds).toEqual([secondSessionId]);
+    expect(application.getState().sessions.map((session) => session.teachingCard.status)).toEqual(["completed", "stopped"]);
 
     const reloaded = await LearningApplication.launch(dataDirectory);
     expect(reloaded.getState()).toMatchObject({
@@ -7224,7 +7231,7 @@ describe("Learning Application", () => {
       authentication: { status: "failed", error: "Codex Runtime is unavailable. Restart Codex and try again." }
     });
     expect(reloaded.getState().sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: firstSessionId, teachingCard: expect.objectContaining({ status: "stopped", retryable: true }) }),
+      expect.objectContaining({ id: firstSessionId, teachingCard: expect.objectContaining({ status: "completed" }) }),
       expect.objectContaining({ id: secondSessionId, teachingCard: expect.objectContaining({ status: "stopped", retryable: true }) })
     ]));
   });
@@ -8239,8 +8246,13 @@ describe("Learning Application", () => {
     state = await application.submit({ type: "selectSessionAccessPolicy", policy: "full" });
     expect(state.sessions[0].accessPolicy).toBe("focused");
     expect(state.sessions[0].pendingFullAccessConfirmation).toBe(true);
+    expect(state.sessions[0].pendingFullAccessConfirmationId).toEqual(expect.any(String));
     expect(state.sessions[0].accessRequests).toEqual([]);
-    state = await application.submit({ type: "decideFullAccessConfirmation", decision: "cancel" });
+    state = await application.submit({
+      type: "decideFullAccessConfirmation",
+      confirmationId: state.sessions[0].pendingFullAccessConfirmationId!,
+      decision: "cancel"
+    });
     expect(state.sessions[0].pendingFullAccessConfirmation).toBe(false);
 
     state = await application.submit({ type: "setFullAccessConfirmation", enabled: false });
@@ -8255,6 +8267,140 @@ describe("Learning Application", () => {
     const reloaded = await LearningApplication.launch(dataDirectory);
     applications.push(reloaded);
     expect(reloaded.getState().accessConfirmationPreference.confirmFullAccess).toBe(false);
+  });
+
+  it("serializes an anchored explanation requested while teaching is held open", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the selected claim",
+      initialTeachingDirection: "Start from the definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    try {
+      let state = await application.submit({
+        type: "submitSessionIntake",
+        mathematics: "Every compact subset of a Hausdorff space is closed."
+      });
+      const sourceId = state.sessions[0].sourceIds[0];
+      const explanation = application.submit({
+        type: "createSourceAnchor",
+        sourceId,
+        selection: {
+          kind: "text",
+          startOffset: 6,
+          endOffset: 20,
+          exactText: "compact subset",
+          prefix: "Every ",
+          suffix: " of a Hausdorff space is closed."
+        },
+        paletteAction: "explain"
+      });
+
+      state = application.getState();
+      expect(state.learnerOperation.active).toMatchObject({ kind: "modelTeaching", phase: "streamingTeaching" });
+      expect(state.learnerOperation.queued).toEqual([
+        expect.objectContaining({ type: "createSourceAnchor", label: "anchored explanation" })
+      ]);
+      expect(state.learnerOperation.feedback).toMatchObject({ disposition: "queued" });
+      runtime.completeTeaching();
+      await vi.waitFor(() => expect(runtime.teachingRequests).toHaveLength(2));
+      runtime.completeTeaching();
+      state = await explanation;
+      await application.waitForModelWork();
+      expect(state.sessions[0].anchoredTeachingCards).toHaveLength(1);
+    } finally {
+      runtime.completeTeaching();
+    }
+  });
+
+  it("does not start a second intake proposal while teaching is held open", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the selected claim",
+      initialTeachingDirection: "Start from the definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    try {
+      await application.submit({ type: "submitSessionIntake", mathematics: "Explain compactness." });
+      runtime.proposalStarted = false;
+      runtime.holdProposal = true;
+
+      const second = application.submit({ type: "submitSessionIntake", mathematics: "Explain Hausdorff separation." });
+
+      expect(runtime.proposalStarted).toBe(false);
+      expect(application.getState().learnerOperation.queued).toEqual([
+        expect.objectContaining({ type: "submitSessionIntake", label: "new Learning Session" })
+      ]);
+      runtime.completeTeaching();
+      await vi.waitFor(() => expect(runtime.proposalStarted).toBe(true));
+      runtime.releaseProposal();
+      const state = await second;
+      expect(state.learnerOperation.active).toMatchObject({ kind: "modelTeaching" });
+      const accessDecision = runtime.requestAccess({
+        requestedPolicy: "full",
+        reason: "The next explanation needs the learner-authorized reference set.",
+        exactScope: "The linked reference set",
+        intendedAction: "Read the selected references for this Learning Session."
+      });
+      await vi.waitFor(() => expect(application.getState().learnerOperation.active).toMatchObject({
+        kind: "modelTeaching", phase: "waitingForAccessDecision"
+      }));
+      const request = application.getState().sessions.at(-1)!.accessRequests.at(-1)!;
+      await application.submit({ type: "decideAccessRequest", requestId: request.id, decision: "deny" });
+      await expect(accessDecision).resolves.toMatchObject({ status: "denied" });
+    } finally {
+      runtime.completeTeaching();
+      runtime.releaseProposal();
+    }
+  });
+
+  it("supersedes a stale Full Access confirmation after cancellation and re-request", async () => {
+    const runtime = new DeterministicModelRuntime({
+      learningGoal: "Understand compactness",
+      scope: "Explain the selected claim",
+      initialTeachingDirection: "Start from the definition",
+      requiresConfirmation: false,
+      confirmationReason: null
+    }, true);
+    const { application } = await launchWithRuntime(runtime);
+    try {
+      let state = await application.submit({ type: "submitSessionIntake", mathematics: "Explain compactness." });
+      runtime.completeTeaching();
+      await application.waitForModelWork();
+      state = await application.submit({ type: "selectSessionAccessPolicy", policy: "full" });
+      const staleConfirmation = {
+        type: "decideFullAccessConfirmation",
+        decision: "confirm" as const,
+        confirmationId: "stale-confirmation"
+      };
+      state = await application.submit({
+        type: "decideFullAccessConfirmation",
+        confirmationId: state.sessions[0].pendingFullAccessConfirmationId!,
+        decision: "cancel"
+      });
+      expect(state.sessions[0].pendingFullAccessConfirmation).toBe(false);
+      state = await application.submit({ type: "selectSessionAccessPolicy", policy: "full" });
+
+      const staleResult = await application.submit(staleConfirmation);
+      expect(staleResult.learnerOperation.feedback).toMatchObject({
+        disposition: "superseded",
+        message: expect.stringMatching(/stale|fresh|superseded/i)
+      });
+      expect(state.sessions[0].pendingFullAccessConfirmation).toBe(true);
+      state = await application.submit({
+        type: "decideFullAccessConfirmation",
+        confirmationId: state.sessions[0].pendingFullAccessConfirmationId!,
+        decision: "confirm"
+      });
+      expect(state.sessions[0].accessPolicy).toBe("full");
+    } finally {
+      runtime.completeTeaching();
+      await application.waitForModelWork();
+    }
   });
 
   it("does not republish an older action snapshot over a concurrent runtime Access Request", async () => {
