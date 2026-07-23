@@ -432,6 +432,10 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
     browser = await chromium.connectOverCDP(debuggerEndpoint);
     stopTrace = await startPackagedTrace(browser, testInfo, "large-source-index-budget");
     page = await waitForPage(browser, child, () => output);
+    await action("Wait for bundled verifier installation settlement", () =>
+      expect(page!.getByRole("region", { name: "Application settings" })).toContainText(
+        "Installed and ready", { timeout: 660_000 }
+      ), 660_000);
     await page.getByLabel("New Study Workspace name").fill("Large Source Benchmark");
     await action("Create Study Workspace Large Source Benchmark", () => page!.getByRole("button", { name: "Create Study Workspace" }).press("Enter"));
     await page.getByLabel("New Study Mission name").fill("Pinned corpus indexing");
