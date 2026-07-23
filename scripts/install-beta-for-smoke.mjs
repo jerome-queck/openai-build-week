@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, lstat, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { assertRealDirectory, assertRealFile } from "./release-integrity.mjs";
 
 const root = process.cwd();
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
@@ -19,11 +20,13 @@ const executablePath = join(applicationPath, "Contents", "MacOS", "Quick Study")
 const verifierPath = join(applicationPath, "Contents", "Resources", "verifiers",
   verifierSpecification.id);
 
+await assertRealFile(artifactPath, "beta archive");
 await stat(artifactPath);
 await makeWritable(installDirectory);
 await rm(installDirectory, { recursive: true, force: true });
 await mkdir(installDirectory, { recursive: true });
 execFileSync("/usr/bin/ditto", ["-x", "-k", artifactPath, installDirectory], { stdio: "inherit" });
+await assertRealDirectory(applicationPath, "packaged application root");
 await stat(executablePath);
 await stat(verifierPath);
 execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", applicationPath], { stdio: "inherit" });

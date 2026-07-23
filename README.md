@@ -47,11 +47,14 @@ npm run build       # production renderer and Electron main-process bundles
 npm run package     # ad-hoc-signed macOS .app under out/
 npm run make:beta   # architecture-native beta zip from the packaged .app
 npm run test:smoke  # install the zip, then exercise start, persist, quit, relaunch, and resume
+npm run security:dependencies # production dependency audit; dev-only exceptions are recorded and expiring
+npm run security:secrets      # full-history secret scan with a hash-pinned Gitleaks release
+npm run security:swift        # warnings-as-errors Swift boundary analysis
 npm run quality:gate -- --evidence /absolute/path/to/release-evidence.json --out /absolute/path/to/report
 npm run verify      # all of the above in release order
 ```
 
-The versioned mathematical and failure-recovery release gate, operational budgets, evidence-collection procedure, and moderated learning-study instruments live under [`evaluation/`](evaluation/README.md). `npm run verify` exercises the gate with a clearly labelled deterministic fixture; a real release decision must supply separately collected evidence and can never default to that fixture.
+The versioned mathematical and failure-recovery release gate, operational budgets, evidence-collection procedure, and moderated learning-study instruments live under [`evaluation/`](evaluation/README.md). `npm run verify` exercises the gate with a clearly labelled deterministic fixture; a real release decision must supply separately collected evidence and can never default to that fixture. The CI workflow also runs full-history Gitleaks scanning; dependency exception scope and review dates are recorded in [`docs/security/build-release-security-remediation-2026-07-23.md`](docs/security/build-release-security-remediation-2026-07-23.md).
 
 The smoke test expects `npm run package` and `npm run make:beta` to have completed first. Packaging targets the current Mac architecture; the maker produces `out/make/zip/darwin/<arch>/Quick Study-darwin-<arch>-0.1.0.zip`. The smoke lane extracts that archive into an isolated installation directory, verifies its code signature and bundled verifier, and launches the installed copy. See the [macOS beta guide](docs/beta-release.md) for support, install, privacy, recovery, known-limitation, and feedback guidance. The build is ad-hoc signed for local and CI evaluation; Developer ID signing and notarization remain required before public internet distribution.
 
