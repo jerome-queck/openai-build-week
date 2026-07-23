@@ -1,4 +1,4 @@
-import type { TestInfo } from "@playwright/test";
+import type { Browser, TestInfo } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
 export type PackagedActionSettlement = "completed" | "failed" | "cancelled";
@@ -18,6 +18,7 @@ export type PackagedActionDiagnostics = {
   scenario: string;
   receipts: PackagedActionReceipt[];
   failures: Array<{ operation: string; error: string }>;
+  startedAt?: string;
 };
 
 export const DEFAULT_PACKAGED_ACTION_TIMEOUT_MS = 15_000;
@@ -66,8 +67,7 @@ export async function runPackagedAction<T>(
     const message = error instanceof Error ? error.message : String(error);
     const [visibleState, backendState] = await Promise.all([
       page.locator("body").innerText({ timeout: 2_000 }).catch((cause) => `unavailable: ${String(cause)}`),
-      page.evaluate(() => (window as unknown as Window & { quickStudy: { getState(): Promise<unknown> } }).quickStudy.getState())
-        .catch((cause) => ({ unavailable: String(cause) }))
+      readBoundedPackagedBackendState(page)
     ]);
     const receipt: PackagedActionReceipt = {
       operation,
@@ -112,6 +112,9 @@ export async function attachPackagedDiagnostics(
   await testInfo.attach("operation-state-receipt.json", {
     body: Buffer.from(JSON.stringify({
       scenario: diagnostics.scenario,
+      scenarioStartedAt: diagnostics.startedAt,
+      scenarioSettledAt: new Date().toISOString(),
+      scenarioElapsedMs: diagnostics.startedAt ? Date.now() - Date.parse(diagnostics.startedAt) : undefined,
       receipts: diagnostics.receipts,
       failures: diagnostics.failures,
       finalBackendState: backendState
@@ -126,6 +129,32 @@ export async function attachPackagedDiagnostics(
     body: Buffer.from(JSON.stringify({ scenario: diagnostics.scenario, failures: diagnostics.failures }, null, 2), "utf8"),
     contentType: "text/plain"
   });
+}
+
+export async function startPackagedTrace(
+  browser: Browser,
+  testInfo: TestInfo,
+  scenario: string
+): Promise<() => Promise<void>> {
+  const context = browser.contexts()[0];
+  if (!context) throw new Error(`Packaged scenario "${scenario}" exposed no browser context for tracing.`);
+  const tracePath = testInfo.outputPath(`${safeAttachmentName(scenario)}-trace.zip`);
+  let chunkStarted = true;
+  try {
+    await context.tracing.startChunk({ title: scenario });
+  } catch (error) {
+    if (!/already started|must start tracing/i.test(String(error))) throw error;
+    chunkStarted = false;
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  }
+  return async () => {
+    if (chunkStarted) await context.tracing.stopChunk({ path: tracePath });
+    else await context.tracing.stop({ path: tracePath });
+    await testInfo.attach(`${safeAttachmentName(scenario)}-trace.zip`, {
+      path: tracePath,
+      contentType: "application/zip"
+    });
+  };
 }
 
 function safeAttachmentName(operation: string): string {

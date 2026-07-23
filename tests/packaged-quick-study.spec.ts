@@ -9,6 +9,7 @@ import {
   attachPackagedDiagnostics,
   readBoundedPackagedBackendState,
   runPackagedAction,
+  startPackagedTrace,
   type PackagedActionDiagnostics
 } from "./packaged-action";
 
@@ -21,6 +22,7 @@ const executablePath = join(
   "MacOS",
   "Quick Study"
 );
+const PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS = 660_000;
 
 test("packaged critical source and access journey has an isolated release boundary", async ({}, testInfo) => {
   test.setTimeout(300_000);
@@ -28,6 +30,10 @@ test("packaged critical source and access journey has an isolated release bounda
   try {
     let page = await scenario.launch();
     await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
+    const betaSupport = page.getByRole("region", { name: "Quick Study beta support" });
+    await expect(betaSupport.getByRole("link", { name: "Report beta feedback" })).toBeVisible();
+    await expectCriticalControlsNamed(page, "dashboard and settings");
+    await expectKeyboardReachable(page, betaSupport.getByRole("link", { name: "Report beta feedback" }));
     await createWorkspace(scenario, page);
     await prepareIndexedSources(scenario, page);
 
@@ -74,6 +80,8 @@ test("packaged critical source and access journey has an isolated release bounda
     await scenario.action("Approve Access Request", () =>
       page.getByRole("button", { name: "Approve Access Request" }).press("Enter"));
     await expect(page.getByRole("region", { name: "Full Access", exact: true })).toBeVisible();
+    // Full Access confirmation cancel/reconfirm remains an explicit #115 product-race seam;
+    // this harness records the bounded access transition without pretending to repair it here.
 
     await scenario.action("Leave source and access session", () => page.getByRole("button", { name: "Leave session" }).press("Enter"));
     await scenario.quit();
@@ -201,7 +209,7 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     await scenario.action("Save exact natural-number claim", () => reformulatedProof.getByRole("button", { name: /Save Learning Artifact revision/ }).press("Enter"));
     await expect(claimTrust.getByRole("region", { name: "Formalization for mathematical claim 1" })).toContainText("theorem quickStudyNatAddZero (n : Nat) : n + 0 = n");
     const checkExactClaim = claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" });
-    await expect(checkExactClaim).toBeEnabled({ timeout: 660_000 });
+    await expect(checkExactClaim).toBeEnabled({ timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS });
     await scenario.action("Check exact natural-number claim with bundled Lean", () => checkExactClaim.press("Enter"));
     await expect(claimTrust).toContainText("Formally verified", { timeout: 60_000 });
     await expect.poll(() => scenario.output(), { timeout: 60_000 }).toContain('"status":"completed","outcome":"accepted"');
@@ -219,7 +227,7 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     expect(retainedProofLogs.length).toBeGreaterThan(0);
     await scenario.action("Leave session before Lean reinstall", () => page.getByRole("button", { name: "Leave session" }).press("Enter"));
     await scenario.action("Reinstall supported Lean environment", () => settings.getByRole("button", { name: "Reinstall supported Lean environment" }).press("Enter"));
-    await expect(settings).toContainText("Installed and ready", { timeout: 660_000 });
+    await expect(settings).toContainText("Installed and ready", { timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS });
     await scenario.action("Resume session after Lean reinstall", () => page.getByRole("button", { name: "Resume Learning Session", exact: true }).press("Enter"));
     await scenario.action("Check exact claim after Lean reinstall", () => claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter"));
     await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toHaveCount(2, { timeout: 60_000 });
@@ -233,6 +241,18 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     const exportedArtifact = await readFile(scenario.paths.artifactExportPath, "utf8");
     expect(exportedArtifact).toContain("- Exact statement status: Formally verified");
     expect(exportedArtifact).toContain("### Note Interpretation");
+    const verifierLifecycleSamplesMs = readCompletedVerifierLifecycleSamples(scenario.output());
+    expect(verifierLifecycleSamplesMs.length).toBeGreaterThan(0);
+    const verifierLifecycleP95Ms = nearestRankP95(verifierLifecycleSamplesMs);
+    expect(verifierLifecycleP95Ms).toBeLessThanOrEqual(PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS);
+    await updateBetaInstallReport((report) => {
+      report.operationalMeasurements = {
+        ...(report.operationalMeasurements as Record<string, unknown> | undefined),
+        verifierLifecycleP95Ms,
+        verifierLifecycleSamplesMs
+      };
+      (report.validations as string[]).push("verifier-lifecycle-budget");
+    });
   } finally {
     await scenario.dispose();
   }
@@ -358,6 +378,7 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let stopTrace: (() => Promise<void>) | undefined;
   const diagnostics: PackagedActionDiagnostics = { scenario: "large-source-index-budget", receipts: [], failures: [] };
   const action = <T>(operation: string, work: () => Promise<T>, timeoutMs?: number) => {
     if (!page) throw new Error(`Cannot run packaged operation "${operation}" before the renderer is ready.`);
@@ -366,6 +387,7 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
   try {
     const debuggerEndpoint = await waitForDebugger(port, child, () => output);
     browser = await chromium.connectOverCDP(debuggerEndpoint);
+    stopTrace = await startPackagedTrace(browser, testInfo, "large-source-index-budget");
     page = await waitForPage(browser, child, () => output);
     await page.getByLabel("New Study Workspace name").fill("Large Source Benchmark");
     await action("Create Study Workspace Large Source Benchmark", () => page!.getByRole("button", { name: "Create Study Workspace" }).press("Enter"));
@@ -410,6 +432,7 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
     });
   } finally {
     const finalBackendState = page ? await readBoundedPackagedBackendState(page) : undefined;
+    await stopTrace?.().catch(() => undefined);
     await browser?.close().catch(() => undefined);
     await terminateChild(child);
     await attachPackagedDiagnostics(undefined, testInfo, diagnostics, output, finalBackendState);
@@ -423,7 +446,7 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-task-smoke-"));
   const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-runtime-control-"));
   const accessStatePath = join(runtimeControlDirectory, "fake-codex-access.json");
-  let launched: { browser: Browser; page: Page; process: ChildProcess; output(): string } | undefined;
+  let launched: { browser: Browser; page: Page; process: ChildProcess; output(): string; stopTrace: () => Promise<void> } | undefined;
   const diagnostics: PackagedActionDiagnostics = { scenario: "agent-task-recovery", receipts: [], failures: [] };
   const agentLatencySamples: Array<{
     outcome: "checkpointed" | "completed" | "cancelled" | "failed";
@@ -448,8 +471,9 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
     child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
     const debuggerEndpoint = await waitForDebugger(port, child, () => output);
     const browser = await chromium.connectOverCDP(debuggerEndpoint);
+    const stopTrace = await startPackagedTrace(browser, testInfo, "agent-task-recovery");
     const page = await waitForPage(browser, child, () => output);
-    launched = { browser, page, process: child, output: () => output };
+    launched = { browser, page, process: child, output: () => output, stopTrace };
     return page;
   };
 
@@ -457,6 +481,7 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
     if (!launched) return;
     const current = launched;
     launched = undefined;
+    await current.stopTrace();
     await current.page.close();
     const exitedNormally = await waitForExit(current.process, 5_000);
     await current.browser.close().catch(() => undefined);
@@ -577,10 +602,12 @@ test("installed Quick Study authenticates with the live Codex runtime and comple
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let stopTrace: (() => Promise<void>) | undefined;
   const diagnostics: PackagedActionDiagnostics = { scenario: "live-codex-teaching", receipts: [], failures: [] };
   try {
     const debuggerEndpoint = await waitForDebugger(port, child, () => output);
     browser = await chromium.connectOverCDP(debuggerEndpoint);
+    stopTrace = await startPackagedTrace(browser, testInfo, "live-codex-teaching");
     page = await waitForPage(browser, child, () => output);
     await expect(page.getByRole("heading", { name: /Connected with (ChatGPT subscription|API key)/ }))
       .toBeVisible({ timeout: 30_000 });
@@ -601,6 +628,7 @@ test("installed Quick Study authenticates with the live Codex runtime and comple
     });
   } finally {
     const finalBackendState = page ? await readBoundedPackagedBackendState(page) : undefined;
+    await stopTrace?.().catch(() => undefined);
     await browser?.close().catch(() => undefined);
     await terminateChild(child);
     await attachPackagedDiagnostics(undefined, testInfo, diagnostics, output, finalBackendState);
@@ -634,10 +662,12 @@ test("packaged Quick Study rejects a child-controlled authentication destination
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let stopTrace: (() => Promise<void>) | undefined;
   const diagnostics: PackagedActionDiagnostics = { scenario: "authentication-navigation-policy", receipts: [], failures: [] };
   try {
     const debuggerEndpoint = await waitForDebugger(port, child, () => output);
     browser = await chromium.connectOverCDP(debuggerEndpoint);
+    stopTrace = await startPackagedTrace(browser, testInfo, "authentication-navigation-policy");
     page = await waitForPage(browser, child, () => output);
     await expect(page.getByRole("heading", { name: "Connect Codex to begin teaching" })).toBeVisible();
 
@@ -649,6 +679,7 @@ test("packaged Quick Study rejects a child-controlled authentication destination
     await expect(lstat(openLogPath)).rejects.toMatchObject({ code: "ENOENT" });
   } finally {
     const finalBackendState = page ? await readBoundedPackagedBackendState(page) : undefined;
+    await stopTrace?.().catch(() => undefined);
     await page?.close().catch(() => undefined);
     const exitedNormally = await waitForExit(child, 5_000);
     await browser?.close().catch(() => undefined);
@@ -713,7 +744,12 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
   await writeFile(join(primaryFolderPath, "problem-set.txt"), "Classify the orbits and stabilizers.", "utf8");
   await writeFile(unrelatedPath, "PRIVATE_UNRELATED_DEVICE_CONTENT", "utf8");
   const accessStatePath = join(runtimeControlDirectory, "fake-codex-access.json");
-  const diagnostics: PackagedActionDiagnostics = { scenario: scenarioName, receipts: [], failures: [] };
+  const diagnostics: PackagedActionDiagnostics = {
+    scenario: scenarioName,
+    startedAt: new Date().toISOString(),
+    receipts: [],
+    failures: []
+  };
   const coldStartDurationsMs: number[] = [];
   const memorySamples: Array<{ recordedAt: string; rssMiB: number }> = [];
   let peakMemoryMiB = 0;
@@ -722,6 +758,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
   let launched: {
     browser: Browser; page: Page; process: ChildProcess; output(): string;
     memorySampler: ReturnType<typeof setInterval>;
+    stopTrace: () => Promise<void>;
   } | undefined;
 
   const launch = async (): Promise<Page> => {
@@ -748,6 +785,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
     child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
     const debuggerEndpoint = await waitForDebugger(port, child, () => output);
     const browser = await chromium.connectOverCDP(debuggerEndpoint);
+    const stopTrace = await startPackagedTrace(browser, testInfo, scenarioName);
     const page = await waitForPage(browser, child, () => output);
     await page.getByLabel("Typed mathematics").waitFor({ state: "visible" });
     coldStartDurationsMs.push(Date.now() - startedAt);
@@ -762,7 +800,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
     sampleMemory();
     const memorySampler = setInterval(sampleMemory, 1_000);
     memorySampler.unref();
-    launched = { browser, page, process: child, output: () => output, memorySampler };
+    launched = { browser, page, process: child, output: () => output, memorySampler, stopTrace };
     return page;
   };
 
@@ -772,6 +810,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
     launched = undefined;
     clearInterval(current.memorySampler);
     try {
+      await current.stopTrace();
       await current.page.close();
       const exitedNormally = await waitForExit(current.process, 5_000);
       await current.browser.close().catch(() => undefined);
@@ -1008,6 +1047,19 @@ async function updateBetaInstallReport(update: (report: Record<string, unknown>)
 function nearestRankP95(values: number[]): number {
   const ordered = [...values].sort((left, right) => left - right);
   return ordered[Math.ceil(ordered.length * 0.95) - 1] ?? Number.POSITIVE_INFINITY;
+}
+
+function readCompletedVerifierLifecycleSamples(output: string): number[] {
+  return output.split("\n").flatMap((line) => {
+    const match = line.match(/\[Lean integrity\] (\{.*\})$/);
+    if (!match) return [];
+    try {
+      const event = JSON.parse(match[1]) as { status?: string; elapsedMs?: number };
+      return event.status === "completed" && typeof event.elapsedMs === "number" ? [event.elapsedMs] : [];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function processTreeRssSnapshot(rootPid: number | undefined): {
