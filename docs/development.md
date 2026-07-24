@@ -45,6 +45,7 @@ Run focused checks while changing code, then run the complete lane before review
 | `npm run security:dependencies` | Production dependency audit |
 | `npm run security:secrets` | Full-history secret scan with the pinned Gitleaks release |
 | `npm run security:swift` | Warnings-as-errors Swift boundary analysis |
+| `npm run license:audit` | Inspect a packaged application for required legal surfaces, upstream notices, and allowed runtime dependency licenses |
 | `npm run policy:documentation` | Required documents, local Markdown links and anchors, documented npm commands, pull-request template declarations, active repository-reference checks, and conservative ignore-rule checks; PR-body answers are checked in pull-request CI |
 | `npm run policy:classify -- --base <sha> --head <sha>` | Fail-closed changed-path classification and selected verification surfaces |
 | `npm run test:policy` | Focused policy fixtures for documentation and changed-path classification |
@@ -64,6 +65,16 @@ The [evaluation guide](../evaluation/README.md) owns benchmark evidence collecti
 ## Packaging and distribution boundary
 
 `npm run package`, `npm run make:beta`, and `npm run test:smoke` produce an internal evaluation candidate for the current Mac architecture. The archive is ad-hoc signed and is not a signed, notarized ordinary-user release. Do not publish it as a public download or instruct users to bypass Gatekeeper. Developer ID signing, notarization, stapling, assessment, and a clean-machine audit remain future release gates.
+
+Every packaged application also includes Clarifold's `LICENSE`, `NOTICE`, and
+`THIRD_PARTY_NOTICES.md` at the application resource root. Electron's own
+`LICENSE` and `LICENSES.chromium.html` files are copied into the application
+resource root as `ELECTRON_LICENSE` and `CHROMIUM_LICENSES.html` before code
+signing for ZIP
+recipients. The Verifier Environment's upstream license files remain alongside
+their respective packaged components. Keep these files with any permitted
+noncommercial redistribution and consult the [license audit](legal/dependency-and-asset-license-audit.md)
+when the packaged contents change.
 
 For candidate evidence, use the commands in the [evaluation guide](../evaluation/README.md) after collecting evidence against the exact committed candidate. Do not publish candidate evidence or rebuild the application after the evidence has been bound to a commit.
 

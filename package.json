@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "A local-first mathematical learning workbench.",
   "main": "dist/main/main.js",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "engines": {
     "node": ">=22 <26"
@@ -23,6 +24,7 @@
     "security:dependencies": "npm audit --omit=dev --audit-level=high",
     "security:secrets": "node scripts/run-gitleaks.mjs",
     "security:swift": "xcrun swiftc -warnings-as-errors -typecheck native/source-index-extractor.swift -framework AppKit -framework Foundation -framework ImageIO -framework PDFKit -framework Vision && xcrun swiftc -warnings-as-errors -typecheck native/source-bookmark-helper.swift -framework Foundation && xcrun swiftc -warnings-as-errors -typecheck tests/fixtures/create-scanned-pdf.swift -framework AppKit -framework Foundation -framework PDFKit",
+    "license:audit": "node scripts/audit-packaged-licenses.mjs",
     "policy:documentation": "node scripts/check-documentation.mjs",
     "policy:classify": "node scripts/change-classifier.mjs",
     "test:policy": "node --test scripts/policy.test.mjs",
@@ -39,7 +41,7 @@
     "test:smoke:index-budget": "playwright test --config=playwright.config.ts --grep \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
     "test:smoke:functional": "playwright test --config=playwright.config.ts --grep-invert \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
     "verify:prepackage": "npm run lint && npm run typecheck && npm test && npm run test:policy && npm run policy:documentation",
-    "verify:package": "npm run quality:gate:fixture && npm run package && npm run make:beta && npm run test:smoke",
+    "verify:package": "npm run quality:gate:fixture && npm run package && npm run make:beta && npm run license:audit && npm run test:smoke",
     "verify": "npm run verify:prepackage && npm run verify:package"
   },
   "dependencies": {
