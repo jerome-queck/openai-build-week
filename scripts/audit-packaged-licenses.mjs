@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
+const identity = JSON.parse(await readFile(join(projectRoot, "src", "shared", "clarifold-identity.json"), "utf8"));
 const LICENSE_SHA256 = "ffcca38841adb694b6f380647e15f17c446a4d1656fed51a1e2041d064c94cc8";
 const NOTICE_SHA256 = "f813c9234a763c6b2d2ba7d0630baa11eb1161e85dd1e84ea778799171b34d84";
 const THIRD_PARTY_NOTICES_SHA256 = "6b0225ece922033d243e1287514f0643a6f88a6561ad150c9d20b182f1526a08";
@@ -167,10 +168,10 @@ function sha256(contents) {
 async function findPackagedApplication() {
   const outDirectory = join(projectRoot, "out");
   const entries = await readdir(outDirectory, { withFileTypes: true });
-  const expectedPackageName = `Quick Study-darwin-${process.arch}`;
+  const expectedPackageName = `${identity.productName}-darwin-${process.arch}`;
   const packageDirectory = entries.find((entry) => entry.isDirectory() && entry.name === expectedPackageName);
-  if (!packageDirectory) throw new Error(`No packaged Quick Study application found under ${outDirectory}.`);
-  return join(outDirectory, packageDirectory.name, "Quick Study.app");
+  if (!packageDirectory) throw new Error(`No packaged ${identity.productName} application found under ${outDirectory}.`);
+  return join(outDirectory, packageDirectory.name, `${identity.productName}.app`);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

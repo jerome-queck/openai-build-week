@@ -4,12 +4,12 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 const root = process.cwd();
-const modelPath = process.env.QUICK_STUDY_MODEL_EVIDENCE;
-const verdictPath = process.env.QUICK_STUDY_EVALUATOR_VERDICTS;
-const recoveryPath = process.env.QUICK_STUDY_RECOVERY_EVIDENCE;
+const modelPath = process.env.CLARIFOLD_MODEL_EVIDENCE;
+const verdictPath = process.env.CLARIFOLD_EVALUATOR_VERDICTS;
+const recoveryPath = process.env.CLARIFOLD_RECOVERY_EVIDENCE;
 if (!modelPath || !verdictPath || !recoveryPath) {
   throw new Error(
-    "Set QUICK_STUDY_MODEL_EVIDENCE, QUICK_STUDY_EVALUATOR_VERDICTS, and QUICK_STUDY_RECOVERY_EVIDENCE."
+    "Set CLARIFOLD_MODEL_EVIDENCE, CLARIFOLD_EVALUATOR_VERDICTS, and CLARIFOLD_RECOVERY_EVIDENCE."
   );
 }
 

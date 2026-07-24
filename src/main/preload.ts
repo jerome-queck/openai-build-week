@@ -12,7 +12,7 @@ import type {
   SourceSearchResult
 } from "../shared/learning-application";
 
-contextBridge.exposeInMainWorld("quickStudy", {
+contextBridge.exposeInMainWorld("clarifold", {
   getState: (): Promise<LearningApplicationState> => ipcRenderer.invoke("learning:getState"),
   submit: (action: LearnerAction): Promise<LearningApplicationState> => ipcRenderer.invoke("learning:submit", action),
   getAgentWorkLogEvidence: (sessionId: string, fromSequence: number, toSequence: number): Promise<AgentWorkLogEvidence[]> =>

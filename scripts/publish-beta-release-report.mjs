@@ -5,9 +5,9 @@ import { basename, dirname, join } from "node:path";
 import { assertRealFile } from "./release-integrity.mjs";
 
 const root = process.cwd();
-const modelPath = requiredEvidencePath("QUICK_STUDY_MODEL_EVIDENCE");
-const verdictPath = requiredEvidencePath("QUICK_STUDY_EVALUATOR_VERDICTS");
-const recoveryPath = requiredEvidencePath("QUICK_STUDY_RECOVERY_EVIDENCE");
+const modelPath = requiredEvidencePath("CLARIFOLD_MODEL_EVIDENCE");
+const verdictPath = requiredEvidencePath("CLARIFOLD_EVALUATOR_VERDICTS");
+const recoveryPath = requiredEvidencePath("CLARIFOLD_RECOVERY_EVIDENCE");
 const candidateCommit = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (execFileSync("/usr/bin/git", ["status", "--porcelain"], { encoding: "utf8" }).trim()) {
   throw new Error("Publishing beta release evidence requires a clean, committed candidate worktree.");

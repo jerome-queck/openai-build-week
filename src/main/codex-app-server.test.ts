@@ -129,7 +129,7 @@ describe("Codex app-server contract", () => {
         id: 1,
         method: "initialize",
         params: {
-          clientInfo: { name: "quick_study", title: "Quick Study", version: "0.1.0" },
+          clientInfo: { name: "clarifold", title: "Clarifold", version: "0.2.0" },
           capabilities: { experimentalApi: true, requestAttestation: false }
         }
       },

@@ -25,6 +25,7 @@ import { ModelAccessError, isCompleteEvidenceTransferContext, type
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createInterface } from "node:readline";
 import { sessionAccessPolicyLabel } from "../shared/session-access";
+import { CLARIFOLD_IDENTITY } from "../shared/clarifold-identity";
 import { requireApprovedChatGptAuthenticationUrl } from "./authentication-navigation";
 import { boundedProcessEnvironment } from "./bounded-process-environment";
 
@@ -174,7 +175,7 @@ class AppServerClient {
 
   async initialize(): Promise<void> {
     const response = await this.request("initialize", {
-      clientInfo: { name: "quick_study", title: "Quick Study", version: "0.1.0" },
+      clientInfo: { name: CLARIFOLD_IDENTITY.runtimeClientName, title: CLARIFOLD_IDENTITY.productName, version: CLARIFOLD_IDENTITY.version },
       capabilities: { experimentalApi: true, requestAttestation: false }
     });
     if (!isInitializeResponse(response)) {
@@ -345,7 +346,7 @@ export class CodexAppServerRuntime implements ModelRuntime {
     return new CodexAppServerRuntime(client, cwd, options.turnTimeoutMs ?? 120_000);
   }
 
-  static launch(cwd: string, command = process.env.QUICK_STUDY_CODEX_PATH ?? "codex"): Promise<CodexAppServerRuntime> {
+  static launch(cwd: string, command = "codex"): Promise<CodexAppServerRuntime> {
     return CodexAppServerRuntime.connect(new CodexProcessTransport(command, cwd), cwd);
   }
 
@@ -787,8 +788,8 @@ export class CodexAppServerRuntime implements ModelRuntime {
         : contextualQuestion
         ? "You are the bounded teaching runtime for a Question Card. Use only the learner-approved Ask Bar context and supplied authorized source context so the Context Used Receipt remains complete. Do not request or inspect additional local material. Revise one coherent Question Card rather than producing a chat transcript."
         : accessPolicy === "full"
-        ? "You are the bounded teaching runtime for Quick Study. Full Access supplies all learner-authorized source context through the application broker. Use only that supplied authorized source context. Do not inspect other local files, execute commands, or modify files. Produce only learner-facing mathematical teaching output."
-        : "You are the bounded teaching runtime for Quick Study. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output.")
+        ? "You are the bounded teaching runtime for Clarifold. Full Access supplies all learner-authorized source context through the application broker. Use only that supplied authorized source context. Do not inspect other local files, execute commands, or modify files. Produce only learner-facing mathematical teaching output."
+        : "You are the bounded teaching runtime for Clarifold. Use only supplied authorized context. If broader local context is necessary, call request_session_access with the reason, exact scope, and intended action. Do not execute commands or modify files. Produce only learner-facing mathematical teaching output.")
     }) as { thread: { id: string } };
     onRuntimeEvent?.({
       type: "threadStarted",

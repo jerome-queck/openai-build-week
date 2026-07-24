@@ -13,7 +13,7 @@ import type {
 
 declare global {
   interface Window {
-    quickStudy: {
+    clarifold: {
       getState(): Promise<LearningApplicationState>;
       submit(action: LearnerAction): Promise<LearningApplicationState>;
       getAgentWorkLogEvidence(sessionId: string, fromSequence: number, toSequence: number): Promise<AgentWorkLogEvidence[]>;

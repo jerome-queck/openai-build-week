@@ -36,11 +36,11 @@ export function App() {
   const [returnFocusAnchorId, setReturnFocusAnchorId] = useState<string | null>(null);
 
   useEffect(() => {
-    void window.quickStudy.getState().then(setState);
-    return window.quickStudy.onStateChanged(setState);
+    void window.clarifold.getState().then(setState);
+    return window.clarifold.onStateChanged(setState);
   }, []);
 
-  if (!state) return <main className="loading">Opening Quick Study…</main>;
+  if (!state) return <main className="loading">Opening Clarifold…</main>;
   if (state.persistenceRecovery.status === "blocked") return <StorageRecovery state={state} />;
   if (state.screen === "delayedTransfer" && state.activeDelayedTransferCheckId) {
     return <DelayedTransferCheckScreen state={state} onState={setState} />;
@@ -80,8 +80,8 @@ function StorageRecovery({ state }: { state: LearningApplicationState }) {
 function Brand() {
   return (
     <header className="brand">
-      <span className="brand-mark" aria-hidden="true">Q</span>
-      <span>Quick Study</span>
+        <span className="brand-mark" aria-hidden="true">C</span>
+      <span>Clarifold</span>
       <span className="local-pill">Stored locally</span>
     </header>
   );
@@ -150,10 +150,10 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
     setError(null);
     try {
       if (choice === "off") {
-        onState(await window.quickStudy.submit({ type: "declineDelayedTransfer", sessionId: session.id }));
+        onState(await window.clarifold.submit({ type: "declineDelayedTransfer", sessionId: session.id }));
         return;
       }
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "scheduleDelayedTransfer",
         sessionId: session.id,
         intendedTransferGoal,
@@ -188,7 +188,7 @@ function DelayedTransferPrompt({ session, onState }: { session: LearningSession;
       <div className="resume-actions">
         <button className="primary" disabled={choice === "later" && (!intendedTransferGoal.trim() || !dueAt)}
           onClick={() => void save()}>Save follow-up choice</button>
-        <button className="secondary" onClick={() => void window.quickStudy.submit({
+        <button className="secondary" onClick={() => void window.clarifold.submit({
           type: "dismissDelayedTransfer", sessionId: session.id
         }).then(onState).catch((cause: unknown) => setError(
           cause instanceof Error ? cause.message : "The Delayed Transfer prompt could not be dismissed."
@@ -218,7 +218,7 @@ function FollowUpsCard({ state, onState }: { state: LearningApplicationState; on
         aria-label={`Open Follow-up Queue with ${checks.length} active or completed item${checks.length === 1 ? "" : "s"}`}
         onClick={() => {
           setNavigationError(null);
-          void window.quickStudy.submit({ type: "openFollowUpQueue" }).then(onState).catch((cause: unknown) =>
+          void window.clarifold.submit({ type: "openFollowUpQueue" }).then(onState).catch((cause: unknown) =>
             setNavigationError(cause instanceof Error ? cause.message : "The Follow-up Queue could not be opened."));
         }}>
         Open Follow-up Queue
@@ -241,7 +241,7 @@ function FollowUpQueue({ state, onState }: { state: LearningApplicationState; on
       <p>This optional view keeps Delayed Transfer Checks away from active-session Resume Cards and ordinary navigation.</p>
       <button className="secondary" onClick={() => {
         setNavigationError(null);
-        void window.quickStudy.submit({ type: "closeFollowUpQueue" }).then(onState).catch((cause: unknown) =>
+        void window.clarifold.submit({ type: "closeFollowUpQueue" }).then(onState).catch((cause: unknown) =>
           setNavigationError(cause instanceof Error ? cause.message : "The dashboard could not be restored."));
       }}>
         Return to dashboard
@@ -265,7 +265,7 @@ function FollowUpQueueItem({ check, onState }: {
     setError(null);
     try {
       const nextDueAt = new Date(dueAt).toISOString();
-      onState(await window.quickStudy.submit({ type: "rescheduleDelayedTransfer", checkId: check.id, dueAt: nextDueAt }));
+      onState(await window.clarifold.submit({ type: "rescheduleDelayedTransfer", checkId: check.id, dueAt: nextDueAt }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The follow-up could not be rescheduled.");
     }
@@ -283,19 +283,19 @@ function FollowUpQueueItem({ check, onState }: {
         onChange={(event) => setDueAt(event.target.value)} />
       <div className="resume-actions">
         {due && <button className="primary" aria-label={`Start delayed check for ${check.originatingSessionTarget}`}
-          onClick={() => void window.quickStudy.submit({ type: "startDelayedTransferCheck", checkId: check.id })
+          onClick={() => void window.clarifold.submit({ type: "startDelayedTransferCheck", checkId: check.id })
             .then(onState).catch((cause: unknown) => setError(
               cause instanceof Error ? cause.message : "The delayed check could not be started."
             ))}>Start delayed check</button>}
         <button className="secondary" aria-label={`Save new time for ${check.originatingSessionTarget}`}
           disabled={!dueAt} onClick={() => void reschedule()}>Save new time</button>
         {due && <button className="text-button" aria-label={`Skip delayed check for ${check.originatingSessionTarget}`}
-          onClick={() => void window.quickStudy.submit({ type: "skipDelayedTransferCheck", checkId: check.id })
+          onClick={() => void window.clarifold.submit({ type: "skipDelayedTransferCheck", checkId: check.id })
             .then(onState).catch((cause: unknown) => setError(
               cause instanceof Error ? cause.message : "The delayed check could not be skipped."
             ))}>Skip without evidence</button>}
         <button className="text-button" aria-label={`Cancel follow-up for ${check.originatingSessionTarget}`}
-          onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransfer", checkId: check.id })
+          onClick={() => void window.clarifold.submit({ type: "cancelDelayedTransfer", checkId: check.id })
             .then(onState).catch((cause: unknown) => setError(
               cause instanceof Error ? cause.message : "The follow-up could not be cancelled."
             ))}>Cancel follow-up</button>
@@ -307,7 +307,7 @@ function FollowUpQueueItem({ check, onState }: {
         ? "Stopping task preparation…"
         : "Preparing an unseen, structurally comparable task…"}</p>
       <button className="secondary" aria-label={`Cancel task preparation for ${check.originatingSessionTarget}`}
-        onClick={() => void window.quickStudy.submit({ type: "cancelDelayedTransferPreparation", checkId: check.id })
+        onClick={() => void window.clarifold.submit({ type: "cancelDelayedTransferPreparation", checkId: check.id })
           .then(onState).catch((cause: unknown) => setError(
             cause instanceof Error ? cause.message : "Task preparation could not be cancelled."
           ))}>{check.status === "stopping" ? "Retry stop" : "Cancel task preparation"}</button>
@@ -315,7 +315,7 @@ function FollowUpQueueItem({ check, onState }: {
     </div>}
     {(check.status === "inProgress" || check.status === "completed") && <button className="secondary"
       aria-label={`${check.status === "completed" ? "Review result" : "Continue delayed check"} for ${check.originatingSessionTarget}`}
-      onClick={() => void window.quickStudy.submit({ type: "openDelayedTransferCheck", checkId: check.id })
+      onClick={() => void window.clarifold.submit({ type: "openDelayedTransferCheck", checkId: check.id })
         .then(onState).catch((cause: unknown) => setError(
           cause instanceof Error ? cause.message : "The delayed check could not be opened."
         ))}>{check.status === "completed" ? "Review result" : "Continue delayed check"}</button>}
@@ -341,7 +341,7 @@ function DelayedTransferCheckScreen({ state, onState }: {
     setError(null);
     try {
       let nextState = state;
-      for (const action of actions) nextState = await window.quickStudy.submit(action);
+      for (const action of actions) nextState = await window.clarifold.submit(action);
       onState(nextState);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Delayed Transfer Check could not be updated.");
@@ -479,7 +479,7 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
   const updateEnvironment = async (action: LearnerAction) => {
     setLeanActionError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (error) {
       setLeanActionError(error instanceof Error ? error.message : "The Lean environment could not be updated.");
     }
@@ -492,7 +492,7 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
         <input
           type="checkbox"
           checked={state.personalNoteSynthesisPreference.includePersonalNotes}
-          onChange={(event) => void window.quickStudy.submit({
+          onChange={(event) => void window.clarifold.submit({
             type: "setPersonalNoteSynthesis",
             enabled: event.target.checked
           }).then(onState)}
@@ -501,7 +501,7 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
       </label>
       <small>Enabled by default. Personal Notes remain excluded from ordinary Teaching Moves.</small>
       <section className="beta-support" aria-labelledby="beta-support-title">
-        <h3 id="beta-support-title">Quick Study beta support</h3>
+        <h3 id="beta-support-title">Clarifold beta support</h3>
         <p><strong>Supported baseline:</strong> install and hardware requirements are documented with the release artifact.</p>
         <p><strong>Privacy and access defaults:</strong> learner work is stored locally. Linked Sources stay in their original locations and are read-only. Model access, external research, and Source Excerpt Egress remain separate, visible controls.</p>
         <p><strong>Recovery:</strong> Local Working Mode keeps local study available when Codex cannot be reached. Missing sources retain their identity and offer Retry or Locate again. Unfinished Agent Tasks require explicit resume after relaunch.</p>
@@ -509,7 +509,7 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
         <p><a href="https://github.com/jerome-queck/clarifold/issues/new"
           onClick={(event) => {
             event.preventDefault();
-            void window.quickStudy.openExternal(event.currentTarget.href);
+            void window.clarifold.openExternal(event.currentTarget.href);
           }}>Report beta feedback</a></p>
       </section>
       <div className="verifier-environment" aria-labelledby="lean-environment-title">
@@ -583,7 +583,7 @@ function ApplicationSettings({ state, onState }: { state: LearningApplicationSta
           Preparing the installed verifier integrity before Lean can launch. Ordinary study remains available.
         </p>}
         {(environment.status === "installing" || environment.status === "removing")
-          && <p role="status">Do not quit Quick Study while this local environment operation completes.</p>}
+          && <p role="status">Do not quit Clarifold while this local environment operation completes.</p>}
         {(environment.status === "integrityFailed" || environment.status === "installFailed"
           || environment.status === "removeFailed" || environment.status === "cleanupRequired") && <div role="alert">
           <p>{environment.error ?? "The Lean environment needs recovery before it can be used."}</p>
@@ -647,19 +647,19 @@ function SourcesPanel({ workspace, state, onState }: {
     try {
       onState(await action());
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Quick Study could not update this source.");
+      setSourceError(error instanceof Error ? error.message : "Clarifold could not update this source.");
     }
   };
   const open = async (sourceId: string) => {
     setSourceError(null);
     try {
-      setView(await window.quickStudy.openLinkedSource(sourceId));
+      setView(await window.clarifold.openLinkedSource(sourceId));
     } catch (error) {
-      setSourceError(error instanceof Error ? error.message : "Quick Study could not open this source.");
+      setSourceError(error instanceof Error ? error.message : "Clarifold could not open this source.");
     }
   };
-  const locate = (sourceId: string) => runSourceAction(() => window.quickStudy.locateLinkedSource(sourceId));
-  const preserveSnapshot = (sourceId: string) => runSourceAction(() => window.quickStudy.preserveSourceSnapshot(sourceId));
+  const locate = (sourceId: string) => runSourceAction(() => window.clarifold.locateLinkedSource(sourceId));
+  const preserveSnapshot = (sourceId: string) => runSourceAction(() => window.clarifold.preserveSourceSnapshot(sourceId));
 
   return (
     <section className="sources-card" aria-labelledby="sources-title">
@@ -674,13 +674,13 @@ function SourcesPanel({ workspace, state, onState }: {
         <button
           className="secondary"
           disabled={Boolean(primaryFolder)}
-          onClick={() => void runSourceAction(() => window.quickStudy.linkPrimaryFolder(workspace.id))}
+          onClick={() => void runSourceAction(() => window.clarifold.linkPrimaryFolder(workspace.id))}
         >
           {primaryFolder ? "Primary Folder linked" : "Link Primary Folder"}
         </button>
         <button
           className="secondary"
-          onClick={() => void runSourceAction(() => window.quickStudy.linkExternalAttachment(workspace.id))}
+          onClick={() => void runSourceAction(() => window.clarifold.linkExternalAttachment(workspace.id))}
         >Add External Attachment</button>
       </div>
       <SourceGroup
@@ -723,7 +723,7 @@ function SourcesPanel({ workspace, state, onState }: {
             affectedTeachingCards={cards} affectedAnnotations={annotations} affectedTrailItems={trailItems}
             sourceView={view?.status === "available" && view.sourceId === source.id ? view : null}
             onOpenSource={() => open(source.id)}
-            onResolve={async (action) => onState(await window.quickStudy.submit(action))} />;
+            onResolve={async (action) => onState(await window.clarifold.submit(action))} />;
         })}
       </section>}
       <div className="source-group">
@@ -793,7 +793,7 @@ function SourceIndexPanel({ workspace, state, onState }: {
     setOpened(null);
     setBusy("Searching indexed source content…");
     try {
-      setResults(await window.quickStudy.searchSourceIndex(workspace.id, query));
+      setResults(await window.clarifold.searchSourceIndex(workspace.id, query));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Source Index could not be searched.");
     } finally {
@@ -804,7 +804,7 @@ function SourceIndexPanel({ workspace, state, onState }: {
     setError(null);
     setBusy("Opening the indexed source location…");
     try {
-      setOpened(await window.quickStudy.openSourceSearchResult(resultId));
+      setOpened(await window.clarifold.openSourceSearchResult(resultId));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Source Index result could not be opened.");
     } finally {
@@ -835,13 +835,13 @@ function SourceIndexPanel({ workspace, state, onState }: {
                   <button className="secondary" aria-label={`${shouldRebuild ? "Rebuild" : "Build"} Source Index for ${source.name}`}
                     disabled={Boolean(busy)}
                     onClick={() => void runIndexMutation(shouldRebuild ? "Rebuilding the Source Index…" : "Building the Source Index…", () => shouldRebuild
-                      ? window.quickStudy.rebuildSourceIndex(source.id)
-                      : window.quickStudy.indexSource(source.id))}>
+                      ? window.clarifold.rebuildSourceIndex(source.id)
+                      : window.clarifold.indexSource(source.id))}>
                     {shouldRebuild ? "Rebuild index" : "Build index"}
                   </button>
                   <button className="text-button" aria-label={`Clear Source Index for ${source.name}`}
                     disabled={Boolean(busy) || !status || status.status === "cleared"}
-                    onClick={() => void runIndexMutation("Clearing the Source Index…", () => window.quickStudy.clearSourceIndex(source.id))}>Clear index</button>
+                    onClick={() => void runIndexMutation("Clearing the Source Index…", () => window.clarifold.clearSourceIndex(source.id))}>Clear index</button>
                 </div>
               </li>
             );
@@ -984,7 +984,7 @@ function ModelAccessPanel({ state, onState }: { state: LearningApplicationState;
         <small>You can open, resume, search, and edit local sessions. Model teaching is unavailable.</small>
       </div>
       <button className="secondary" disabled={state.modelRuntimePausedForFormalVerification}
-        onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
+        onClick={() => void window.clarifold.submit({ type: "refreshAuthentication" }).then(onState)}>
         {state.modelRuntimePausedForFormalVerification ? "Lean check in progress" : "Check Codex access"}
       </button>
     </section>
@@ -999,13 +999,13 @@ function AuthenticationPanel({ state, onState }: { state: LearningApplicationSta
   const [apiKey, setApiKey] = useState("");
   const authentication = state.authentication;
   const signInWithChatGpt = async () => {
-    const next = await window.quickStudy.submit({ type: "startChatGptLogin" });
+    const next = await window.clarifold.submit({ type: "startChatGptLogin" });
     onState(next);
-    if (next.authentication.loginUrl) await window.quickStudy.openExternal(next.authentication.loginUrl);
+    if (next.authentication.loginUrl) await window.clarifold.openExternal(next.authentication.loginUrl);
   };
   const useApiKey = async (event: FormEvent) => {
     event.preventDefault();
-    const next = await window.quickStudy.submit({ type: "loginWithApiKey", apiKey });
+    const next = await window.clarifold.submit({ type: "loginWithApiKey", apiKey });
     setApiKey("");
     onState(next);
   };
@@ -1022,7 +1022,7 @@ function AuthenticationPanel({ state, onState }: { state: LearningApplicationSta
             : "Connect Codex to begin teaching"}
         </h2>
         {authentication.status === "signedIn" ? (
-          <p className="subtle">{authentication.accountLabel ?? "Codex owns this credential; Quick Study does not store it."}</p>
+    <p className="subtle">{authentication.accountLabel ?? "Codex owns this credential; Clarifold does not store it."}</p>
         ) : (
           <p className="subtle">Use included ChatGPT plan access or usage-based OpenAI API billing.</p>
         )}
@@ -1037,7 +1037,7 @@ function AuthenticationPanel({ state, onState }: { state: LearningApplicationSta
             <button className="secondary" disabled={!apiKey.trim()}>Use API key</button></div>
           </form>
           {authentication.status === "signingIn" && (
-            <button className="text-button" onClick={() => void window.quickStudy.submit({ type: "refreshAuthentication" }).then(onState)}>
+            <button className="text-button" onClick={() => void window.clarifold.submit({ type: "refreshAuthentication" }).then(onState)}>
               I’ve completed sign-in
             </button>
           )}
@@ -1064,7 +1064,7 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                 className={`workspace-link${selected ? " selected" : ""}`}
                 aria-expanded={selected}
                 aria-label={`Open Study Workspace ${workspace.name}`}
-                onClick={() => void window.quickStudy.submit({ type: "navigateToWorkspace", workspaceId: workspace.id }).then(onState)}
+                onClick={() => void window.clarifold.submit({ type: "navigateToWorkspace", workspaceId: workspace.id }).then(onState)}
               >
                 <span>{workspace.name}</span>
                 <small>{missions.length} {missions.length === 1 ? "mission" : "missions"}</small>
@@ -1079,7 +1079,7 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                           className={`mission-link${state.navigation.missionId === mission.id ? " selected" : ""}`}
                           aria-current={state.navigation.missionId === mission.id ? "page" : undefined}
                           aria-label={`Open Study Mission ${mission.name}`}
-                          onClick={() => void window.quickStudy.submit({
+                          onClick={() => void window.clarifold.submit({
                             type: "navigateToMission",
                             workspaceId: workspace.id,
                             missionId: mission.id
@@ -1101,7 +1101,7 @@ function Hierarchy({ state, onState }: { state: LearningApplicationState; onStat
                                         ?? "originating Learning Session"
                                     }`
                                     : `Resume grouped Learning Session ${session.learningGoal}`}
-                                  onClick={() => void window.quickStudy.submit({
+                                  onClick={() => void window.clarifold.submit({
                                     type: "resumeSession",
                                     sessionId: session.id
                                   }).then(onState)}
@@ -1131,7 +1131,7 @@ function CreateWorkspace({ onState }: { onState: StateHandler }) {
   const [name, setName] = useState("");
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const nextState = await window.quickStudy.submit({ type: "createWorkspace", name });
+    const nextState = await window.clarifold.submit({ type: "createWorkspace", name });
     setName("");
     onState(nextState);
   };
@@ -1170,7 +1170,7 @@ function ResumeCard({ state, session, onState }: {
       {hasBackgroundModelWork(session) && (
         <div className="background-work" role="status">
           <span>{backgroundModelWorkLabel(session)}</span>
-          <button className="secondary" onClick={() => void window.quickStudy.submit({
+          <button className="secondary" onClick={() => void window.clarifold.submit({
             type: "cancelSessionModelWork", sessionId: session.id
           }).then(onState).catch((cause: unknown) => setBackgroundError(
             cause instanceof Error ? cause.message : "The model work could not be stopped."
@@ -1181,7 +1181,7 @@ function ResumeCard({ state, session, onState }: {
         <div className="background-work" role="status" aria-label="Checkpointed Agent Task">
           <span>Useful partial output is saved. Resume only when you are ready to use the model again.</span>
           <button className="primary" disabled={!modelRuntimeAvailable(state)}
-            onClick={() => void window.quickStudy.submit({
+            onClick={() => void window.clarifold.submit({
               type: "resumeAgentTask", taskId: checkpointedTask.id
             }).then(onState).catch((cause: unknown) => setBackgroundError(
               cause instanceof Error ? cause.message : "The checkpointed Agent Task could not be resumed."
@@ -1190,7 +1190,7 @@ function ResumeCard({ state, session, onState }: {
       )}
       {backgroundError && <p className="failure-message" role="alert">{backgroundError}</p>}
       <div className="resume-actions">
-        <button className="primary" onClick={() => void window.quickStudy.submit({
+        <button className="primary" onClick={() => void window.clarifold.submit({
           type: "resumeSession",
           sessionId: session.id
         }).then(onState)}>Resume Learning Session</button>
@@ -1215,7 +1215,7 @@ function FilingControls({ state, session, onState }: {
   if (destinations.length === 0) return <span className="filing-hint">Create a named workspace and mission to file this session.</span>;
   const file = async () => {
     const mission = destinations.find((candidate) => candidate.id === destinationMissionId)!;
-    onState(await window.quickStudy.submit({
+    onState(await window.clarifold.submit({
       type: "fileSession",
       sessionId: session.id,
       workspaceId: mission.workspaceId,
@@ -1251,7 +1251,7 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
   const [results, setResults] = useState<SessionSearchResult[]>([]);
   useEffect(() => {
     let current = true;
-    void window.quickStudy.searchSessions(query).then((matches) => {
+    void window.clarifold.searchSessions(query).then((matches) => {
       if (current) setResults(matches);
     });
     return () => { current = false; };
@@ -1269,7 +1269,7 @@ function SessionSearch({ onState }: { onState: StateHandler }) {
               <button
                 className="text-button"
                 aria-label={`Open search result ${result.learningGoal}`}
-                onClick={() => void window.quickStudy.submit(result.status === "consolidated"
+                onClick={() => void window.clarifold.submit(result.status === "consolidated"
                   ? { type: "navigateToMission", workspaceId: result.workspaceId, missionId: result.missionId }
                   : { type: "resumeSession", sessionId: result.sessionId }).then(onState)}
               >
@@ -1307,7 +1307,7 @@ function Intake({ state, onState }: { state: LearningApplicationState; onState: 
     event.preventDefault();
     setError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Learning Session request could not be submitted.");
     }
@@ -1354,11 +1354,11 @@ function WorkspaceEditor({ workspace, mission, state, onState }: {
   if (workspace.kind !== "named") return null;
   const rename = async (event: FormEvent) => {
     event.preventDefault();
-    onState(await window.quickStudy.submit({ type: "renameWorkspace", workspaceId: workspace.id, name: workspaceName }));
+    onState(await window.clarifold.submit({ type: "renameWorkspace", workspaceId: workspace.id, name: workspaceName }));
   };
   const createMission = async (event: FormEvent) => {
     event.preventDefault();
-    const next = await window.quickStudy.submit({ type: "createMission", workspaceId: workspace.id, name: missionName });
+    const next = await window.clarifold.submit({ type: "createMission", workspaceId: workspace.id, name: missionName });
     setMissionName("");
     onState(next);
   };
@@ -1396,7 +1396,7 @@ function ModelStopConfirmationNotice({ session, onState, onError }: {
       <span>{confirmation.message}</span>
       {confirmation.status === "unconfirmed" && (
         <button className="secondary" aria-label={`Retry Codex interruption for ${session.learningGoal}`}
-          onClick={() => void window.quickStudy.submit({ type: "retrySessionModelStop", sessionId: session.id })
+          onClick={() => void window.clarifold.submit({ type: "retrySessionModelStop", sessionId: session.id })
             .then(onState).catch((cause: unknown) => onError(
               cause instanceof Error ? cause.message : "Codex interruption could not be retried."
             ))}>Retry interruption</button>
@@ -1426,7 +1426,7 @@ function MissionHistory({ workspace, mission, state, onState }: {
                 {checkpointedAgentTask(session) && <small>Agent Task checkpoint ready</small>}
               </div>
               <div className="session-actions">
-                {hasBackgroundModelWork(session) && <button className="secondary" onClick={() => void window.quickStudy.submit({
+                {hasBackgroundModelWork(session) && <button className="secondary" onClick={() => void window.clarifold.submit({
                   type: "cancelSessionModelWork", sessionId: session.id
                 }).then(onState).catch((cause: unknown) => setModelWorkError(
                   cause instanceof Error ? cause.message : "The model work could not be stopped."
@@ -1434,18 +1434,18 @@ function MissionHistory({ workspace, mission, state, onState }: {
                 {checkpointedAgentTask(session) && <button className="secondary"
                   disabled={!modelRuntimeAvailable(state)}
                   aria-label={`Resume checkpointed Agent Task for ${session.learningGoal}`}
-                  onClick={() => void window.quickStudy.submit({
+                  onClick={() => void window.clarifold.submit({
                     type: "resumeAgentTask", taskId: checkpointedAgentTask(session)!.id
                   }).then(onState).catch((cause: unknown) => setModelWorkError(
                     cause instanceof Error ? cause.message : "The checkpointed Agent Task could not be resumed."
                   ))}>Resume Agent Task</button>}
                 {session.status === "consolidated" ? (
-                  <button className="primary" aria-label={`Continue this work from ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
+                  <button className="primary" aria-label={`Continue this work from ${session.learningGoal}`} onClick={() => void window.clarifold.submit({
                     type: "continueSession", sessionId: session.id
                   }).then(onState).catch((cause: unknown) => setModelWorkError(
                     cause instanceof Error ? cause.message : "The Continuation Session could not be started."
                   ))}>Continue this work</button>
-                ) : <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.quickStudy.submit({
+                ) : <button className="text-button" aria-label={`Resume Learning Session ${session.learningGoal}`} onClick={() => void window.clarifold.submit({
                     type: "resumeSession", sessionId: session.id
                   }).then(onState)}>Resume</button>}
               </div>
@@ -1490,7 +1490,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
     if (returnFocusAnchorId) onReturnFocusConsumed();
   }, []);
 
-  const saveProposal = (applyToTeaching = false) => window.quickStudy.submit({
+  const saveProposal = (applyToTeaching = false) => window.clarifold.submit({
       type: applyToTeaching ? "applySessionProposalRevision" : "reviseSessionProposal",
       learningGoal: goal,
       scope: target,
@@ -1498,19 +1498,19 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
     });
   const leave = async () => {
     await saveProposal();
-    onState(await window.quickStudy.submit({ type: "leaveSession" }));
+    onState(await window.clarifold.submit({ type: "leaveSession" }));
   };
   const beginConsolidation = async () => {
     await saveProposal();
-    onState(await window.quickStudy.submit({ type: "beginSessionConsolidation" }));
+    onState(await window.clarifold.submit({ type: "beginSessionConsolidation" }));
   };
   const acceptProposal = async () => {
     await saveProposal();
-    onState(await window.quickStudy.submit({ type: "confirmSessionProposal" }));
+    onState(await window.clarifold.submit({ type: "confirmSessionProposal" }));
   };
   const saveLocalChanges = async () => {
-    await window.quickStudy.submit({ type: "editLearningGoal", value: goal });
-    onState(await window.quickStudy.submit({ type: "editSessionTarget", value: target }));
+    await window.clarifold.submit({ type: "editLearningGoal", value: goal });
+    onState(await window.clarifold.submit({ type: "editSessionTarget", value: target }));
   };
 
   return (
@@ -1563,7 +1563,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               onReturnToOrigin={onReturnToOrigin}
               onShowSourceAnchor={(sourceAnchorId) => {
                 setFocusAnchorId(sourceAnchorId);
-                void window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId })
+                void window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId })
                   .then(onState)
                   .catch((error: unknown) => setWorkbenchError(
                     error instanceof Error ? error.message : "The Source Anchor could not be shown."
@@ -1593,7 +1593,7 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
                 setInspectorCardId(card?.id ?? null);
                 setAnnotationAnchorId(hasAnnotations ? sourceAnchorId : null);
                 setWorkbenchError(null);
-                void window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId })
+                void window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId })
                   .then(onState)
                   .catch((error: unknown) => setWorkbenchError(
                     error instanceof Error ? error.message : "The Source Anchor could not be activated."
@@ -1604,17 +1604,17 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               verifierManifests={state.verifierManifests} modelAvailable={modelRuntimeAvailable(state)}
               verifierEnvironmentStatus={state.verifierEnvironment.status} key={artifact.id} />)}
             {!session.consolidationDraft && <TrailDraft session={session} onAction={async (action) => {
-              onState(await window.quickStudy.submit(action));
+              onState(await window.clarifold.submit(action));
             }} onActivateSourceAnchor={async (sourceAnchorId) => {
               setFocusAnchorId(sourceAnchorId);
               setInspectorCardId(null);
-              onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }));
+              onState(await window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId }));
             }} onOpenTeachingCard={async (teachingCardId) => {
               const card = session.anchoredTeachingCards.find((candidate) => candidate.id === teachingCardId);
               if (!card) throw new Error("Choose a linked Teaching Card in this Learning Session.");
               setFocusAnchorId(null);
               setInspectorCardId(card.id);
-              onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
+              onState(await window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
             }} />}
             <SessionAccessPanel state={state} session={session} onState={onState} />
             <CorroborationPassPanel session={session} />
@@ -1627,25 +1627,25 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
             <AskBar
               session={session}
               modelAvailable={modelRuntimeAvailable(state)}
-              onSetContext={async (contextId, included) => onState(await window.quickStudy.submit({
+              onSetContext={async (contextId, included) => onState(await window.clarifold.submit({
                 type: "setAskBarContextItem", contextId, included
               }))}
               onSubmit={async (text) => {
                 if (session.pendingQuestion) {
                   if (text !== session.pendingQuestion.text) {
-                    await window.quickStudy.submit({ type: "editPendingQuestion", text });
+                    await window.clarifold.submit({ type: "editPendingQuestion", text });
                   }
-                  onState(await window.quickStudy.submit({ type: "submitPendingQuestion" }));
+                  onState(await window.clarifold.submit({ type: "submitPendingQuestion" }));
                   return;
                 }
-                onState(await window.quickStudy.submit({ type: "submitQuestion", text }));
+                onState(await window.clarifold.submit({ type: "submitQuestion", text }));
               }}
-              onSavePending={async (text) => onState(await window.quickStudy.submit({
+              onSavePending={async (text) => onState(await window.clarifold.submit({
                 type: session.pendingQuestion ? "editPendingQuestion" : "savePendingQuestion", text
               }))}
-              onDiscardPending={async () => onState(await window.quickStudy.submit({ type: "discardPendingQuestion" }))}
-              onStartNewQuestion={async () => onState(await window.quickStudy.submit({ type: "startNewQuestion" }))}
-              onRetry={async (cardId) => onState(await window.quickStudy.submit({ type: "retryQuestionCard", cardId }))}
+              onDiscardPending={async () => onState(await window.clarifold.submit({ type: "discardPendingQuestion" }))}
+              onStartNewQuestion={async () => onState(await window.clarifold.submit({ type: "startNewQuestion" }))}
+              onRetry={async (cardId) => onState(await window.clarifold.submit({ type: "retryQuestionCard", cardId }))}
             />
           </section>
           {inspectorCard && <ContextualInspector
@@ -1656,22 +1656,22 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               setInspectorCardId(null);
               setFocusAnchorId(inspectorCard.sourceAnchorId);
             }}
-            onRevise={async (instruction) => onState(await window.quickStudy.submit({
+            onRevise={async (instruction) => onState(await window.clarifold.submit({
               type: "reviseTeachingCard", cardId: inspectorCard.id, instruction
             }))}
-            onEditClaims={async (claimEdits) => onState(await window.quickStudy.submit({
+            onEditClaims={async (claimEdits) => onState(await window.clarifold.submit({
               type: "editTeachingCardClaims", cardId: inspectorCard.id, claimEdits
             }))}
-            onRestore={async (revisionId) => onState(await window.quickStudy.submit({
+            onRestore={async (revisionId) => onState(await window.clarifold.submit({
               type: "restoreTeachingCardRevision", cardId: inspectorCard.id, revisionId
             }))}
-            onCreateVariant={async (name, instruction) => onState(await window.quickStudy.submit({
+            onCreateVariant={async (name, instruction) => onState(await window.clarifold.submit({
               type: "createTeachingVariant", cardId: inspectorCard.id, name, instruction
             }))}
-            onRetry={async (variantId) => onState(await window.quickStudy.submit({
+            onRetry={async (variantId) => onState(await window.clarifold.submit({
               type: "retryAnchoredTeachingCard", cardId: inspectorCard.id, ...(variantId ? { variantId } : {})
             }))}
-            onPin={async (artifactKind) => onState(await window.quickStudy.submit({
+            onPin={async (artifactKind) => onState(await window.clarifold.submit({
               type: "pinTeachingCardArtifact", cardId: inspectorCard.id, artifactKind
             }))}
           />}
@@ -1683,10 +1683,10 @@ function Workbench({ state, onState, returnFocusAnchorId, onReturnFocusConsumed,
               setAnnotationAnchorId(null);
               setFocusAnchorId(annotationAnchor.id);
             }}
-            onCreate={async (purpose, content) => onState(await window.quickStudy.submit({
+            onCreate={async (purpose, content) => onState(await window.clarifold.submit({
               type: "createAnnotation", sourceAnchorId: annotationAnchor.id, purpose, content
             }))}
-            onConvert={async (annotationId, purpose) => onState(await window.quickStudy.submit({
+            onConvert={async (annotationId, purpose) => onState(await window.clarifold.submit({
               type: "convertAnnotation", annotationId, purpose
             }))}
           />}
@@ -1725,7 +1725,7 @@ function ReasoningControls({ state, session, onState }: {
           <label key={preference}>
             <input type="radio" name="reasoning-preference" value={preference}
               checked={session.reasoningPreference === preference}
-              onChange={() => void window.quickStudy.submit({ type: "setReasoningPreference", preference }).then(onState)} />
+              onChange={() => void window.clarifold.submit({ type: "setReasoningPreference", preference }).then(onState)} />
             {preference[0].toUpperCase() + preference.slice(1)}
           </label>
         ))}
@@ -1747,11 +1747,11 @@ function ReasoningControls({ state, session, onState }: {
         </select>
         <div className="teaching-actions">
           <button className="secondary" disabled={!model || !selectedModel?.supportedReasoningEfforts.includes(effort)}
-            onClick={() => void window.quickStudy.submit({ type: "setRuntimeOverride", override: { model, reasoningEffort: effort } }).then(onState)}>
+            onClick={() => void window.clarifold.submit({ type: "setRuntimeOverride", override: { model, reasoningEffort: effort } }).then(onState)}>
             Apply Runtime Override
           </button>
           {session.runtimeOverride && <button className="secondary"
-            onClick={() => void window.quickStudy.submit({ type: "setRuntimeOverride", override: null }).then(onState)}>
+            onClick={() => void window.clarifold.submit({ type: "setRuntimeOverride", override: null }).then(onState)}>
             Use automatic routing
           </button>}
         </div>
@@ -1795,7 +1795,7 @@ function SessionConsolidation({ session, onState }: { session: LearningSession; 
     event.preventDefault();
     setError(null);
     try {
-      await window.quickStudy.submit({
+      await window.clarifold.submit({
         type: "reviseSessionConsolidation",
         centralInsight,
         learningProgress,
@@ -1804,7 +1804,7 @@ function SessionConsolidation({ session, onState }: { session: LearningSession; 
         includedArtifactIds,
         targetDisposition
       });
-      onState(await window.quickStudy.submit({ type: "consolidateSession" }));
+      onState(await window.clarifold.submit({ type: "consolidateSession" }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Session Consolidation could not be saved.");
     }
@@ -1814,12 +1814,12 @@ function SessionConsolidation({ session, onState }: { session: LearningSession; 
       <p className="eyebrow">Learner-controlled checkpoint</p>
       <h2 id="session-consolidation-title">Session Consolidation</h2>
       <p>Review and revise what this Learning Session should retain. Consolidated is a lifecycle state, not a claim of mastery.</p>
-      <TrailDraft session={session} onAction={async (action) => onState(await window.quickStudy.submit(action))}
-        onActivateSourceAnchor={async (sourceAnchorId) => onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }))}
+      <TrailDraft session={session} onAction={async (action) => onState(await window.clarifold.submit(action))}
+        onActivateSourceAnchor={async (sourceAnchorId) => onState(await window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId }))}
         onOpenTeachingCard={async (teachingCardId) => {
           const card = session.anchoredTeachingCards.find((candidate) => candidate.id === teachingCardId);
           if (!card) throw new Error("Choose a linked Teaching Card in this Learning Session.");
-          onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
+          onState(await window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId: card.sourceAnchorId }));
         }} />
       <form onSubmit={(event) => void consolidate(event)}>
         <label htmlFor="central-insight">Central insight</label>
@@ -1948,7 +1948,7 @@ function PrerequisiteNavigation({ state, session, onState, onReturnToOrigin, onS
   const submit = async (action: LearnerAction) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Prerequisite navigation could not be updated.");
     }
@@ -1958,7 +1958,7 @@ function PrerequisiteNavigation({ state, session, onState, onReturnToOrigin, onS
     if (!returnPoint) return;
     setError(null);
     try {
-      const nextState = await window.quickStudy.submit({ type: "returnToPrerequisiteOrigin" });
+      const nextState = await window.clarifold.submit({ type: "returnToPrerequisiteOrigin" });
       onReturnToOrigin(nextState, returnPoint.sourceAnchorId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Return Point could not be restored.");
@@ -2078,7 +2078,7 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
   const save = async () => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "reviseLearningSlice",
         boundary,
         immediatePrerequisites: prerequisites.split("\n").map((item) => item.trim()).filter(Boolean)
@@ -2090,7 +2090,7 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
   const choose = async (stageId: string) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit({ type: "selectRoadmapStage", roadmapId: roadmap.id, stageId }));
+      onState(await window.clarifold.submit({ type: "selectRoadmapStage", roadmapId: roadmap.id, stageId }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Learning Slice could not be selected.");
     }
@@ -2098,7 +2098,7 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
   const showAnchor = async (sourceAnchorId: string) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit({ type: "activateSourceAnchor", sourceAnchorId }));
+      onState(await window.clarifold.submit({ type: "activateSourceAnchor", sourceAnchorId }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Source Anchor could not be shown.");
     }
@@ -2107,7 +2107,7 @@ function ArgumentRoadmapPanel({ state, session, onState }: {
     { type: "openConceptPeek" | "proposePrerequisiteBranch" }>) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The prerequisite action could not be completed.");
     }
@@ -2203,12 +2203,12 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
       setLinkedView(null);
       return;
     }
-    const view = await window.quickStudy.openLinkedSource(nextSource.id);
+    const view = await window.clarifold.openLinkedSource(nextSource.id);
     if (view.status === "unavailable") {
       setSourceError(view.error);
       return;
     }
-    onState(await window.quickStudy.submit({ type: "addSourceToSession", sourceId: nextSource.id }));
+    onState(await window.clarifold.submit({ type: "addSourceToSession", sourceId: nextSource.id }));
     setSourceId(nextSource.id);
     setLinkedView(view);
   };
@@ -2249,7 +2249,7 @@ function WorkbenchSourceLayer({ state, session, onState, onActivateAnchor, onTea
           onActivateAnchor={onActivateAnchor}
           focusAnchorId={focusAnchorId}
           onChooseAction={(selection, paletteAction) => {
-            void window.quickStudy.submit({
+            void window.clarifold.submit({
               type: "createSourceAnchor", sourceId: source.id, selection, paletteAction
             }).then((nextState) => {
               onState(nextState);
@@ -2320,7 +2320,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
   const claimsChanged = claimEdits.length !== artifact.currentRevision.claims.length
     || claimEdits.some((edit, index) => edit.claimId !== artifact.currentRevision.claims[index]?.claimId
       || edit.statement.trim() !== artifact.currentRevision.claims[index]?.claimStatement);
-  const save = async () => onState(await window.quickStudy.submit({
+  const save = async () => onState(await window.clarifold.submit({
     type: "editLearningArtifact",
     ...(sessionId ? { sessionId } : {}),
     artifactId: artifact.id,
@@ -2329,19 +2329,19 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
   }));
   const exportArtifact = async () => {
     setPortabilityError(null);
-    const result = await window.quickStudy.exportLearningArtifact(originatingSessionId, artifact.id);
+    const result = await window.clarifold.exportLearningArtifact(originatingSessionId, artifact.id);
     if (result.status === "exported") setPortabilityStatus(`Artifact Export saved to ${result.path}`);
   };
   const shareArtifact = async () => {
     setPortabilityError(null);
-    await window.quickStudy.shareLearningArtifact(originatingSessionId, artifact.id);
+    await window.clarifold.shareLearningArtifact(originatingSessionId, artifact.id);
     setPortabilityStatus("Artifact Export handed to macOS sharing.");
   };
   const synthesize = async () => {
     setPortabilityError(null);
     setSynthesisStatus("Synthesizing Learning Artifact…");
     try {
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "synthesizeLearningArtifact",
         ...(sessionId ? { sessionId } : {}),
         artifactId: artifact.id,
@@ -2370,7 +2370,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
     setRegenerationError(null);
     setRegenerationStatus(`Preparing ${scope === "section" ? "Section Regeneration" : "whole-artifact replacement"} preview…`);
     try {
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "previewLearningArtifactRegeneration",
         ...(sessionId ? { sessionId } : {}),
         artifactId: artifact.id,
@@ -2392,7 +2392,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
     if (!task?.retryable) return;
     setRegenerationError(null);
     try {
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "previewLearningArtifactRegeneration",
         sessionId: originatingSessionId,
         artifactId: artifact.id,
@@ -2409,7 +2409,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
     if (!selectedSection) return;
     setRegenerationError(null);
     try {
-      onState(await window.quickStudy.submit({
+      onState(await window.clarifold.submit({
         type: "setLearningArtifactTextProtected",
         ...(sessionId ? { sessionId } : {}),
         artifactId: artifact.id,
@@ -2453,7 +2453,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
           <ul>{artifact.protectedContent.map((fragment) => <li key={fragment.id}>
             <span>{fragment.content}</span>
             <button type="button" className="text-button" aria-label={`Remove regeneration protection from ${fragment.content}`}
-              onClick={() => void window.quickStudy.submit({
+              onClick={() => void window.clarifold.submit({
                 type: "setLearningArtifactTextProtected",
                 ...(sessionId ? { sessionId } : {}),
                 artifactId: artifact.id,
@@ -2482,7 +2482,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
           <h4>Agent Task Status</h4>
           <p>{artifact.regenerationTask.statusMessage}</p>
           {artifact.regenerationTask.status === "working" && <button type="button" className="secondary"
-            onClick={() => void window.quickStudy.submit({
+            onClick={() => void window.clarifold.submit({
               type: "cancelSessionModelWork", sessionId: originatingSessionId
             }).then(onState)}>Stop Artifact regeneration</button>}
           {artifact.regenerationTask.retryable && <button type="button" className="secondary"
@@ -2525,15 +2525,15 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
         verifierEnvironmentStatus={verifierEnvironmentStatus}
         verifierManifests={verifierManifests.filter((manifest) => manifest.target === "learningArtifact"
           && manifest.targetId === artifact.id)}
-        onVerify={async (claimId, runId) => onState(await window.quickStudy.verifyClaim(originatingSessionId, {
+        onVerify={async (claimId, runId) => onState(await window.clarifold.verifyClaim(originatingSessionId, {
           runId, target: "learningArtifact", targetId: artifact.id, claimId
         }))}
-        onCancel={(runId) => window.quickStudy.cancelClaimVerification(runId)}
-        onReasoningRecheck={async (claimId) => onState(await window.quickStudy.submit({
+        onCancel={(runId) => window.clarifold.cancelClaimVerification(runId)}
+        onReasoningRecheck={async (claimId) => onState(await window.clarifold.submit({
           type: "requestLearningArtifactClaimRecheck", sessionId: originatingSessionId,
           artifactId: artifact.id, claimId
         }))}
-        onCancelReasoningRecheck={async () => onState(await window.quickStudy.submit({
+        onCancelReasoningRecheck={async () => onState(await window.clarifold.submit({
           type: "cancelSessionModelWork", sessionId: originatingSessionId
         }))} />
       <dl className="artifact-evidence">
@@ -2579,7 +2579,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
         </section>}
         <button type="button" className="secondary" disabled={!claimImpactConfirmed}
           aria-label={`Apply ${artifact.pendingRegenerationProposal.scope === "section" ? "Section Regeneration" : "whole-artifact replacement"} preview`}
-          onClick={() => void window.quickStudy.submit({
+          onClick={() => void window.clarifold.submit({
             type: "applyLearningArtifactRegeneration",
             ...(sessionId ? { sessionId } : {}),
             artifactId: artifact.id,
@@ -2588,7 +2588,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
           }).then(onState).catch((cause: unknown) => setRegenerationError(
             cause instanceof Error ? cause.message : "The regeneration preview could not be applied."
           ))}>Apply preview</button>
-        <button type="button" className="text-button" onClick={() => void window.quickStudy.submit({
+        <button type="button" className="text-button" onClick={() => void window.clarifold.submit({
           type: "discardLearningArtifactRegeneration",
           ...(sessionId ? { sessionId } : {}),
           artifactId: artifact.id,
@@ -2612,7 +2612,7 @@ function PinnedLearningArtifact({ artifact, onState, sessionId, verifierManifest
             {note.interpretation !== null && <><h4>Note Interpretation</h4><p>{note.interpretation}</p></>}
           </div>)}
           <button className="text-button" aria-label={`Restore ${artifact.title} revision ${index + 1}`}
-            onClick={() => void window.quickStudy.submit({
+            onClick={() => void window.clarifold.submit({
               type: "restoreLearningArtifactRevision",
               ...(sessionId ? { sessionId } : {}),
               artifactId: artifact.id,
@@ -2671,7 +2671,7 @@ function SessionAccessPanel({ state, session, onState }: {
   const submitAccessAction = async (action: LearnerAction) => {
     setAccessError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (error) {
       setAccessError(error instanceof Error ? error.message : "Could not update the Session Access Policy.");
     }
@@ -2878,7 +2878,7 @@ function ExternalResearchPanel({ state, session, onState }: {
   const submit = async (action: LearnerAction) => {
     setResearchError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (error) {
       setResearchError(error instanceof Error ? error.message : "External research could not be updated.");
     }
@@ -2957,7 +2957,7 @@ function ExternalResearchPanel({ state, session, onState }: {
                 <div><dt>Status</dt><dd role="status">{research.status}</dd></div>
               </dl>
               <button className="secondary" aria-label={`Inspect destination used for ${research.query.text}`}
-                onClick={() => void window.quickStudy.openExternal(research.destination)}>
+                onClick={() => void window.clarifold.openExternal(research.destination)}>
                 Inspect destination used
               </button>
               {research.status === "running" && (
@@ -3009,21 +3009,21 @@ function TeachingCard({ session, modelAvailable, onState }: { session: LearningS
       <div className="teaching-section next-step"><span>Next step</span><strong>{session.returnContext.nextAction}</strong></div>
       {card.error && <p className="failure-message" role="alert">{card.error}</p>}
       <div className="teaching-actions">
-        {card.status === "streaming" && <button className="secondary" onClick={() => void window.quickStudy.submit({ type: "cancelModelWork" }).then(onState)}>Stop teaching</button>}
-        {card.retryable && modelAvailable && <button className="primary" onClick={() => void window.quickStudy.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
+        {card.status === "streaming" && <button className="secondary" onClick={() => void window.clarifold.submit({ type: "cancelModelWork" }).then(onState)}>Stop teaching</button>}
+        {card.retryable && modelAvailable && <button className="primary" onClick={() => void window.clarifold.submit({ type: "retryModelWork" }).then(onState)}>Retry Teaching Card</button>}
         {card.status === "completed" && modelAvailable && !agentTask && <fieldset>
           <legend>Specialist review plan</legend>
           <p className="subtle">Choose parallel work only for independent perspectives; use sequential review when the second brief needs the first result.</p>
           <button className="secondary"
-            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "single" }).then(onState)}>
+            onClick={() => void window.clarifold.submit({ type: "requestSpecialistReview", coordination: "single" }).then(onState)}>
             One bounded review
           </button>
           <button className="secondary"
-            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "dependent" }).then(onState)}>
+            onClick={() => void window.clarifold.submit({ type: "requestSpecialistReview", coordination: "dependent" }).then(onState)}>
             Sequential review then challenge
           </button>
           <button className="secondary"
-            onClick={() => void window.quickStudy.submit({ type: "requestSpecialistReview", coordination: "independent" }).then(onState)}>
+            onClick={() => void window.clarifold.submit({ type: "requestSpecialistReview", coordination: "independent" }).then(onState)}>
             Two independent perspectives
           </button>
         </fieldset>}
@@ -3079,13 +3079,13 @@ function AgentTaskStatusCard({ task, modelAvailable, onState }: {
       {task.agentWorkLogReference && <AgentWorkLogLink reference={task.agentWorkLogReference} />}
       <div className="teaching-actions">
         {(task.status === "working" || task.status === "waiting") && <button className="secondary"
-          onClick={() => void window.quickStudy.submit({ type: "cancelModelWork" }).then(onState)}>Stop Agent Task</button>}
+          onClick={() => void window.clarifold.submit({ type: "cancelModelWork" }).then(onState)}>Stop Agent Task</button>}
         {task.integratedTeachingCard.retryable && modelAvailable && <button className="primary"
-          onClick={() => void window.quickStudy.submit({ type: "retryAgentTask", taskId: task.id }).then(onState)}>
+          onClick={() => void window.clarifold.submit({ type: "retryAgentTask", taskId: task.id }).then(onState)}>
           Retry Agent Task
         </button>}
         {task.resumeAvailable && <button className="primary" disabled={!modelAvailable}
-          onClick={() => void window.quickStudy.submit({ type: "resumeAgentTask", taskId: task.id }).then(onState)}>
+          onClick={() => void window.clarifold.submit({ type: "resumeAgentTask", taskId: task.id }).then(onState)}>
           Resume Agent Task
         </button>}
       </div>
@@ -3183,7 +3183,7 @@ function AgentWorkLogLink({ reference }: {
   const [error, setError] = useState<string | null>(null);
   const inspect = async () => {
     try {
-      setEvents(await window.quickStudy.getAgentWorkLogEvidence(
+      setEvents(await window.clarifold.getAgentWorkLogEvidence(
         reference.sessionId,
         reference.fromSequence,
         reference.toSequence

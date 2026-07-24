@@ -15,7 +15,7 @@ export async function prepareModelRuntimeWorkspace(
   if (isWithin(canonicalDataDirectory, canonicalTemporaryDirectory)) {
     throw new Error("The Model Runtime workspace must be outside durable application state.");
   }
-  const workspace = await mkdtemp(join(canonicalTemporaryDirectory, "quick-study-model-runtime-"));
+  const workspace = await mkdtemp(join(canonicalTemporaryDirectory, "clarifold-model-runtime-"));
   await chmod(workspace, 0o700);
   return workspace;
 }

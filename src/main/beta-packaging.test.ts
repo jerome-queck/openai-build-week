@@ -120,18 +120,18 @@ describe("macOS beta release contract", () => {
     const forgeConfig = require(join(process.cwd(), "forge.config.js"));
 
     expect(forgeConfig.packagerConfig).toMatchObject({
-      appBundleId: "com.jeromequeck.quick-study",
+      appBundleId: "org.jeromegroup.clarifold",
       appCategoryType: "public.app-category.education"
     });
     expect(forgeConfig.makers).toEqual([
       expect.objectContaining({ name: "@electron-forge/maker-zip" })
     ]);
     expect(forgeConfig.packagerConfig.ignore.some((pattern: RegExp) =>
-      pattern.test("/node_modules/.cache/quick-study-lean/archive.zip"))).toBe(true);
+    pattern.test("/node_modules/.cache/clarifold-lean/archive.zip"))).toBe(true);
     expect(forgeConfig.packagerConfig.ignore.some((pattern: RegExp) =>
-      pattern.test("/out/Quick Study-darwin-arm64/Quick Study.app"))).toBe(true);
+    pattern.test("/out/Clarifold-darwin-arm64/Clarifold.app"))).toBe(true);
     expect(forgeConfig.packagerConfig.ignore.some((pattern: RegExp) =>
-      pattern.test("/test-results/installed-beta/Quick Study.app"))).toBe(true);
+    pattern.test("/test-results/installed-beta/Clarifold.app"))).toBe(true);
     expect(packageJson.scripts["make:beta"]).toBe(
       "electron-forge make --platform=darwin --skip-package"
     );
@@ -145,7 +145,7 @@ describe("macOS beta release contract", () => {
 
 async function createPackagedLicenseFixture({ runtimeLicense = "MIT", packagedVersionOverrides = {} } = {}) {
   const root = await mkdtemp(join(tmpdir(), "clarifold-license-audit-"));
-  const applicationPath = join(root, "Quick Study.app");
+  const applicationPath = join(root, "Clarifold.app");
   const resources = join(applicationPath, "Contents", "Resources");
   const verifierId = "test-verifier";
   const verifier = join(resources, "verifiers", verifierId);

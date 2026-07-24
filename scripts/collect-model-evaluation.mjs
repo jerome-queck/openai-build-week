@@ -11,9 +11,9 @@ const benchmark = JSON.parse(await readFile(join(
   process.cwd(), "evaluation", "benchmarks", "v2", "benchmark.json"
 ), "utf8"));
 const outputDirectory = join(process.cwd(), "test-results", "release-evidence");
-const requestedModel = process.env.QUICK_STUDY_EVALUATION_MODEL ?? "runtimeDefault";
-const reasoningEffort = process.env.QUICK_STUDY_EVALUATION_REASONING ?? "medium";
-const scenarioFilter = process.env.QUICK_STUDY_EVALUATION_SCENARIO ?? null;
+const requestedModel = process.env.CLARIFOLD_EVALUATION_MODEL ?? "runtimeDefault";
+const reasoningEffort = process.env.CLARIFOLD_EVALUATION_REASONING ?? "medium";
+const scenarioFilter = process.env.CLARIFOLD_EVALUATION_SCENARIO ?? null;
 const policyVersion = 3;
 const runtimeDirectory = await mkdtemp(join(tmpdir(), "quick-study-model-evaluation-"));
 const candidateCommit = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();

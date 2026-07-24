@@ -1,6 +1,6 @@
 # Architecture guide
 
-This is the canonical human-facing overview of Quick Study's stable runtime responsibilities and public engineering seams. It explains where a safe change belongs without replacing the domain glossary in [CONTEXT.md](../CONTEXT.md) or the decisions in [docs/adr/](adr/). The [development guide](development.md) owns setup and verification commands.
+This is the canonical human-facing overview of Clarifold's stable runtime responsibilities and public engineering seams. It explains where a safe change belongs without replacing the domain glossary in [CONTEXT.md](../CONTEXT.md) or the decisions in [docs/adr/](adr/). The [development guide](development.md) owns setup and verification commands.
 
 ## System boundary
 
@@ -29,6 +29,7 @@ Formal verification and Codex restoration are one coordinated lifecycle from the
 | `src/shared/external-research.ts` | Provider-neutral external-research request and receipt validation | Keep outbound context and returned evidence bounded and explicit |
 | `src/shared/verifier-runtime.ts` | Formal-verification adapter contract and exact result vocabulary | Record formal status only from an accepted Verifier Runtime receipt |
 | `src/main/main.ts` | Electron lifecycle, IPC registration, adapter composition, shutdown, and bounded process orchestration | Keep it a narrow adapter; validate IPC inputs and trusted senders at the boundary |
+| `src/main/clarifold-data-migration.ts` and `src/shared/clarifold-identity.ts` | Central product/runtime identity, typed environment configuration, and guarded Quick Study-to-Clarifold default-data migration | Keep compatibility inputs in the adapter; stage, validate, receipt, and atomically activate without mutating the old source |
 | `src/main/preload.ts` | Typed, minimal renderer bridge | Expose explicit operations only; do not pass arbitrary IPC channels or Node capabilities |
 | `src/main/source-access.ts` and native helpers | macOS source selection, bookmark/access lifetime, and bounded extraction | Preserve external ownership of Linked Sources and contain filesystem/native work |
 | `src/main/lean-environment-manager.ts` and `src/main/lean-verifier.ts` | Staged, validated, removable Verifier Environment lifecycle and bounded Lean execution | Never report readiness before integrity and reference-proof checks succeed |
@@ -41,6 +42,8 @@ Formal verification and Codex restoration are one coordinated lifecycle from the
 `LearningApplication` owns the state transition and lifecycle invariants. It serializes learner actions and persists canonical application state atomically. Persisted-schema changes must provide migration or safe defaults and restoration coverage for launch, mutation, quit, and relaunch where relevant.
 
 The canonical application state and the rebuildable `source-index.json` cache are separate. A Source Index may be cleared or rebuilt without changing a Linked Source, Source Anchor, or Learning Session. Linked Sources remain at learner-selected external paths; a Source Link Record and Source Fingerprint preserve identity and change detection, while a Source Snapshot exists only after an explicit learner request.
+
+Clarifold owns the application identity boundary, while Quick Study remains the system-owned Study Workspace for loose work and its durable identifiers remain unchanged. Default-directory migration happens before model, verifier, or other normal services open the destination. Its success receipt contains source, destination, application version, timestamps, outcome, and idempotent retry state; blocked or failed attempts also write a recovery receipt with a reason, actionable message, and safe-to-retry or manual-intervention state. The preserved Quick Study directory remains the rollback source and is never automatically deleted or synchronized.
 
 Agent Work Logs retain internal specialist messages and tool execution records. Session Records retain learner-relevant work. Useful partial learner-facing output may be checkpointed, but raw protocol events do not become learner-facing state.
 

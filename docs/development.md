@@ -1,6 +1,6 @@
 # Development guide
 
-This is the canonical guide for building and verifying Quick Study from source. It owns the supported development environment, setup, runnable commands, native and Verifier Runtime preparation, packaging, packaged smoke tests, and developer troubleshooting. `package.json` and [macOS CI](../.github/workflows/macos-ci.yml) remain the executable sources; update this guide when those sources or the supported workflow changes.
+This is the canonical guide for building and verifying Clarifold from source. It owns the supported development environment, setup, runnable commands, native and Verifier Runtime preparation, packaging, packaged smoke tests, and developer troubleshooting. `package.json` and [macOS CI](../.github/workflows/macos-ci.yml) remain the executable sources; update this guide when those sources or the supported workflow changes.
 
 ## Supported environment
 
@@ -28,9 +28,11 @@ npm run dev
 
 The development command builds the native Source Index and security-scoped bookmark helpers before starting Electron. Restart it after changing either helper under `native/` so the helper is rebuilt.
 
-The first development or production build downloads the pinned Lean 4.29.1 archive for the current Mac architecture, verifies its SHA-256 digest, checks out mathlib 4.29.1 at its pinned commit, and prepares the immutable `lean-4.29.1-mathlib-4.29.1-quick-study-v1` environment. The staged environment must accept the app's reference proof before activation. Downloads are reused from `node_modules/.cache/quick-study-lean`; a separate Lean or `elan` installation is not required.
+The first development or production build downloads the pinned Lean 4.29.1 archive for the current Mac architecture, verifies its SHA-256 digest, checks out mathlib 4.29.1 at its pinned commit, and prepares the immutable `lean-4.29.1-mathlib-4.29.1-quick-study-v1` environment. The staged environment must accept the app's reference proof before activation. Downloads are reused from `node_modules/.cache/clarifold-lean`; a separate Lean or `elan` installation is not required.
 
-Use Electron's standard local application-data directory by default. Set `QUICK_STUDY_DATA_DIR` when an isolated directory is needed for development or diagnosis. `QUICK_STUDY_LEAN_PATH` is reserved for deterministic adapter tests and diagnosis; normal installations use the packaged verifier. `QUICK_STUDY_TEST_*` variables belong to the packaged test harness and are not product configuration.
+Use Electron's standard Clarifold `userData` directory by default. Set `CLARIFOLD_DATA_DIR` when an isolated directory is needed for development or diagnosis. The one-beta `QUICK_STUDY_DATA_DIR` compatibility alias is accepted with a deprecation warning and lower precedence. `CLARIFOLD_LEAN_PATH` is reserved for deterministic adapter tests and diagnosis; normal installations use the packaged verifier. Other `CLARIFOLD_TEST_*` variables belong to the packaged test harness and are not product configuration.
+
+On the first default launch, Clarifold discovers the old Quick Study `userData` directory and, when the Clarifold destination is absent or empty, acquires a launch guard, copies into same-filesystem staging, validates the staged state through `LearningApplication`, writes a non-content migration receipt, and activates it atomically. The old directory remains unchanged as a rollback source. A populated destination, incomplete source, invalid state, interrupted copy, insufficient space, or concurrent launch stops automatic migration and leaves an actionable recovery message; Clarifold never merges or deletes either user's data directory. Explicit `CLARIFOLD_DATA_DIR` and the legacy alias never inspect or migrate the default directories.
 
 ## Verification commands
 
@@ -96,7 +98,7 @@ After formal verification, wait for the learner-visible Codex runtime lifecycle 
 
 ### Isolated data and smoke runs
 
-Set `QUICK_STUDY_DATA_DIR` to a fresh temporary directory when reproducing persistence or packaged behavior. The smoke installer creates its own isolated paths. Linked Sources remain externally owned; never use a source fixture as the application-data directory.
+Set `CLARIFOLD_DATA_DIR` to a fresh temporary directory when reproducing persistence or packaged behavior. The smoke installer creates its own isolated paths. Linked Sources remain externally owned; never use a source fixture as the application-data directory.
 
 ### Packaged output already exists
 

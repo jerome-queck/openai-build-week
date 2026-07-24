@@ -22,7 +22,7 @@ body:
     attributes:
       label: Environment
       description: Include the Clarifold version or commit, macOS version, Mac model, and whether this was a packaged or source build. Do not include paths containing private data.
-      placeholder: "Clarifold 0.1.0, macOS 14.x, Apple Silicon, packaged build"
+      placeholder: "Clarifold 0.2.0, macOS 14.x, Apple Silicon, packaged build"
     validations:
       required: true
   - type: dropdown

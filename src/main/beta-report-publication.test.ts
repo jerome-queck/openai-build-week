@@ -19,7 +19,7 @@ describe("beta report publication", () => {
     await mkdir(join(repository, "test-results", "release-evidence"), { recursive: true });
     await mkdir(join(repository, "out", "make", "zip", "darwin", "arm64"), { recursive: true });
     await writeFile(join(repository, ".gitignore"), "out/\ntest-results/\nevaluation/\n", "utf8");
-    await writeJson(join(repository, "package.json"), { version: "0.1.0" });
+    await writeJson(join(repository, "package.json"), { version: "0.2.0" });
     git(repository, ["init"]);
     git(repository, ["config", "user.name", "Release Test"]);
     git(repository, ["config", "user.email", "release-test@example.com"]);
@@ -28,15 +28,15 @@ describe("beta report publication", () => {
     const candidateCommit = git(repository, ["rev-parse", "HEAD"]).trim();
     const reportDirectory = join(repository, "test-results", "release-quality-gate");
     const evidenceDirectory = join(repository, "test-results", "release-evidence");
-    await writeFile(join(reportDirectory, "macos-beta-0.1.0.md"), `# Candidate ${candidateCommit}\n`, "utf8");
-    await writeJson(join(reportDirectory, "macos-beta-0.1.0.json"), {
-      decision: "pass", benchmarkVersion: "2.0.0", release: { id: "macos-beta-0.1.0", commit: candidateCommit }
+    await writeFile(join(reportDirectory, "macos-beta-0.2.0.md"), `# Candidate ${candidateCommit}\n`, "utf8");
+    await writeJson(join(reportDirectory, "macos-beta-0.2.0.json"), {
+      decision: "pass", benchmarkVersion: "2.0.0", release: { id: "macos-beta-0.2.0", commit: candidateCommit }
     });
-    const betaArchivePath = join(repository, "out", "make", "zip", "darwin", "arm64", "Quick Study.zip");
+    const betaArchivePath = join(repository, "out", "make", "zip", "darwin", "arm64", "Clarifold.zip");
     await writeFile(betaArchivePath, "signed beta archive", "utf8");
     const betaPath = join(repository, "test-results", "beta-install.json");
     await writeJson(betaPath, {
-      candidateCommit, architecture: "arm64", artifact: "Quick Study.zip", sha256: await digest(betaArchivePath)
+      candidateCommit, architecture: "arm64", artifact: "Clarifold.zip", sha256: await digest(betaArchivePath)
     });
     const modelPath = join(evidenceDirectory, "model-responses.json");
     const verdictPath = join(evidenceDirectory, "blinded-verdicts.json");
@@ -64,33 +64,33 @@ describe("beta report publication", () => {
       cwd: repository,
       env: {
         ...process.env,
-        QUICK_STUDY_MODEL_EVIDENCE: modelPath,
-        QUICK_STUDY_EVALUATOR_VERDICTS: verdictPath,
-        QUICK_STUDY_RECOVERY_EVIDENCE: recoveryPath
+        CLARIFOLD_MODEL_EVIDENCE: modelPath,
+        CLARIFOLD_EVALUATOR_VERDICTS: verdictPath,
+        CLARIFOLD_RECOVERY_EVIDENCE: recoveryPath
       }
     });
 
     const manifest = JSON.parse(await readFile(
-      join(repository, "out", "release", "macos-beta-0.1.0", "manifest.json"), "utf8"
+      join(repository, "out", "release", "macos-beta-0.2.0", "manifest.json"), "utf8"
     ));
     expect(manifest.release.commit).toBe(candidateCommit);
     expect(manifest.decision).toBe("pass");
     expect(manifest.files.map((file: { name: string }) => file.name)).toContain("recovery-vitest.json");
     expect(manifest.distributable).toEqual({
-      name: "Quick Study.zip", sha256: await digest(betaArchivePath)
+      name: "Clarifold.zip", sha256: await digest(betaArchivePath)
     });
     expect(git(repository, ["rev-parse", "HEAD"]).trim()).toBe(candidateCommit);
     expect(git(repository, ["status", "--porcelain"]).trim()).toBe("");
 
-    await rm(join(repository, "out", "release", "macos-beta-0.1.0"), { recursive: true });
+    await rm(join(repository, "out", "release", "macos-beta-0.2.0"), { recursive: true });
     await writeJson(modelPath, { provenance: { candidateCommit }, substitutedAfterGate: true });
     expect(() => execFileSync(process.execPath, [join(process.cwd(), "scripts", "publish-beta-release-report.mjs")], {
       cwd: repository,
       env: {
         ...process.env,
-        QUICK_STUDY_MODEL_EVIDENCE: modelPath,
-        QUICK_STUDY_EVALUATOR_VERDICTS: verdictPath,
-        QUICK_STUDY_RECOVERY_EVIDENCE: recoveryPath
+        CLARIFOLD_MODEL_EVIDENCE: modelPath,
+        CLARIFOLD_EVALUATOR_VERDICTS: verdictPath,
+        CLARIFOLD_RECOVERY_EVIDENCE: recoveryPath
       },
       stdio: "pipe"
     })).toThrow(/not the exact input used by the passing candidate gate/);

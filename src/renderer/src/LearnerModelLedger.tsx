@@ -17,7 +17,7 @@ export function LearnerModelLedger({ state, session, onState }: {
   const submit = async (action: LearnerAction) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The Learner Model could not be updated.");
     }

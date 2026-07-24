@@ -16,11 +16,11 @@ describe("anchored teaching workbench", () => {
     state.screen = "dashboard";
     state.activeSessionId = null;
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
 
-    const release = await screen.findByRole("region", { name: "Quick Study beta support" });
+    const release = await screen.findByRole("region", { name: "Clarifold beta support" });
     expect(release.textContent).toContain("install and hardware requirements are documented with the release artifact");
     expect(release.textContent).toContain("Linked Sources stay in their original locations");
     expect(release.textContent).toContain("Local Working Mode");
@@ -38,7 +38,7 @@ describe("anchored teaching workbench", () => {
       status: "blocked",
       message: "The original file was preserved unchanged. Restore or repair it, then restart Clarifold."
     };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -60,7 +60,7 @@ describe("anchored teaching workbench", () => {
       status: "paused", operationId: "verification-1",
       message: "Codex is paused while the Bundled Lean Runtime checks the exact claim."
     };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -82,7 +82,7 @@ describe("anchored teaching workbench", () => {
         message: "Model teaching is active. Finish it before changing the Session Access Policy."
       }
     };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -108,7 +108,7 @@ describe("anchored teaching workbench", () => {
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "removeVerifierEnvironment" ? absent : installed
     );
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const settings = await screen.findByRole("region", { name: "Application settings" });
@@ -130,7 +130,7 @@ describe("anchored teaching workbench", () => {
     state.screen = "dashboard";
     state.activeSessionId = null;
     state.verifierEnvironment.status = "preparing";
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -156,7 +156,7 @@ describe("anchored teaching workbench", () => {
       { environment: prior, installedBytes: 512_000_000, pinned: false, manifestReferences: 2 }
     ];
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const registry = await screen.findByRole("region", { name: "Verifier Environment Registry" });
@@ -183,7 +183,7 @@ describe("anchored teaching workbench", () => {
       environment: prior, installedBytes: 512_000_000, pinned: true, manifestReferences: 1
     }];
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Stage and activate the current supported Lean environment" }));
@@ -225,7 +225,7 @@ describe("anchored teaching workbench", () => {
       result: null
     });
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const panel = await screen.findByRole("region", { name: "Privacy-minimized web research" });
@@ -317,7 +317,7 @@ describe("anchored teaching workbench", () => {
       }
     }];
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const ledger = await screen.findByRole("region", { name: "Learner Model Ledger" });
@@ -377,7 +377,7 @@ describe("anchored teaching workbench", () => {
       }],
       message: "A Source Discrepancy preserves material disagreement. The affected claim is not presented as settled."
     };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
     const pass = await screen.findByRole("region", { name: "Corroboration Pass" });
@@ -397,7 +397,7 @@ describe("anchored teaching workbench", () => {
   it("restores a closed Contextual Inspector only through its Anchor Marker and returns focus on close", async () => {
     const user = userEvent.setup();
     const state = workbenchState();
-    window.quickStudy = {
+    window.clarifold = {
       getState: vi.fn().mockResolvedValue(state),
       submit: vi.fn().mockResolvedValue(state),
       getAgentWorkLogEvidence: vi.fn().mockResolvedValue([{
@@ -436,7 +436,7 @@ describe("anchored teaching workbench", () => {
     expect(screen.queryByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeNull();
 
     await user.click(marker);
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
     expect(screen.getByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeTruthy();
     const close = screen.getByRole("button", { name: "Close Contextual Inspector" });
     expect(close).toBe(document.activeElement);
@@ -445,7 +445,7 @@ describe("anchored teaching workbench", () => {
     expect(screen.queryByRole("complementary", { name: "Contextual Inspector for Explain compact subset" })).toBeNull();
     expect(marker).toBe(document.activeElement);
 
-    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("The Source Anchor is stale."));
+    vi.mocked(window.clarifold.submit).mockRejectedValueOnce(new Error("The Source Anchor is stale."));
     await user.click(marker);
     expect((await screen.findByRole("alert")).textContent).toContain("The Source Anchor is stale.");
   });
@@ -455,7 +455,7 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     const artifact = state.sessions[0].learningArtifacts[0];
     artifact.currentRevision.claims[0].claimStatement = "For every natural number n, n + 0 = n.";
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -463,7 +463,7 @@ describe("anchored teaching workbench", () => {
     expect(formalization.textContent).toContain("theorem quickStudyNatAddZero (n : Nat) : n + 0 = n");
     expect(formalization.textContent).toContain("n : Nat");
     await user.click(within(formalization).getByRole("button", { name: "Check exact claim 1 with bundled Lean" }));
-    expect(window.quickStudy.verifyClaim).toHaveBeenCalledWith(artifact.originatingSessionId, {
+    expect(window.clarifold.verifyClaim).toHaveBeenCalledWith(artifact.originatingSessionId, {
       runId: expect.any(String), target: "learningArtifact", targetId: artifact.id,
       claimId: artifact.currentRevision.claims[0].claimId
     });
@@ -479,7 +479,7 @@ describe("anchored teaching workbench", () => {
     };
     const artifact = state.sessions[0].learningArtifacts[0];
     artifact.currentRevision.claims[0].claimStatement = "For every natural number n, n + 0 = n.";
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -495,7 +495,7 @@ describe("anchored teaching workbench", () => {
     state.verifierEnvironment.status = "preparing";
     state.sessions[0].learningArtifacts[0].currentRevision.claims[0].claimStatement =
       "For every natural number n, n + 0 = n.";
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -510,17 +510,17 @@ describe("anchored teaching workbench", () => {
     const state = workbenchState();
     const artifact = state.sessions[0].learningArtifacts[0];
     artifact.currentRevision.claims[0].claimStatement = "Every continuous function is differentiable.";
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
     let finish!: (value: LearningApplicationState) => void;
-    vi.mocked(window.quickStudy.verifyClaim).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    vi.mocked(window.clarifold.verifyClaim).mockReturnValue(new Promise((resolve) => { finish = resolve; }));
 
     render(<App />);
     const formalization = await screen.findByRole("region", { name: "Formalization for mathematical claim 1" });
     expect(formalization.textContent).toContain("No supported formal translation exists");
     await user.click(within(formalization).getByRole("button", { name: "Check exact claim 1 with bundled Lean" }));
-    const request = vi.mocked(window.quickStudy.verifyClaim).mock.calls[0][1];
+    const request = vi.mocked(window.clarifold.verifyClaim).mock.calls[0][1];
     await user.click(within(formalization).getByRole("button", { name: "Cancel exact claim 1 Lean check" }));
-    expect(window.quickStudy.cancelClaimVerification).toHaveBeenCalledWith(request.runId);
+    expect(window.clarifold.cancelClaimVerification).toHaveBeenCalledWith(request.runId);
     finish(state);
   });
 
@@ -535,7 +535,7 @@ describe("anchored teaching workbench", () => {
       purposeChanges: []
     }];
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     await user.click(await screen.findByRole("button", {
@@ -577,7 +577,7 @@ describe("anchored teaching workbench", () => {
       verificationEscalation: { recommended: true, reasons: ["Independent checking disagreed with the claim."] }
     });
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const artifact = await screen.findByRole("article", { name: "Reformulated Proof Explain compact subset" });
@@ -639,7 +639,7 @@ describe("anchored teaching workbench", () => {
       if (action.type === "applyLearningArtifactRegeneration") return applied;
       return state;
     });
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const artifactRegion = await screen.findByRole("article", { name: "Pinned Learning Artifact Explain compact subset" });
@@ -697,7 +697,7 @@ describe("anchored teaching workbench", () => {
       status: "stopped", retryable: true, statusMessage: "Regeneration stopped. The current revision remains unchanged."
     };
     vi.mocked(api.submit).mockImplementation(async (action) => action.type === "cancelSessionModelWork" ? stopped : state);
-    window.quickStudy = api;
+    window.clarifold = api;
     render(<App />);
     const status = await screen.findByRole("status", { name: "Artifact regeneration Agent Task Status" });
     expect(status.textContent).toContain("Preparing the regeneration preview with Codex.");
@@ -736,7 +736,7 @@ describe("anchored teaching workbench", () => {
         }
       ]
     }];
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -746,24 +746,24 @@ describe("anchored teaching workbench", () => {
     expect(roadmap.textContent).toContain("Depends on Compact subsets are closed");
     expect(roadmap.textContent).toContain("Source Anchor “compact subset” · characters 6–20");
     await user.click(screen.getByRole("button", { name: "Show Source Anchor for Compact subsets are closed" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
     await user.clear(screen.getByLabelText("Learning Slice boundary"));
     await user.type(screen.getByLabelText("Learning Slice boundary"), "Prove the claim using finite subcovers");
     await user.clear(screen.getByLabelText("Immediate prerequisites"));
     await user.type(screen.getByLabelText("Immediate prerequisites"), "Hausdorff separation\nFinite subcovers");
     await user.click(screen.getByRole("button", { name: "Save Learning Slice" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "reviseLearningSlice",
       boundary: "Prove the claim using finite subcovers",
       immediatePrerequisites: ["Hausdorff separation", "Finite subcovers"]
     });
 
     await user.click(screen.getByRole("button", { name: "Choose Learning Slice Limits are unique" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "selectRoadmapStage", roadmapId: "roadmap-1", stageId: "stage-2"
     });
 
-    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("The roadmap Source Anchor is stale."));
+    vi.mocked(window.clarifold.submit).mockRejectedValueOnce(new Error("The roadmap Source Anchor is stale."));
     await user.click(screen.getByRole("button", { name: "Show Source Anchor for Compact subsets are closed" }));
     expect((await screen.findByRole("alert")).textContent).toContain("The roadmap Source Anchor is stale.");
   });
@@ -775,8 +775,8 @@ describe("anchored teaching workbench", () => {
       sourceAnchorId: "anchor-1",
       prerequisite: "Hausdorff separation"
     };
-    window.quickStudy = quickStudyApi(state);
-    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("Codex did not confirm interruption."));
+    window.clarifold = quickStudyApi(state);
+    vi.mocked(window.clarifold.submit).mockRejectedValueOnce(new Error("Codex did not confirm interruption."));
 
     render(<App />);
 
@@ -785,7 +785,7 @@ describe("anchored teaching workbench", () => {
     const stop = screen.getByRole("button", { name: "Stop Concept Peek generation Hausdorff separation" });
     stop.focus();
     await user.keyboard("{Enter}");
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "cancelSessionModelWork",
       sessionId: "session-1"
     });
@@ -826,7 +826,7 @@ describe("anchored teaching workbench", () => {
     session.activeAgentTaskId = "agent-task-1";
     state.screen = "dashboard";
     state.activeSessionId = null;
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -835,7 +835,7 @@ describe("anchored teaching workbench", () => {
     const stop = status!.querySelector("button")!;
     expect(stop.textContent).toBe("Stop Agent Task");
     await user.click(stop);
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "cancelSessionModelWork", sessionId: "session-1"
     });
   });
@@ -845,7 +845,7 @@ describe("anchored teaching workbench", () => {
     const session = state.sessions[0];
     session.agentTasks = [agentTaskFixture(session)];
     session.activeAgentTaskId = session.agentTasks[0].id;
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -883,7 +883,7 @@ describe("anchored teaching workbench", () => {
     };
     state.modelAccess = { status: "available" };
     state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
 
@@ -898,7 +898,7 @@ describe("anchored teaching workbench", () => {
     const resume = screen.getByRole("button", { name: "Resume Agent Task" });
     resume.focus();
     await user.keyboard("{Enter}");
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "resumeAgentTask", taskId: "agent-task-1"
     });
   });
@@ -910,11 +910,11 @@ describe("anchored teaching workbench", () => {
       { model: "codex-fast", displayName: "Codex Fast", isDefault: true, supportedReasoningEfforts: ["low", "medium"] },
       { model: "codex-deep", displayName: "Codex Deep", isDefault: false, supportedReasoningEfforts: ["medium", "high", "max"] }
     ];
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
     render(<App />);
 
     await user.click(await screen.findByRole("radio", { name: "Deeper" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "setReasoningPreference", preference: "deeper" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "setReasoningPreference", preference: "deeper" });
 
     await user.click(screen.getByText("Advanced Runtime Override"));
     await user.selectOptions(screen.getByRole("combobox", { name: "Runtime model" }), "codex-fast");
@@ -922,7 +922,7 @@ describe("anchored teaching workbench", () => {
     expect([...effort.querySelectorAll("option")].map((option) => option.value)).toEqual(["low", "medium"]);
     await user.selectOptions(effort, "low");
     await user.click(screen.getByRole("button", { name: "Apply Runtime Override" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "setRuntimeOverride", override: { model: "codex-fast", reasoningEffort: "low" }
     });
   });
@@ -933,17 +933,17 @@ describe("anchored teaching workbench", () => {
     state.runtimeAvailable = true;
     state.modelAccess = { status: "available" };
     state.modelRuntimeLifecycle = { status: "available", operationId: null, message: null };
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
     render(<App />);
 
     expect(await screen.findByText("Choose parallel work only for independent perspectives; use sequential review when the second brief needs the first result."))
       .toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Sequential review then challenge" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "requestSpecialistReview", coordination: "dependent"
     });
     await user.click(screen.getByRole("button", { name: "Two independent perspectives" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "requestSpecialistReview", coordination: "independent"
     });
   });
@@ -977,7 +977,7 @@ describe("anchored teaching workbench", () => {
       id: "proposal-1", sourceAnchorId: "anchor-1", prerequisite: "finite subcover arguments",
       status: "pending", branchSessionId: null
     }];
-    window.quickStudy = quickStudyApi(originState);
+    window.clarifold = quickStudyApi(originState);
 
     render(<App />);
 
@@ -986,7 +986,7 @@ describe("anchored teaching workbench", () => {
     expect(screen.getByRole("article", { name: "Concept Peek Hausdorff separation" }).textContent)
       .toContain("Anchored at “compact subset” (characters 6–20)");
     await user.click(screen.getByRole("button", { name: "Show Source Anchor for Concept Peek Hausdorff separation" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "activateSourceAnchor", sourceAnchorId: "anchor-1" });
     expect((screen.getByRole("combobox", { name: "Workbench Source Layer" }) as HTMLSelectElement).value).toBe("source-1");
     const peekAnchorMarker = screen.getByRole("button", {
       name: "Open Anchor Marker for Text Source Anchor: compact subset (characters 6–20)"
@@ -995,31 +995,31 @@ describe("anchored teaching workbench", () => {
     const openPeek = screen.getByRole("button", { name: "Open Concept Peek Hausdorff separation" });
     openPeek.focus();
     await user.keyboard("{Enter}");
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "openConceptPeek", sourceAnchorId: "anchor-1", prerequisite: "Hausdorff separation"
     });
-    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("The prerequisite proposal could not be saved."));
+    vi.mocked(window.clarifold.submit).mockRejectedValueOnce(new Error("The prerequisite proposal could not be saved."));
     await user.click(screen.getByRole("button", { name: "Propose Prerequisite Branch Hausdorff separation" }));
     expect((await screen.findByRole("alert")).textContent).toContain("could not be saved");
     await user.click(screen.getByRole("button", { name: "Propose Prerequisite Branch Hausdorff separation" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "proposePrerequisiteBranch", sourceAnchorId: "anchor-1", prerequisite: "Hausdorff separation"
     });
-    vi.mocked(window.quickStudy.submit).mockRejectedValueOnce(new Error("The Concept Peek could not be closed."));
+    vi.mocked(window.clarifold.submit).mockRejectedValueOnce(new Error("The Concept Peek could not be closed."));
     await user.click(screen.getByRole("button", { name: "Close Concept Peek Hausdorff separation" }));
     expect((await screen.findByRole("alert")).textContent).toContain("could not be closed");
     await user.click(screen.getByRole("button", { name: "Close Concept Peek Hausdorff separation" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "closeConceptPeek", conceptPeekId: "peek-1" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "closeConceptPeek", conceptPeekId: "peek-1" });
     await user.click(screen.getByRole("button", { name: "Accept Prerequisite Branch finite subcover arguments" }));
     await user.click(screen.getByRole("button", { name: "Keep finite subcover arguments inline as a Concept Peek" }));
     await user.click(screen.getByRole("button", { name: "Defer Prerequisite Branch finite subcover arguments" }));
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "accept"
     });
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "keepInline"
     });
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({
+    expect(window.clarifold.submit).toHaveBeenCalledWith({
       type: "decidePrerequisiteBranch", proposalId: "proposal-1", decision: "defer"
     });
 
@@ -1062,7 +1062,7 @@ describe("anchored teaching workbench", () => {
     returnedState.activeSessionId = origin.id;
     const api = quickStudyApi(branchState);
     vi.mocked(api.submit).mockImplementation(async (action) => action.type === "returnToPrerequisiteOrigin" ? returnedState : branchState);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const trail = await screen.findByRole("navigation", { name: "Branch Trail" });
@@ -1074,7 +1074,7 @@ describe("anchored teaching workbench", () => {
     const returnButton = screen.getByRole("button", { name: "Return to Text Source Anchor: compact subset (characters 6–20)" });
     returnButton.focus();
     await user.keyboard("{Enter}");
-    expect(window.quickStudy.submit).toHaveBeenCalledWith({ type: "returnToPrerequisiteOrigin" });
+    expect(window.clarifold.submit).toHaveBeenCalledWith({ type: "returnToPrerequisiteOrigin" });
     const marker = await screen.findByRole("button", {
       name: "Open Anchor Marker for Text Source Anchor: compact subset (characters 6–20)"
     });
@@ -1109,7 +1109,7 @@ describe("anchored teaching workbench", () => {
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "beginSessionConsolidation" ? consolidationState : consolidationState
     );
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const begin = await screen.findByRole("button", { name: "Finish & consolidate" });
@@ -1146,7 +1146,7 @@ describe("anchored teaching workbench", () => {
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "declineDelayedTransfer" ? declined : state
     );
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const prompt = await screen.findByRole("region", { name: "Delayed Transfer follow-up" });
@@ -1163,7 +1163,7 @@ describe("anchored teaching workbench", () => {
     const user = userEvent.setup();
     const state = addressedDashboardState();
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const prompt = await screen.findByRole("region", { name: "Delayed Transfer follow-up" });
@@ -1216,7 +1216,7 @@ describe("anchored teaching workbench", () => {
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "openFollowUpQueue" || action.type === "rescheduleDelayedTransfer" ? queueState : state
     );
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const followUps = await screen.findByRole("region", { name: "Follow-ups" });
@@ -1270,7 +1270,7 @@ describe("anchored teaching workbench", () => {
     cancelled.delayedTransferChecks[0].status = "scheduled";
     const api = quickStudyApi(state);
     vi.mocked(api.submit).mockResolvedValue(cancelled);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const queue = await screen.findByRole("region", { name: "Follow-up Queue" });
@@ -1302,7 +1302,7 @@ describe("anchored teaching workbench", () => {
         task: null, taskError: null,
         draft: { work: "", reasoning: "", confidence: null, clarifications: [] }, evidence: null, result: null
       }];
-      window.quickStudy = quickStudyApi(state);
+      window.clarifold = quickStudyApi(state);
       render(<App />);
       await act(async () => { await Promise.resolve(); });
       expect(within(screen.getByRole("region", { name: "Follow-ups" })).getByRole("status").textContent)
@@ -1330,7 +1330,7 @@ describe("anchored teaching workbench", () => {
     }];
     const api = quickStudyApi(state);
     vi.mocked(api.submit).mockRejectedValue(new Error("Persistence unavailable"));
-    window.quickStudy = api;
+    window.clarifold = api;
     const { unmount } = render(<App />);
 
     await user.click(await screen.findByRole("button", { name: /Open Follow-up Queue/ }));
@@ -1339,8 +1339,8 @@ describe("anchored teaching workbench", () => {
 
     unmount();
     state.screen = "followUps";
-    window.quickStudy = quickStudyApi(state);
-    vi.mocked(window.quickStudy.submit).mockRejectedValue(new Error("Navigation could not be saved"));
+    window.clarifold = quickStudyApi(state);
+    vi.mocked(window.clarifold.submit).mockRejectedValue(new Error("Navigation could not be saved"));
     render(<App />);
     await user.click(await screen.findByRole("button", { name: "Return to dashboard" }));
     expect((await screen.findByRole("alert")).textContent).toContain("Navigation could not be saved");
@@ -1362,7 +1362,7 @@ describe("anchored teaching workbench", () => {
     vi.mocked(api.submit).mockImplementation(async (action) =>
       action.type === "dismissDelayedTransfer" ? second : first
     );
-    window.quickStudy = api;
+    window.clarifold = api;
     render(<App />);
 
     let prompt = await screen.findByRole("region", { name: "Delayed Transfer follow-up" });
@@ -1449,7 +1449,7 @@ describe("anchored teaching workbench", () => {
       if (action.type === "completeDelayedTransferCheck") return completed;
       return completed;
     });
-    window.quickStudy = api;
+    window.clarifold = api;
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Start delayed check for Explain the selected claim" }));
@@ -1501,7 +1501,7 @@ describe("anchored teaching workbench", () => {
     state.activeSessionId = null;
     state.resumeSessionId = null;
     const api = quickStudyApi(state);
-    window.quickStudy = api;
+    window.clarifold = api;
 
     render(<App />);
     const outcome = await screen.findByRole("article", { name: "Consolidated Session Outcome Understand compactness" });
@@ -1546,7 +1546,7 @@ describe("anchored teaching workbench", () => {
     state.sessions = [historical, continuation];
     state.activeSessionId = continuation.id;
     state.resumeSessionId = continuation.id;
-    window.quickStudy = quickStudyApi(state);
+    window.clarifold = quickStudyApi(state);
 
     render(<App />);
     const context = await screen.findByRole("region", { name: "Continuation context" });
@@ -1596,16 +1596,16 @@ describe("Linked Source recovery", () => {
         snapshotAssetId: null
       }
     ];
-    window.quickStudy = quickStudyApi(state);
-    vi.mocked(window.quickStudy.locateLinkedSource).mockResolvedValue(state);
-    vi.mocked(window.quickStudy.preserveSourceSnapshot).mockResolvedValue(state);
+    window.clarifold = quickStudyApi(state);
+    vi.mocked(window.clarifold.locateLinkedSource).mockResolvedValue(state);
+    vi.mocked(window.clarifold.preserveSourceSnapshot).mockResolvedValue(state);
 
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Retry Linked Source proof.txt" })).toBeTruthy();
     expect(screen.getByText(/Historical content unavailable/).textContent).toContain("Source Index and Source Fingerprint are not backups");
     await user.click(screen.getByRole("button", { name: "Locate Linked Source proof.txt again" }));
-    expect(window.quickStudy.locateLinkedSource).toHaveBeenCalledWith("linked-source-1");
+    expect(window.clarifold.locateLinkedSource).toHaveBeenCalledWith("linked-source-1");
     expect(screen.queryByRole("button", { name: "Preserve current Source Revision for proof.txt" })).toBeNull();
   });
 
@@ -1645,8 +1645,8 @@ describe("Linked Source recovery", () => {
       fromRevisionId: "source-revision-1", toRevisionId: "source-revision-2", status: "unresolved",
       oldSelection: state.sessions[0].sourceAnchors.at(-2)!.selection, proposedSelection: null
     }];
-    window.quickStudy = quickStudyApi(state);
-    vi.mocked(window.quickStudy.openLinkedSource).mockResolvedValue({
+    window.clarifold = quickStudyApi(state);
+    vi.mocked(window.clarifold.openLinkedSource).mockResolvedValue({
       status: "available", sourceId: "linked-source-1", resourceType: "file", mediaType: "text/plain",
       content: "Alpha theorem changed. Beta lemma. Delta claim.", fingerprint: { size: 80, modifiedAtMs: 6789 }
     });
@@ -1659,7 +1659,7 @@ describe("Linked Source recovery", () => {
   });
 });
 
-function quickStudyApi(state: LearningApplicationState): typeof window.quickStudy {
+function quickStudyApi(state: LearningApplicationState): typeof window.clarifold {
   return {
     getState: vi.fn().mockResolvedValue(state), submit: vi.fn().mockResolvedValue(state),
     getAgentWorkLogEvidence: vi.fn().mockResolvedValue([]), searchSessions: vi.fn().mockResolvedValue([]),

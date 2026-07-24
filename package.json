@@ -1,7 +1,7 @@
 {
-  "name": "quick-study",
-  "productName": "Quick Study",
-  "version": "0.1.0",
+  "name": "clarifold",
+  "productName": "Clarifold",
+  "version": "0.2.0",
   "description": "A local-first mathematical learning workbench.",
   "main": "dist/main/main.js",
   "license": "PolyForm-Noncommercial-1.0.0",
@@ -10,7 +10,7 @@
     "node": ">=22 <26"
   },
   "scripts": {
-    "dev": "npm run build:native-helpers && npm run build:verifier && concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist/main/main.js && cross-env QUICK_STUDY_DEV_URL=http://127.0.0.1:5173 electron .\"",
+    "dev": "npm run build:native-helpers && npm run build:verifier && concurrently -k \"vite --host 127.0.0.1\" \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist/main/main.js && cross-env CLARIFOLD_DEV_URL=http://127.0.0.1:5173 electron .\"",
     "build": "npm run build:renderer && npm run build:main && npm run build:native-helpers && npm run build:verifier",
     "build:renderer": "vite build",
     "build:main": "tsc -p tsconfig.main.json",
@@ -38,8 +38,8 @@
     "package": "npm run build && electron-forge package --platform=darwin",
     "make:beta": "electron-forge make --platform=darwin --skip-package",
     "test:smoke": "node scripts/install-beta-for-smoke.mjs && npm run test:smoke:index-budget && npm run test:smoke:functional",
-    "test:smoke:index-budget": "playwright test --config=playwright.config.ts --grep \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
-    "test:smoke:functional": "playwright test --config=playwright.config.ts --grep-invert \"packaged Quick Study indexes the pinned large-source corpus within budget\"",
+    "test:smoke:index-budget": "playwright test --config=playwright.config.ts --grep \"packaged Clarifold indexes the pinned large-source corpus within budget\"",
+    "test:smoke:functional": "playwright test --config=playwright.config.ts --grep-invert \"packaged Clarifold indexes the pinned large-source corpus within budget\"",
     "verify:prepackage": "npm run lint && npm run typecheck && npm test && npm run test:policy && npm run policy:documentation",
     "verify:package": "npm run quality:gate:fixture && npm run package && npm run make:beta && npm run license:audit && npm run test:smoke",
     "verify": "npm run verify:prepackage && npm run verify:package"

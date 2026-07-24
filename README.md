@@ -68,7 +68,7 @@ Start with the [development guide](docs/development.md) for a build-from-source 
 
 ## Privacy, trust, and feedback
 
-Application state uses Electron's local `userData` directory. The supported `QUICK_STUDY_DATA_DIR` override is for isolated development or diagnosis and must not point at imported learner sources. Do not commit learner data, credentials, or local `.env` files. Optional model access and external research are separate from local source and session work; see the [privacy notice](PRIVACY.md) and [beta guide](docs/beta-release.md) for the current boundaries and recovery paths.
+Application state uses Clarifold's local Electron `userData` directory. Use `CLARIFOLD_DATA_DIR` for isolated development or diagnosis; the one-beta `QUICK_STUDY_DATA_DIR` compatibility alias is deprecated and must not point at imported learner sources. On a first default launch, Clarifold stages and validates existing Quick Study data without deleting or changing the old rollback source. Do not commit learner data, credentials, or local `.env` files. Optional model access and external research are separate from local source and session work; see the [privacy notice](PRIVACY.md) and [beta guide](docs/beta-release.md) for the current boundaries and recovery paths.
 
 Use the [public issue chooser](https://github.com/jerome-queck/clarifold/issues/new/choose) for structured product feedback. Do not attach learner records, source documents, credentials, Personal Notes, or other private data. Include the beta version, macOS version, Mac model, action attempted, visible error, and whether recovery succeeded when the selected form requests it. Public reports are reviewed on a best-effort basis; there is no dedicated support service or response-time promise.
 

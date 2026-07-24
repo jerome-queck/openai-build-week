@@ -24,11 +24,11 @@ The command validates both files, writes JSON and Markdown reports, and exits `1
 For the macOS beta candidate, first build and smoke-test a clean committed candidate, run the opt-in installed live-Codex smoke, and collect the fixed stochastic and real-agent sample. After two blinded evaluators record and reconcile their independent verdicts, assemble and run the candidate gate:
 
 ```sh
-QUICK_STUDY_LIVE_CODEX=1 npx playwright test --config=playwright.config.ts --grep "live Codex"
-QUICK_STUDY_EVALUATION_MODEL=runtimeDefault QUICK_STUDY_EVALUATION_REASONING=low npm run quality:collect:model
-QUICK_STUDY_MODEL_EVIDENCE=/absolute/path/to/model-responses.json \
-QUICK_STUDY_EVALUATOR_VERDICTS=/absolute/path/to/blinded-verdicts.json \
-QUICK_STUDY_RECOVERY_EVIDENCE=/absolute/path/to/recovery-verdicts.json \
+CLARIFOLD_LIVE_CODEX=1 npx playwright test --config=playwright.config.ts --grep "live Codex"
+CLARIFOLD_EVALUATION_MODEL=runtimeDefault CLARIFOLD_EVALUATION_REASONING=low npm run quality:collect:model
+CLARIFOLD_MODEL_EVIDENCE=/absolute/path/to/model-responses.json \
+CLARIFOLD_EVALUATOR_VERDICTS=/absolute/path/to/blinded-verdicts.json \
+CLARIFOLD_RECOVERY_EVIDENCE=/absolute/path/to/recovery-verdicts.json \
 npm run quality:gate:beta
 ```
 

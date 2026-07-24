@@ -1,9 +1,10 @@
 const { chmod, copyFile, readdir, rm } = require("node:fs/promises");
 const { join } = require("node:path");
+const identity = require("./src/shared/clarifold-identity.json");
 
 module.exports = {
   packagerConfig: {
-    appBundleId: "com.jeromequeck.quick-study",
+    appBundleId: identity.bundleIdentifier,
     appCategoryType: "public.app-category.education",
     asar: { unpackDir: "dist/helpers" },
     icon: undefined,
@@ -38,13 +39,13 @@ module.exports = {
   hooks: {
     prePackage: async (_forgeConfig, platform, arch) => {
       await removeMetadataFiles(join(__dirname, "dist", "verifiers"));
-      const priorVerifierDirectory = join(__dirname, "out", `Quick Study-${platform}-${arch}`,
-        "Quick Study.app", "Contents", "Resources", "verifiers");
+      const priorVerifierDirectory = join(__dirname, "out", `${identity.productName}-${platform}-${arch}`,
+        `${identity.productName}.app`, "Contents", "Resources", "verifiers");
       await makeVerifierFilesWritable(priorVerifierDirectory);
     },
     postPackage: async (_forgeConfig, packageResult) => {
       for (const outputPath of packageResult.outputPaths) {
-        await makeVerifierFilesReadOnly(join(outputPath, "Quick Study.app", "Contents", "Resources", "verifiers"));
+        await makeVerifierFilesReadOnly(join(outputPath, `${identity.productName}.app`, "Contents", "Resources", "verifiers"));
       }
     }
   }
@@ -55,13 +56,13 @@ function copyPackagedUpstreamNotices(outputPath, _electronVersion, _platform, _a
 }
 
 async function copyPackagedUpstreamNoticesAsync(outputPath) {
-  const resources = join(outputPath, "Quick Study.app", "Contents", "Resources");
+  const resources = join(outputPath, `${identity.productName}.app`, "Contents", "Resources");
   const notices = [
     {
       sources: [
         join(outputPath, "LICENSE"),
-        join(outputPath, "Quick Study.app", "LICENSE"),
-        join(outputPath, "Quick Study.app", "Contents", "LICENSE"),
+        join(outputPath, `${identity.productName}.app`, "LICENSE"),
+        join(outputPath, `${identity.productName}.app`, "Contents", "LICENSE"),
         join(__dirname, "node_modules", "electron", "dist", "LICENSE"),
       ],
       destination: join(resources, "ELECTRON_LICENSE"),
@@ -69,8 +70,8 @@ async function copyPackagedUpstreamNoticesAsync(outputPath) {
     {
       sources: [
         join(outputPath, "LICENSES.chromium.html"),
-        join(outputPath, "Quick Study.app", "LICENSES.chromium.html"),
-        join(outputPath, "Quick Study.app", "Contents", "LICENSES.chromium.html"),
+        join(outputPath, `${identity.productName}.app`, "LICENSES.chromium.html"),
+        join(outputPath, `${identity.productName}.app`, "Contents", "LICENSES.chromium.html"),
         join(__dirname, "node_modules", "electron", "dist", "LICENSES.chromium.html"),
       ],
       destination: join(resources, "CHROMIUM_LICENSES.html"),

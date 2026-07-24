@@ -37,7 +37,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
-            node_modules/.cache/quick-study-lean
+            node_modules/.cache/clarifold-lean
             dist/verifiers
           key: bundled-lean-4.29.1-mathlib-4.29.1-foundations-v4-${{ runner.arch }}
       - name: Classify changed paths and verification surfaces
@@ -78,22 +78,22 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: success() && (steps.classify.outputs.artifact_affected == 'true' || github.event_name != 'pull_request' || inputs.release_candidate == true)
         with:
-          name: quick-study-macos-beta-${{ runner.arch }}
+          name: clarifold-macos-beta-${{ runner.arch }}
           if-no-files-found: error
           path: |
-            out/make/zip/darwin/*/Quick Study-darwin-*.zip
+            out/make/zip/darwin/*/Clarifold-darwin-*.zip
             test-results/beta-install.json
       - name: Record uploaded beta binding
         if: success() && (steps.classify.outputs.artifact_affected == 'true' || github.event_name != 'pull_request' || inputs.release_candidate == true)
         env:
           ARTIFACT_DIGEST: ${{ steps.beta-artifact.outputs.artifact-digest }}
-          ARTIFACT_NAME: quick-study-macos-beta-${{ runner.arch }}
+          ARTIFACT_NAME: clarifold-macos-beta-${{ runner.arch }}
           CANDIDATE_COMMIT: ${{ github.sha }}
         run: node scripts/record-beta-upload-binding.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: success() && (steps.classify.outputs.artifact_affected == 'true' || github.event_name != 'pull_request' || inputs.release_candidate == true)
         with:
-          name: quick-study-macos-beta-binding-${{ runner.arch }}
+          name: clarifold-macos-beta-binding-${{ runner.arch }}
           if-no-files-found: error
           path: test-results/beta-upload-binding.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

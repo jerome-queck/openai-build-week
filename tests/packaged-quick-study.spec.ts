@@ -17,10 +17,10 @@ const executablePath = join(
   process.cwd(),
   "test-results",
   "installed-beta",
-  "Quick Study.app",
+  "Clarifold.app",
   "Contents",
   "MacOS",
-  "Quick Study"
+  "Clarifold"
 );
 const PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS = 660_000;
 
@@ -30,7 +30,7 @@ test("packaged critical source and access journey has an isolated release bounda
   try {
     let page = await scenario.launch();
     await expect(page.getByRole("heading", { name: "Continue your mathematics" })).toBeVisible();
-    const betaSupport = page.getByRole("region", { name: "Quick Study beta support" });
+    const betaSupport = page.getByRole("region", { name: "Clarifold beta support" });
     await expect(betaSupport.getByRole("link", { name: "Report beta feedback" })).toBeVisible();
     await expectCriticalControlsNamed(page, "dashboard and settings");
     await expectKeyboardReachable(page, betaSupport.getByRole("link", { name: "Report beta feedback" }));
@@ -275,7 +275,7 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
       };
       windowWithReceipt.__quickStudyVerifierLifecycleReceipt = {
         events: [],
-        unsubscribe: window.quickStudy.onStateChanged((state) => {
+        unsubscribe: window.clarifold.onStateChanged((state) => {
           windowWithReceipt.__quickStudyVerifierLifecycleReceipt?.events.push({
             status: state.modelRuntimeLifecycle.status,
             operationId: state.modelRuntimeLifecycle.operationId,
@@ -303,14 +303,14 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     const firstSecondManifestEvent = lifecycleEvents.findIndex((event) => event.manifestCount === 2);
     expect(firstSecondManifestEvent).toBeGreaterThanOrEqual(0);
     expect(lifecycleEvents.slice(0, firstSecondManifestEvent).every((event) => event.manifestCount === 1)).toBe(true);
-    const lifecycleAfterManifest = await page.evaluate(async () => (await window.quickStudy.getState()).modelRuntimeLifecycle);
+    const lifecycleAfterManifest = await page.evaluate(async () => (await window.clarifold.getState()).modelRuntimeLifecycle);
     expect(lifecycleAfterManifest).toMatchObject({ status: "available", operationId: expect.any(String) });
     const restorationOperationId = lifecycleAfterManifest.operationId;
     await scenario.action("Wait for Codex runtime restoration after Lean verification", async () => {
       await expect(page.getByRole("status", { name: "Model teaching available" })).toContainText("Model teaching available", {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
       });
-      await expect.poll(() => page.evaluate(async () => (await window.quickStudy.getState()).modelRuntimeLifecycle), {
+      await expect.poll(() => page.evaluate(async () => (await window.clarifold.getState()).modelRuntimeLifecycle), {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
       }).toMatchObject({ status: "available", operationId: restorationOperationId });
     }, PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS);
@@ -379,8 +379,8 @@ test("packaged delayed-transfer journey preserves its explicit due and reload co
     await scenario.action("Start delayed transfer check", () => startDelayed.press("Enter"));
     await expect.poll(async () => {
       const state = await page.evaluate(() => (window as unknown as Window & {
-        quickStudy: { getState(): Promise<{ screen: string; delayedTransferChecks: Array<{ status: string; taskError: string | null }> }> }
-      }).quickStudy.getState());
+        clarifold: { getState(): Promise<{ screen: string; delayedTransferChecks: Array<{ status: string; taskError: string | null }> }> }
+      }).clarifold.getState());
       return {
         screen: state.screen,
         checks: state.delayedTransferChecks.map((check) => ({ status: check.status, taskError: check.taskError }))
@@ -437,7 +437,7 @@ test("packaged release-critical cold-start and verifier resource budgets are mea
   }
 });
 
-test("packaged Quick Study indexes the pinned large-source corpus within budget", async ({}, testInfo) => {
+test("packaged Clarifold indexes the pinned large-source corpus within budget", async ({}, testInfo) => {
   test.setTimeout(180_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-large-index-"));
   const sourceDirectory = await mkdtemp(join(tmpdir(), "quick-study-large-source-"));
@@ -456,9 +456,9 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
     env: {
       ...process.env,
       ELECTRON_ENABLE_LOGGING: "1",
-      QUICK_STUDY_DATA_DIR: dataDirectory,
-      QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
-      QUICK_STUDY_TEST_PRIMARY_FOLDER: corpusPath
+      CLARIFOLD_DATA_DIR: dataDirectory,
+      CLARIFOLD_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
+      CLARIFOLD_TEST_PRIMARY_FOLDER: corpusPath
     },
     stdio: "pipe"
   });
@@ -536,7 +536,7 @@ test("packaged Quick Study indexes the pinned large-source corpus within budget"
   }
 });
 
-test("packaged Quick Study checkpoints Background Agent Tasks and resumes them explicitly", async ({}, testInfo) => {
+test("packaged Clarifold checkpoints Background Agent Tasks and resumes them explicitly", async ({}, testInfo) => {
   test.setTimeout(120_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-task-smoke-"));
   const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-agent-runtime-control-"));
@@ -554,10 +554,10 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
       env: {
         ...process.env,
         ELECTRON_ENABLE_LOGGING: "1",
-        QUICK_STUDY_DATA_DIR: dataDirectory,
+        CLARIFOLD_DATA_DIR: dataDirectory,
         CODEX_HOME: runtimeControlDirectory,
-        QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
-        QUICK_STUDY_TEST_EXTERNAL_RESEARCH: "stub"
+        CLARIFOLD_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
+        CLARIFOLD_TEST_EXTERNAL_RESEARCH: "stub"
       },
       stdio: "pipe"
     });
@@ -582,7 +582,7 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
     await current.browser.close().catch(() => undefined);
     if (!exitedNormally) {
       await terminateChild(current.process);
-      throw new Error(`Packaged Quick Study did not checkpoint Agent Tasks before exiting.\n${current.output()}`);
+      throw new Error(`Packaged Clarifold did not checkpoint Agent Tasks before exiting.\n${current.output()}`);
     }
   };
   const action = <T>(operation: string, work: () => Promise<T>, timeoutMs?: number) => {
@@ -683,13 +683,13 @@ test("packaged Quick Study checkpoints Background Agent Tasks and resumes them e
   }
 });
 
-test("installed Quick Study authenticates with the live Codex runtime and completes teaching", async ({}, testInfo) => {
-  test.skip(process.env.QUICK_STUDY_LIVE_CODEX !== "1", "Live Codex release evidence is opt-in.");
+test("installed Clarifold authenticates with the live Codex runtime and completes teaching", async ({}, testInfo) => {
+  test.skip(process.env.CLARIFOLD_LIVE_CODEX !== "1", "Live Codex release evidence is opt-in.");
   test.setTimeout(180_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-live-codex-"));
   const port = await availablePort();
   const child = spawn(executablePath, [`--remote-debugging-port=${port}`], {
-    env: { ...process.env, QUICK_STUDY_DATA_DIR: dataDirectory },
+    env: { ...process.env, CLARIFOLD_DATA_DIR: dataDirectory },
     stdio: "pipe"
   });
   let output = "";
@@ -731,7 +731,7 @@ test("installed Quick Study authenticates with the live Codex runtime and comple
   }
 });
 
-test("packaged Quick Study rejects a child-controlled authentication destination", async ({}, testInfo) => {
+test("packaged Clarifold rejects a child-controlled authentication destination", async ({}, testInfo) => {
   test.setTimeout(60_000);
   const dataDirectory = await mkdtemp(join(tmpdir(), "quick-study-auth-policy-"));
   const runtimeControlDirectory = await mkdtemp(join(tmpdir(), "quick-study-auth-runtime-control-"));
@@ -745,10 +745,10 @@ test("packaged Quick Study rejects a child-controlled authentication destination
   const child = spawn(executablePath, [`--remote-debugging-port=${port}`], {
     env: {
       ...process.env,
-      QUICK_STUDY_DATA_DIR: dataDirectory,
+      CLARIFOLD_DATA_DIR: dataDirectory,
       CODEX_HOME: runtimeControlDirectory,
-      QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
-      QUICK_STUDY_TEST_AUTHENTICATION_OPEN_LOG: openLogPath
+      CLARIFOLD_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
+      CLARIFOLD_TEST_AUTHENTICATION_OPEN_LOG: openLogPath
     },
     stdio: "pipe"
   });
@@ -781,7 +781,7 @@ test("packaged Quick Study rejects a child-controlled authentication destination
     try {
       if (!exitedNormally) {
         await terminateChild(child);
-        throw new Error(`Packaged Quick Study did not cancel verifier setup before exiting.\n${output}`);
+        throw new Error(`Packaged Clarifold did not cancel verifier setup before exiting.\n${output}`);
       }
     } finally {
       await attachPackagedDiagnostics(undefined, testInfo, diagnostics, output, finalBackendState);
@@ -863,15 +863,15 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
       env: {
         ...process.env,
         ELECTRON_ENABLE_LOGGING: "1",
-        QUICK_STUDY_DATA_DIR: dataDirectory,
+        CLARIFOLD_DATA_DIR: dataDirectory,
         CODEX_HOME: runtimeControlDirectory,
-        QUICK_STUDY_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
-        QUICK_STUDY_TEST_PRIMARY_FOLDER: primaryFolderPath,
-        QUICK_STUDY_TEST_EXTERNAL_ATTACHMENT: attachmentPath,
-        QUICK_STUDY_TEST_RELOCATED_SOURCE: relocatedAttachmentPath,
-        QUICK_STUDY_TEST_ARTIFACT_EXPORT_PATH: artifactExportPath,
-        QUICK_STUDY_TEST_EXTERNAL_RESEARCH: "stub",
-        QUICK_STUDY_TEST_VERIFIER_REMOVAL_FAILURE: "once"
+        CLARIFOLD_CODEX_PATH: join(process.cwd(), "tests/fixtures/fake-codex-app-server.mjs"),
+        CLARIFOLD_TEST_PRIMARY_FOLDER: primaryFolderPath,
+        CLARIFOLD_TEST_EXTERNAL_ATTACHMENT: attachmentPath,
+        CLARIFOLD_TEST_RELOCATED_SOURCE: relocatedAttachmentPath,
+        CLARIFOLD_TEST_ARTIFACT_EXPORT_PATH: artifactExportPath,
+        CLARIFOLD_TEST_EXTERNAL_RESEARCH: "stub",
+        CLARIFOLD_TEST_VERIFIER_REMOVAL_FAILURE: "once"
       },
       stdio: "pipe"
     });
@@ -911,7 +911,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
       await current.browser.close().catch(() => undefined);
       if (!exitedNormally) {
         await terminateChild(current.process);
-        throw new Error(`Packaged Quick Study did not exit after its last window closed.\n${current.output()}`);
+        throw new Error(`Packaged Clarifold did not exit after its last window closed.\n${current.output()}`);
       }
     } finally {
       processLifecycleOutput.push(current.output());
@@ -1014,13 +1014,13 @@ async function waitForDebugger(port: number, child: ChildProcess, output: () => 
   while (Date.now() < deadline) {
     const termination = childTermination(child);
     if (termination) {
-      throw new Error(`Packaged Quick Study exited early with ${termination}.\n${output()}`);
+      throw new Error(`Packaged Clarifold exited early with ${termination}.\n${output()}`);
     }
     const endpoint = output().match(endpointPattern)?.[1];
     if (endpoint) return endpoint;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Timed out waiting for packaged Quick Study to expose its renderer.\n${output()}`);
+  throw new Error(`Timed out waiting for packaged Clarifold to expose its renderer.\n${output()}`);
 }
 
 async function waitForPage(browser: Browser, child: ChildProcess, output: () => string): Promise<Page> {
@@ -1030,11 +1030,11 @@ async function waitForPage(browser: Browser, child: ChildProcess, output: () => 
     if (page) return page;
     const termination = childTermination(child);
     if (termination) {
-      throw new Error(`Packaged Quick Study exited with ${termination} before opening a renderer page.\n${output()}`);
+  throw new Error(`Packaged Clarifold exited with ${termination} before opening a renderer page.\n${output()}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`Packaged Quick Study did not open a renderer page.\n${output()}`);
+  throw new Error(`Packaged Clarifold did not open a renderer page.\n${output()}`);
 }
 
 async function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
@@ -1060,7 +1060,7 @@ async function terminateChild(child: ChildProcess): Promise<void> {
   if (await waitForExit(child, 5_000)) return;
   child.kill("SIGKILL");
   if (!await waitForExit(child, 5_000)) {
-    throw new Error("Packaged Quick Study did not terminate after SIGKILL.");
+  throw new Error("Packaged Clarifold did not terminate after SIGKILL.");
   }
 }
 

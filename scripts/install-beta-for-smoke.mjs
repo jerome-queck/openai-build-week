@@ -8,15 +8,16 @@ import { assertRealDirectory, assertRealFile } from "./release-integrity.mjs";
 const root = process.cwd();
 const architecture = process.arch === "arm64" ? "arm64" : "x64";
 const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const identity = JSON.parse(await readFile(join(root, "src", "shared", "clarifold-identity.json"), "utf8"));
 const verifierSpecification = JSON.parse(await readFile(join(
   root, "src", "shared", "bundled-verifier-environment.json"
 ), "utf8"));
 const makeDirectory = join(root, "out", "make", "zip", "darwin", architecture);
-const expectedName = `Quick Study-darwin-${architecture}-${packageJson.version}.zip`;
+const expectedName = `${identity.productName}-darwin-${architecture}-${packageJson.version}.zip`;
 const artifactPath = join(makeDirectory, expectedName);
 const installDirectory = join(root, "test-results", "installed-beta");
-const applicationPath = join(installDirectory, "Quick Study.app");
-const executablePath = join(applicationPath, "Contents", "MacOS", "Quick Study");
+const applicationPath = join(installDirectory, `${identity.productName}.app`);
+const executablePath = join(applicationPath, "Contents", "MacOS", identity.productName);
 const verifierPath = join(applicationPath, "Contents", "Resources", "verifiers",
   verifierSpecification.id);
 
@@ -39,14 +40,14 @@ const report = {
   sha256: digest,
   candidateCommit: process.env.GITHUB_SHA
     ?? execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-  installedApplication: "test-results/installed-beta/Quick Study.app",
+  installedApplication: `test-results/installed-beta/${identity.productName}.app`,
   validations: ["archive-extracted", "application-executable-present", "bundled-verifier-present", "code-signature-valid"]
 };
 await writeFile(join(root, "test-results", "beta-install.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
 const entries = (await readdir(installDirectory)).filter((entry) => entry !== ".DS_Store");
-if (entries.length !== 1 || entries[0] !== "Quick Study.app") {
-  throw new Error(`The beta archive must install exactly Quick Study.app; found: ${entries.join(", ")}`);
+if (entries.length !== 1 || entries[0] !== `${identity.productName}.app`) {
+  throw new Error(`The beta archive must install exactly ${identity.productName}.app; found: ${entries.join(", ")}`);
 }
 
 process.stdout.write(`Validated installed beta ${expectedName} (${digest}).\n`);

@@ -31,8 +31,12 @@ trust boundaries. Do not interpret “local-first” as “everything is offline
 ## What the beta stores locally
 
 The application stores its durable state in Electron's local `userData`
-directory, or in the explicitly selected `QUICK_STUDY_DATA_DIR` directory for
-isolated development and diagnosis. This can include:
+directory, or in the explicitly selected `CLARIFOLD_DATA_DIR` directory for
+isolated development and diagnosis. The one-beta `QUICK_STUDY_DATA_DIR` alias
+is accepted with a deprecation warning and lower precedence. On first default
+launch, Clarifold may stage a validated copy of an existing Quick Study data
+directory into the new destination; the old directory remains unchanged as a
+rollback source. This can include:
 
 - Learning Sessions, Learning Trails, questions, annotations, Personal Notes,
   Learning Artifacts, verification evidence, settings, and resumable Agent

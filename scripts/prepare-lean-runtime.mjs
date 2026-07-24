@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { basename, dirname, join, relative } from "node:path";
 
 const projectRoot = process.cwd();
+const identity = JSON.parse(await readFile(join(projectRoot, "src", "shared", "clarifold-identity.json"), "utf8"));
 const specification = JSON.parse(await readFile(join(projectRoot, "src", "shared", "bundled-verifier-environment.json"), "utf8"));
 if (process.platform !== "darwin" || !(process.arch in specification.releases)) {
   throw new Error(`The bundled verifier supports macOS arm64 and x64; received ${process.platform} ${process.arch}.`);
@@ -13,7 +14,7 @@ if (process.platform !== "darwin" || !(process.arch in specification.releases)) 
 const release = specification.releases[process.arch];
 const verifiersDirectory = join(projectRoot, "dist", "verifiers");
 const destination = join(verifiersDirectory, specification.id);
-const cacheDirectory = join(projectRoot, "node_modules", ".cache", "quick-study-lean");
+const cacheDirectory = join(projectRoot, "node_modules", ".cache", identity.runtimeCacheDirectoryName);
 const archivePath = join(cacheDirectory, release.archive);
 const extractionDirectory = join(cacheDirectory, `${specification.id}-${process.arch}-extracted`);
 const mathlibSourceDirectory = join(cacheDirectory, `mathlib-source-${specification.mathlibCommit}`);
@@ -88,7 +89,7 @@ await writeFile(join(staging, "manifest.json"), `${JSON.stringify({
   supportProfile: specification.supportProfile,
   mathlibModules: specification.mathlibModules,
   runtimeFormat: specification.runtimeFormat,
-  components: ["Lean toolchain", "mathlib precompiled cache", "Quick Study app support"]
+  components: ["Lean toolchain", "mathlib precompiled cache", "Clarifold app support"]
 }, null, 2)}\n`, "utf8");
 
 if (!await preparedRuntimeIsCurrent(staging)) {

@@ -60,8 +60,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       send({
         id: message.id,
         result: {
-          userAgent: "quick-study-fake-codex/1",
-          codexHome: "/tmp/quick-study-fake-codex",
+          userAgent: "clarifold-fake-codex/1",
+          codexHome: "/tmp/clarifold-fake-codex",
           platformFamily: "unix",
           platformOs: "macos"
         }
@@ -92,9 +92,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         id: message.id,
         result: {
           data: [{
-            id: "quick-study-test-model",
-            model: "quick-study-test-model",
-            displayName: "Quick Study Test Model",
+            id: "clarifold-test-model",
+            model: "clarifold-test-model",
+            displayName: "Clarifold Test Model",
             description: "Deterministic packaged-test model",
             isDefault: true,
             hidden: false,

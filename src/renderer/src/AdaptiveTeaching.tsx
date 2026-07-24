@@ -75,7 +75,7 @@ export function AdaptiveTeaching({ session, onState }: {
   const submit = async (action: LearnerAction) => {
     setError(null);
     try {
-      onState(await window.quickStudy.submit(action));
+      onState(await window.clarifold.submit(action));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Adaptive teaching could not be updated.");
     }

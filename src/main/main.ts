@@ -26,6 +26,12 @@ import { requireApprovedChatGptAuthenticationUrl } from "./authentication-naviga
 import { boundedProcessEnvironment } from "./bounded-process-environment";
 import { ExclusiveOperationCoordinator } from "./exclusive-operation-coordinator";
 import { prepareModelRuntimeWorkspaceOrNull } from "./model-runtime-workspace";
+import {
+  CLARIFOLD_IDENTITY,
+  resolveClarifoldRuntimeConfiguration,
+  type ClarifoldRuntimeConfiguration
+} from "../shared/clarifold-identity";
+import { legacyQuickStudyDataDirectory, migrateQuickStudyData } from "./clarifold-data-migration";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
@@ -33,6 +39,7 @@ let applicationShutdown: Promise<void> | null = null;
 let modelRuntimeWorkingDirectory: string | null = null;
 const verifierRuns = new Map<string, AbortController>();
 let verifierCompletion: Promise<void> | null = null;
+let runtimeConfiguration!: ClarifoldRuntimeConfiguration;
 const runtimeLeanCoordinator = new ExclusiveOperationCoordinator();
 const execFileAsync = promisify(execFile);
 const sourceAccess = new MacOsSourceAccess({
@@ -71,7 +78,7 @@ const sourceAccess = new MacOsSourceAccess({
   },
   extractDocument: async (content, sourceName) => {
     const helperPath = join(__dirname, "../helpers/source-index-extractor").replace("app.asar", "app.asar.unpacked");
-    const stagingDirectory = await mkdtemp(join(app.getPath("temp"), "quick-study-source-index-"));
+    const stagingDirectory = await mkdtemp(join(app.getPath("temp"), "clarifold-source-index-"));
     const stagingPath = join(stagingDirectory, `source${extname(sourceName).toLocaleLowerCase()}`);
     try {
       await writeFile(stagingPath, content, { flag: "wx", mode: 0o600 });
@@ -91,7 +98,7 @@ const sourceAccess = new MacOsSourceAccess({
 
 function isTrustedSender(frameUrl: string | undefined): boolean {
   if (!frameUrl) return false;
-  const developmentUrl = process.env.QUICK_STUDY_DEV_URL;
+  const developmentUrl = runtimeConfiguration?.devUrl;
   if (developmentUrl) {
     return new URL(frameUrl).origin === new URL(developmentUrl).origin;
   }
@@ -381,7 +388,7 @@ function registerLearningApplicationHandlers(): void {
         }
         try {
           if (!modelRuntimeWorkingDirectory) throw new Error("The Model Runtime workspace is unavailable.");
-          const launchedRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
+          const launchedRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory, runtimeConfiguration.codexPath ?? undefined);
           if (applicationShutdown) {
             await learningApplication.stopModelRuntimeForShutdown(launchedRuntime);
             return learningApplication.getState();
@@ -407,7 +414,7 @@ function registerLearningApplicationHandlers(): void {
       throw new Error("Invalid Learning Artifact export request.");
     }
     const portableCopy = learningApplication.createArtifactPortableCopy(sessionId, artifactId);
-    const fixturePath = process.env.QUICK_STUDY_TEST_ARTIFACT_EXPORT_PATH;
+    const fixturePath = runtimeConfiguration.testArtifactExportPath;
     let destinationPath = fixturePath;
     if (!destinationPath) {
       const owner = BrowserWindow.fromWebContents(event.sender);
@@ -479,7 +486,10 @@ function registerLearningApplicationHandlers(): void {
             try {
               await learningApplication.beginModelRuntimeRestoration(restorationOperationId);
               if (!modelRuntimeWorkingDirectory) throw new Error("The Model Runtime workspace is unavailable.");
-              modelRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
+              modelRuntime = await CodexAppServerRuntime.launch(
+                modelRuntimeWorkingDirectory,
+                runtimeConfiguration.codexPath ?? undefined
+              );
               await learningApplication.restoreModelRuntime(modelRuntime, restorationOperationId);
               console.info(`[Lean verification] ${JSON.stringify({
                 runId: request.runId, restorationOperationId, status: "model-runtime-restored", elapsedMs: Date.now() - startedAt
@@ -542,7 +552,7 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("source:linkPrimaryFolder", async (event, workspaceId: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof workspaceId !== "string") throw new Error("Invalid Study Workspace.");
-    const fixturePath = process.env.QUICK_STUDY_TEST_PRIMARY_FOLDER;
+    const fixturePath = runtimeConfiguration.testPrimaryFolder;
     const selection = fixturePath
       ? await sourceAccess.selectDirectPath(fixturePath, "folder")
       : await sourceAccess.select("folder");
@@ -551,7 +561,7 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("source:linkExternalAttachment", async (event, workspaceId: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     if (typeof workspaceId !== "string") throw new Error("Invalid Study Workspace.");
-    const fixturePath = process.env.QUICK_STUDY_TEST_EXTERNAL_ATTACHMENT;
+    const fixturePath = runtimeConfiguration.testExternalAttachment;
     const selection = fixturePath
       ? await sourceAccess.selectDirectPath(fixturePath, "file")
       : await sourceAccess.select("file");
@@ -567,7 +577,7 @@ function registerLearningApplicationHandlers(): void {
     if (typeof sourceId !== "string") throw new Error("Invalid Linked Source.");
     const source = learningApplication.getState().sources.find((candidate) => candidate.id === sourceId);
     if (!source || source.kind !== "linkedSource") throw new Error("Invalid Linked Source.");
-    const fixturePath = process.env.QUICK_STUDY_TEST_RELOCATED_SOURCE;
+    const fixturePath = runtimeConfiguration.testRelocatedSource;
     const selection = fixturePath
       ? await sourceAccess.selectDirectPath(fixturePath, source.resourceType)
       : await sourceAccess.select(source.resourceType);
@@ -606,7 +616,7 @@ function registerLearningApplicationHandlers(): void {
   ipcMain.handle("authentication:openExternal", async (event, url: unknown) => {
     if (!isTrustedSender(event.senderFrame?.url)) throw new Error("Untrusted renderer.");
     const approvedUrl = requireApprovedChatGptAuthenticationUrl(url);
-    const fixtureLog = process.env.QUICK_STUDY_TEST_AUTHENTICATION_OPEN_LOG;
+    const fixtureLog = runtimeConfiguration.testAuthenticationOpenLog;
     if (fixtureLog) await appendFile(fixtureLog, `${approvedUrl}\n`, "utf8");
     else await shell.openExternal(approvedUrl);
   });
@@ -618,7 +628,7 @@ function createWindow(): void {
     height: 780,
     minWidth: 860,
     minHeight: 620,
-    title: "Quick Study",
+    title: CLARIFOLD_IDENTITY.productName,
     backgroundColor: "#f4efe5",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
@@ -633,8 +643,8 @@ function createWindow(): void {
     if (targetUrl !== window.webContents.getURL()) event.preventDefault();
   });
 
-  if (process.env.QUICK_STUDY_DEV_URL) {
-    void window.loadURL(process.env.QUICK_STUDY_DEV_URL);
+  if (runtimeConfiguration.devUrl) {
+    void window.loadURL(runtimeConfiguration.devUrl);
   } else {
     void window.loadFile(join(__dirname, "../renderer/index.html"));
   }
@@ -649,10 +659,33 @@ function isFormalVerificationRequest(value: unknown): value is import("../shared
 }
 
 void app.whenReady().then(async () => {
-  const dataDirectory = process.env.QUICK_STUDY_DATA_DIR ?? app.getPath("userData");
+  runtimeConfiguration = resolveClarifoldRuntimeConfiguration(
+    process.env,
+    app.getPath("userData"),
+    (warning) => console.warn(`[Clarifold configuration] ${warning.message}`)
+  );
+  if (runtimeConfiguration.dataDirectorySource === "default") {
+    const migration = await migrateQuickStudyData({
+      sourceDirectory: legacyQuickStudyDataDirectory(runtimeConfiguration.dataDirectory),
+      destinationDirectory: runtimeConfiguration.dataDirectory,
+      applicationVersion: CLARIFOLD_IDENTITY.version,
+      onStage: (stage) => console.info(`[Clarifold migration] ${stage}`)
+    });
+    if (migration.outcome === "blocked" || migration.outcome === "failed") {
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Clarifold data migration needs attention",
+        message: migration.message ?? "Clarifold could not safely prepare its application data.",
+        detail: "Your Quick Study data was left unchanged. Resolve the reported condition, then restart Clarifold to retry."
+      });
+      app.quit();
+      return;
+    }
+  }
+  const dataDirectory = runtimeConfiguration.dataDirectory;
   modelRuntimeWorkingDirectory = await prepareModelRuntimeWorkspaceOrNull(dataDirectory, app.getPath("temp"));
   const seedRegistry = app.isPackaged ? join(process.resourcesPath, "verifiers") : join(process.cwd(), "dist", "verifiers");
-  let failRemovalOnce = process.env.QUICK_STUDY_TEST_VERIFIER_REMOVAL_FAILURE === "once";
+  let failRemovalOnce = runtimeConfiguration.testVerifierRemovalFailure === "once";
   const verifierEnvironmentManager = new LeanEnvironmentManager(
     join(dataDirectory, "verifiers"),
     seedRegistry,
@@ -672,7 +705,7 @@ void app.whenReady().then(async () => {
   });
   if (modelRuntimeWorkingDirectory) {
     try {
-      modelRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory);
+    modelRuntime = await CodexAppServerRuntime.launch(modelRuntimeWorkingDirectory, runtimeConfiguration.codexPath ?? undefined);
     } catch (error) {
       console.error("Codex app-server is unavailable:", error);
     }
@@ -682,12 +715,12 @@ void app.whenReady().then(async () => {
     modelRuntime,
     sourceAccess,
     new MacOsArtifactSharing(app.getPath("temp")),
-    new BrowserExternalResearch(process.env.QUICK_STUDY_TEST_EXTERNAL_RESEARCH === "stub"
+    new BrowserExternalResearch(runtimeConfiguration.testExternalResearch === "stub"
       ? async () => undefined
       : (url) => shell.openExternal(url)),
     null,
     new LeanVerifierRuntime(
-      process.env.QUICK_STUDY_LEAN_PATH ?? ((environmentId) => verifierEnvironmentManager.executablePath(environmentId)),
+      runtimeConfiguration.leanPath ?? ((environmentId) => verifierEnvironmentManager.executablePath(environmentId)),
       undefined,
       undefined,
       undefined,
