@@ -48,10 +48,7 @@ describe("macOS beta release contract", () => {
   it("passes the packaged license audit for the allowed runtime graph", async () => {
     const fixture = await createPackagedLicenseFixture();
     try {
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).resolves.toMatchObject({
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).resolves.toMatchObject({
         runtimePackages: [
           { name: "react", version: "19.2.7", license: "MIT" },
           { name: "react-dom", version: "19.2.7", license: "MIT" },
@@ -70,10 +67,7 @@ describe("macOS beta release contract", () => {
         join(fixture.applicationPath, "Contents", "Resources", "THIRD_PARTY_NOTICES.md"),
         "Electron 43.1.1\nChromium\nReact\nReact DOM\nLean toolchain\nmathlib\nnative helpers\nsource-bookmark-helper\nsource-index-extractor\n",
       );
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).rejects.toThrow(/notice inventory/);
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).rejects.toThrow(/notice inventory/);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -87,10 +81,7 @@ describe("macOS beta release contract", () => {
       await writeFile(noticesPath, notices.split("\n")
         .filter((line) => !line.includes("source-bookmark-helper") && !line.includes("source-index-extractor"))
         .join("\n"));
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).rejects.toThrow(/notice inventory/);
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).rejects.toThrow(/notice inventory/);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -99,10 +90,7 @@ describe("macOS beta release contract", () => {
   it("rejects a packaged artifact with a runtime version mismatch", async () => {
     const fixture = await createPackagedLicenseFixture({ packagedVersionOverrides: { react: "19.2.6" } });
     try {
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).rejects.toThrow(/runtime version mismatch/);
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).rejects.toThrow(/runtime version mismatch/);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -112,10 +100,7 @@ describe("macOS beta release contract", () => {
     const fixture = await createPackagedLicenseFixture();
     try {
       await writeFile(join(fixture.applicationPath, "Contents", "Resources", "CHROMIUM_LICENSES.html"), "Chromium\n");
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).rejects.toThrow(/Chromium notices do not match/);
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).rejects.toThrow(/Chromium notices do not match/);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -124,10 +109,7 @@ describe("macOS beta release contract", () => {
   it("rejects an unresolved or disallowed runtime license", async () => {
     const fixture = await createPackagedLicenseFixture({ runtimeLicense: "GPL-3.0-only" });
     try {
-      await expect(auditPackagedApplication(fixture.applicationPath, {
-        packageLock: fixture.packageLock,
-        verifierId: fixture.verifierId,
-      })).rejects.toThrow(/Disallowed or unknown runtime license/);
+      await expect(auditPackagedApplication(fixture.applicationPath, fixture.auditOptions)).rejects.toThrow(/Disallowed or unknown runtime license/);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
@@ -184,8 +166,10 @@ async function createPackagedLicenseFixture({ runtimeLicense = "MIT", packagedVe
   await writeFile(join(resources, "LICENSE"), await readFile(join(process.cwd(), "LICENSE")));
   await writeFile(join(resources, "NOTICE"), await readFile(join(process.cwd(), "NOTICE")));
   await writeFile(join(resources, "THIRD_PARTY_NOTICES.md"), await readFile(join(process.cwd(), "THIRD_PARTY_NOTICES.md")));
-  await writeFile(join(resources, "ELECTRON_LICENSE"), await readFile(join(process.cwd(), "node_modules", "electron", "dist", "LICENSE")));
-  await writeFile(join(resources, "CHROMIUM_LICENSES.html"), await readFile(join(process.cwd(), "node_modules", "electron", "dist", "LICENSES.chromium.html")));
+  const electronLicense = Buffer.from("Copyright (c) Electron contributors\n");
+  const chromiumLicenses = Buffer.from("<title>Chromium licenses</title>\n");
+  await writeFile(join(resources, "ELECTRON_LICENSE"), electronLicense);
+  await writeFile(join(resources, "CHROMIUM_LICENSES.html"), chromiumLicenses);
   await writeFile(join(verifier, "LICENSE"), "Apache License Version 2.0\n");
   await writeFile(join(verifier, "LICENSES"), "Apache License Version 2.0\n");
   await writeFile(join(verifier, "mathlib-LICENSE"), "Apache License Version 2.0\n");
@@ -200,5 +184,16 @@ async function createPackagedLicenseFixture({ runtimeLicense = "MIT", packagedVe
     }));
   }
   await createPackage(appSource, join(resources, "app.asar"));
-  return { root, applicationPath, packageLock, verifierId };
+  return {
+    root,
+    applicationPath,
+    auditOptions: {
+      packageLock,
+      verifierId,
+      expectedDigests: {
+        electronLicense: createHash("sha256").update(electronLicense).digest("hex"),
+        chromiumLicenses: createHash("sha256").update(chromiumLicenses).digest("hex"),
+      },
+    },
+  };
 }

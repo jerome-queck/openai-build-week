@@ -13,6 +13,12 @@ const CHROMIUM_LICENSES_SHA256 = "4fc0507a046b9ecd0738b2dd64119b5ec8bc29ac0221b6
 const ALLOWED_NPM_RUNTIME_LICENSES = new Set(["MIT"]);
 
 export async function auditPackagedApplication(applicationPath, options = {}) {
+  const expectedDigests = {
+    notice: options.expectedDigests?.notice ?? NOTICE_SHA256,
+    thirdPartyNotices: options.expectedDigests?.thirdPartyNotices ?? THIRD_PARTY_NOTICES_SHA256,
+    electronLicense: options.expectedDigests?.electronLicense ?? ELECTRON_LICENSE_SHA256,
+    chromiumLicenses: options.expectedDigests?.chromiumLicenses ?? CHROMIUM_LICENSES_SHA256,
+  };
   const packageLock = options.packageLock ?? JSON.parse(await readFile(join(projectRoot, "package-lock.json"), "utf8"));
   const verifierId = options.verifierId ?? JSON.parse(await readFile(
     join(projectRoot, "src", "shared", "bundled-verifier-environment.json"),
@@ -30,12 +36,12 @@ export async function auditPackagedApplication(applicationPath, options = {}) {
     throw new Error("Packaged Clarifold LICENSE does not match PolyForm Noncommercial 1.0.0.");
   }
   const notice = await requireNonEmptyFile(join(resources, "NOTICE"), "Clarifold notice");
-  if (sha256(notice) !== NOTICE_SHA256) throw new Error("Packaged NOTICE does not match the repository legal notice.");
+  if (sha256(notice) !== expectedDigests.notice) throw new Error("Packaged NOTICE does not match the repository legal notice.");
   if (!notice.includes("Required Notice: Copyright © 2026 Jerome Queck")) {
     throw new Error("Packaged NOTICE is missing the required Jerome Queck copyright notice.");
   }
   const thirdPartyNotices = await requireNonEmptyFile(join(resources, "THIRD_PARTY_NOTICES.md"), "third-party notices");
-  if (sha256(thirdPartyNotices) !== THIRD_PARTY_NOTICES_SHA256) {
+  if (sha256(thirdPartyNotices) !== expectedDigests.thirdPartyNotices) {
     throw new Error("Packaged third-party notices do not match the repository notice inventory.");
   }
   const normalizedThirdPartyNotices = thirdPartyNotices.toString("utf8").replace(/\s+/g, " ");
@@ -60,9 +66,9 @@ export async function auditPackagedApplication(applicationPath, options = {}) {
     }
   }
   const electronLicense = await requireNonEmptyFile(join(resources, "ELECTRON_LICENSE"), "Electron license");
-  if (sha256(electronLicense) !== ELECTRON_LICENSE_SHA256) throw new Error("Packaged Electron license does not match Electron 43.1.1.");
+  if (sha256(electronLicense) !== expectedDigests.electronLicense) throw new Error("Packaged Electron license does not match Electron 43.1.1.");
   const chromiumLicenses = await requireNonEmptyFile(join(resources, "CHROMIUM_LICENSES.html"), "Chromium notices");
-  if (sha256(chromiumLicenses) !== CHROMIUM_LICENSES_SHA256) throw new Error("Packaged Chromium notices do not match Electron 43.1.1.");
+  if (sha256(chromiumLicenses) !== expectedDigests.chromiumLicenses) throw new Error("Packaged Chromium notices do not match Electron 43.1.1.");
   await requireLicenseText(join(verifier, "LICENSE"), "Lean license");
   await requireLicenseText(join(verifier, "LICENSES"), "Lean component licenses");
   await requireLicenseText(join(verifier, "mathlib-LICENSE"), "mathlib license");
