@@ -52,14 +52,23 @@ module.exports = {
 
 async function copyPackagedUpstreamNotices(outputPath) {
   const resources = join(outputPath, "Quick Study.app", "Contents", "Resources");
-  await copyFirstAvailableFile([
-    join(outputPath, "LICENSE"),
-    join(outputPath, "Quick Study.app", "Contents", "LICENSE"),
-  ], join(resources, "ELECTRON_LICENSE"));
-  await copyFirstAvailableFile([
-    join(outputPath, "LICENSES.chromium.html"),
-    join(outputPath, "Quick Study.app", "Contents", "LICENSES.chromium.html"),
-  ], join(resources, "CHROMIUM_LICENSES.html"));
+  const notices = [
+    {
+      sources: [
+        join(outputPath, "LICENSE"),
+        join(outputPath, "Quick Study.app", "Contents", "LICENSE"),
+      ],
+      destination: join(resources, "ELECTRON_LICENSE"),
+    },
+    {
+      sources: [
+        join(outputPath, "LICENSES.chromium.html"),
+        join(outputPath, "Quick Study.app", "Contents", "LICENSES.chromium.html"),
+      ],
+      destination: join(resources, "CHROMIUM_LICENSES.html"),
+    },
+  ];
+  for (const notice of notices) await copyFirstAvailableFile(notice.sources, notice.destination);
 }
 
 async function copyFirstAvailableFile(sources, destination) {

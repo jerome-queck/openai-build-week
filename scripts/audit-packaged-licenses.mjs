@@ -30,7 +30,7 @@ export async function auditPackagedApplication(applicationPath, options = {}) {
     throw new Error("Packaged NOTICE is missing the required Jerome Queck copyright notice.");
   }
   const thirdPartyNotices = await requireNonEmptyFile(join(resources, "THIRD_PARTY_NOTICES.md"), "third-party notices");
-  for (const requiredNotice of ["Electron 43.1.1", "Chromium", "React", "React DOM", "scheduler", "Lean toolchain", "mathlib", "native helpers"]) {
+  for (const requiredNotice of ["Electron 43.1.1", "Chromium", "React", "React DOM", "scheduler", "Lean toolchain", "mathlib", "native helpers", "source-bookmark-helper", "source-index-extractor"]) {
     if (!thirdPartyNotices.includes(requiredNotice)) {
       throw new Error(`Packaged third-party notices are missing required attribution: ${requiredNotice}`);
     }
@@ -47,7 +47,9 @@ export async function auditPackagedApplication(applicationPath, options = {}) {
 
   const expectedRuntimePackages = runtimePackages(packageLock);
   const expectedByName = new Map(expectedRuntimePackages.map((entry) => [entry.name, entry]));
-  const packagedPackagePaths = listPackage(asarPath).filter((path) => /^node_modules\/.+\/package\.json$/.test(path));
+  const packagedPackagePaths = listPackage(asarPath)
+    .map((path) => path.replace(/^\/+/, ""))
+    .filter((path) => /^node_modules\/.+\/package\.json$/.test(path));
   const packagedNames = new Set();
   for (const packageJsonPath of packagedPackagePaths) {
     let packagedPackage;

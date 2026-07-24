@@ -37,6 +37,9 @@ before packaging and does not relicense generated Lean or mathlib artifacts.
 The Clarifold application, native helpers, documentation, tests, and the
 current tracked product assets are original repository material covered by
 the root [`LICENSE`](LICENSE), except where a file or notice says otherwise.
+The packaged `source-bookmark-helper` and `source-index-extractor` binaries
+are built from the repository's native helpers and remain covered by that
+same notice.
 The repository currently has no third-party fonts, images, icon artwork, or
 other bundled visual assets. A future asset must be added only with a recorded
 source, license, attribution, and compatibility decision in the audit linked
