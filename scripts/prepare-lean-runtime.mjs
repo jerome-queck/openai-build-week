@@ -89,7 +89,7 @@ await writeFile(join(staging, "manifest.json"), `${JSON.stringify({
   supportProfile: specification.supportProfile,
   mathlibModules: specification.mathlibModules,
   runtimeFormat: specification.runtimeFormat,
-  components: ["Lean toolchain", "mathlib precompiled cache", "Quick Study app support"]
+  components: ["Lean toolchain", "mathlib precompiled cache", "Clarifold app support"]
 }, null, 2)}\n`, "utf8");
 
 if (!await preparedRuntimeIsCurrent(staging)) {

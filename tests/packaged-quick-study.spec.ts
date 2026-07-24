@@ -582,7 +582,7 @@ test("packaged Clarifold checkpoints Background Agent Tasks and resumes them exp
     await current.browser.close().catch(() => undefined);
     if (!exitedNormally) {
       await terminateChild(current.process);
-      throw new Error(`Packaged Quick Study did not checkpoint Agent Tasks before exiting.\n${current.output()}`);
+      throw new Error(`Packaged Clarifold did not checkpoint Agent Tasks before exiting.\n${current.output()}`);
     }
   };
   const action = <T>(operation: string, work: () => Promise<T>, timeoutMs?: number) => {
@@ -781,7 +781,7 @@ test("packaged Clarifold rejects a child-controlled authentication destination",
     try {
       if (!exitedNormally) {
         await terminateChild(child);
-        throw new Error(`Packaged Quick Study did not cancel verifier setup before exiting.\n${output}`);
+        throw new Error(`Packaged Clarifold did not cancel verifier setup before exiting.\n${output}`);
       }
     } finally {
       await attachPackagedDiagnostics(undefined, testInfo, diagnostics, output, finalBackendState);
@@ -911,7 +911,7 @@ async function createPackagedScenario(testInfo: TestInfo, scenarioName: string):
       await current.browser.close().catch(() => undefined);
       if (!exitedNormally) {
         await terminateChild(current.process);
-        throw new Error(`Packaged Quick Study did not exit after its last window closed.\n${current.output()}`);
+        throw new Error(`Packaged Clarifold did not exit after its last window closed.\n${current.output()}`);
       }
     } finally {
       processLifecycleOutput.push(current.output());
@@ -1014,7 +1014,7 @@ async function waitForDebugger(port: number, child: ChildProcess, output: () => 
   while (Date.now() < deadline) {
     const termination = childTermination(child);
     if (termination) {
-      throw new Error(`Packaged Quick Study exited early with ${termination}.\n${output()}`);
+      throw new Error(`Packaged Clarifold exited early with ${termination}.\n${output()}`);
     }
     const endpoint = output().match(endpointPattern)?.[1];
     if (endpoint) return endpoint;
@@ -1030,11 +1030,11 @@ async function waitForPage(browser: Browser, child: ChildProcess, output: () => 
     if (page) return page;
     const termination = childTermination(child);
     if (termination) {
-      throw new Error(`Packaged Quick Study exited with ${termination} before opening a renderer page.\n${output()}`);
+  throw new Error(`Packaged Clarifold exited with ${termination} before opening a renderer page.\n${output()}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(`Packaged Quick Study did not open a renderer page.\n${output()}`);
+  throw new Error(`Packaged Clarifold did not open a renderer page.\n${output()}`);
 }
 
 async function waitForExit(child: ChildProcess, timeout: number): Promise<boolean> {
@@ -1060,7 +1060,7 @@ async function terminateChild(child: ChildProcess): Promise<void> {
   if (await waitForExit(child, 5_000)) return;
   child.kill("SIGKILL");
   if (!await waitForExit(child, 5_000)) {
-    throw new Error("Packaged Quick Study did not terminate after SIGKILL.");
+  throw new Error("Packaged Clarifold did not terminate after SIGKILL.");
   }
 }
 

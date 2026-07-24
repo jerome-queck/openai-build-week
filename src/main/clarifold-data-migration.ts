@@ -233,7 +233,7 @@ async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOpti
     }
     return result("migrated", undefined, undefined, migrationReceipt);
   } finally {
-    if (lockHeld) await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    if (lockHeld) await rm(lockPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -319,34 +319,30 @@ async function availableSpaceBytes(path: string): Promise<number> {
 
 async function acquireMigrationLock(lockPath: string, now: () => Date): Promise<boolean> {
   try {
-    await mkdir(lockPath);
+    await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
+      encoding: "utf8", flag: "wx", mode: 0o600
+    });
+    return true;
   } catch (error) {
     if (!isAlreadyExists(error)) throw error;
     const owner = await readMigrationLockOwner(lockPath);
-    if (owner && processIsAlive(owner.pid)) return false;
-    if (!owner && (await readdir(lockPath)).length > 0) return false;
-    await rm(lockPath, { recursive: true, force: true });
+    if (!owner || processIsAlive(owner.pid)) return false;
+    await rm(lockPath, { force: true });
     try {
-      await mkdir(lockPath);
+      await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
+        encoding: "utf8", flag: "wx", mode: 0o600
+      });
+      return true;
     } catch (retryError) {
       if (isAlreadyExists(retryError)) return false;
       throw retryError;
     }
   }
-  try {
-    await writeFile(join(lockPath, "owner.json"), `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
-      encoding: "utf8", flag: "wx", mode: 0o600
-    });
-    return true;
-  } catch (error) {
-    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
-    throw error;
-  }
 }
 
 async function readMigrationLockOwner(path: string): Promise<{ pid: number } | null> {
   try {
-    const value = JSON.parse(await readFile(join(path, "owner.json"), "utf8")) as Record<string, unknown>;
+    const value = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
     return Number.isInteger(value.pid) && Number(value.pid) > 0 ? { pid: Number(value.pid) } : null;
   } catch (error) {
     if (isMissing(error) || error instanceof SyntaxError) return null;

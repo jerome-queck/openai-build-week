@@ -133,8 +133,7 @@ describe("Clarifold data migration", () => {
     const destinationDirectory = join(root, "Clarifold");
     await createLearnerState(sourceDirectory);
     const lockDirectory = `${destinationDirectory}.migration-lock`;
-    await mkdir(lockDirectory, { recursive: true });
-    await writeFile(join(lockDirectory, "owner.json"), JSON.stringify({ pid: 999_999_999 }), "utf8");
+    await writeFile(lockDirectory, JSON.stringify({ pid: 999_999_999 }), "utf8");
 
     await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
       .resolves.toMatchObject({ outcome: "migrated" });
@@ -177,6 +176,42 @@ describe("Clarifold data migration", () => {
     await expect(first).resolves.toMatchObject({ outcome: "migrated" });
   });
 
+  it("preserves a resumable session and Linked Source references for rollback", async () => {
+    const root = await temporaryDirectory("clarifold-migration-preservation-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    const linkedSourcePath = join(root, "externally-owned-notes.txt");
+    await writeFile(linkedSourcePath, "externally owned\n", "utf8");
+    await mkdir(sourceDirectory, { recursive: true });
+    const application = await LearningApplication.launch(sourceDirectory);
+    await application.submit({ type: "startQuickStudy", mathematics: "Study compactness." });
+    await application.linkExternalAttachment(application.getState().quickStudy.workspace.id, {
+      name: "externally-owned-notes.txt",
+      resourceType: "file",
+      lastKnownPath: linkedSourcePath,
+      canonicalPath: linkedSourcePath,
+      accessGrant: null,
+      fingerprint: { size: 17, modifiedAtMs: 1 }
+    });
+    const sourceState = JSON.parse(await readFile(join(sourceDirectory, "learning-application.json"), "utf8")) as {
+      sessions: Array<{ learningGoal: string }>;
+      sources: Array<{ kind: string; link?: { canonicalPath: string } }>;
+    };
+
+    await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
+      .resolves.toMatchObject({ outcome: "migrated" });
+    const migrated = await LearningApplication.launch(destinationDirectory);
+    const rolledBack = await LearningApplication.launch(sourceDirectory);
+    expect(migrated.getState().sessions.map((session) => session.learningGoal)).toEqual(
+      sourceState.sessions.map((session) => session.learningGoal)
+    );
+    expect(migrated.getState().sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "linkedSource", link: expect.objectContaining({ canonicalPath: linkedSourcePath }) })
+    ]));
+    expect(rolledBack.getState().sessions).toHaveLength(sourceState.sessions.length);
+    expect(await readFile(linkedSourcePath, "utf8")).toBe("externally owned\n");
+  });
+
   async function temporaryDirectory(prefix: string): Promise<string> {
     const path = await mkdtemp(join(tmpdir(), prefix));
     temporaryDirectories.push(path);
@@ -187,5 +222,6 @@ describe("Clarifold data migration", () => {
     await mkdir(path, { recursive: true });
     const application = await LearningApplication.launch(path);
     await application.submit({ type: "createWorkspace", name: "Topology" });
+    await application.submit({ type: "startQuickStudy", mathematics: "Study compactness." });
   }
 });
