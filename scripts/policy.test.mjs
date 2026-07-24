@@ -48,7 +48,12 @@ test("public issue intake policy accepts a compact complete fixture repository",
         "    id: public-warning",
         "    attributes:",
         "      value: private learner material secret security conduct best-effort",
-        ...ids.map((id) => `  id: ${id}`),
+        ...ids.flatMap((id) => [
+          `  - type: ${id === "safe-to-publish" ? "checkboxes" : "input"}`,
+          `    id: ${id}`,
+          "    attributes:",
+          "      label: Fixture",
+        ]),
         "",
       ].join("\n"),
     );
