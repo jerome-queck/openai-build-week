@@ -272,7 +272,7 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     expect(lifecycleAfterManifest).toMatchObject({ status: "available", operationId: expect.any(String) });
     const restorationOperationId = lifecycleAfterManifest.operationId;
     await scenario.action("Wait for Codex runtime restoration after Lean verification", async () => {
-      await expect(page.getByRole("status", { name: "Model access" })).toContainText("Model teaching available", {
+      await expect(page.getByRole("status", { name: "Model teaching available" })).toContainText("Model teaching available", {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
       });
       await expect.poll(() => page.evaluate(async () => (await window.quickStudy.getState()).modelRuntimeLifecycle), {
