@@ -13,7 +13,7 @@ module.exports = {
       optionsForFile: () => ({ hardenedRuntime: false }),
       continueOnError: false
     },
-    extraResource: ["dist/verifiers"],
+    extraResource: ["dist/verifiers", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
     ignore: [
       /^\/src($|\/)/,
       /^\/tests($|\/)/,

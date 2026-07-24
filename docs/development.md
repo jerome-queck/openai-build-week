@@ -65,6 +65,14 @@ The [evaluation guide](../evaluation/README.md) owns benchmark evidence collecti
 
 `npm run package`, `npm run make:beta`, and `npm run test:smoke` produce an internal evaluation candidate for the current Mac architecture. The archive is ad-hoc signed and is not a signed, notarized ordinary-user release. Do not publish it as a public download or instruct users to bypass Gatekeeper. Developer ID signing, notarization, stapling, assessment, and a clean-machine audit remain future release gates.
 
+Every packaged application also includes `LICENSE`, `NOTICE`, and
+`THIRD_PARTY_NOTICES.md` at the application resource root. Electron's own
+`LICENSE.electron.txt` and `LICENSES.chromium.html` files, together with the
+Verifier Environment's upstream license files, remain alongside their
+respective packaged components. Keep these files with any permitted
+noncommercial redistribution and consult the [license audit](legal/dependency-and-asset-license-audit.md)
+when the packaged contents change.
+
 For candidate evidence, use the commands in the [evaluation guide](../evaluation/README.md) after collecting evidence against the exact committed candidate. Do not publish candidate evidence or rebuild the application after the evidence has been bound to a commit.
 
 ## Troubleshooting

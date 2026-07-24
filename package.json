@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "A local-first mathematical learning workbench.",
   "main": "dist/main/main.js",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "engines": {
     "node": ">=22 <26"

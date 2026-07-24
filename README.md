@@ -12,6 +12,28 @@ This is an early macOS beta and a technical-evaluation build, not a public produ
 
 The project does not promise mastery, mathematical correctness, or academic outcomes. AI teaching and analysis may be incomplete or wrong. Formal verification applies only to the exact statement and assumptions checked by the Verifier Runtime. Learners control what they save, send, export, and delete.
 
+## License and brand
+
+Clarifold is source available under the [PolyForm Noncommercial 1.0.0
+license](LICENSE), not open source. The license permits noncommercial use,
+including personal study, research, experimentation, and use by qualifying
+noncommercial organizations. It does not grant commercial permission; request
+written permission at [licensing@jeromegroup.org](mailto:licensing@jeromegroup.org)
+before a commercial use. Jerome Queck reviews requests case by case, and
+sending a request grants no rights. Software permission and permission to use
+the Clarifold name, icon, or product identity are separate decisions.
+
+The [brand and copyright notice](NOTICE) reserves Clarifold and its logo to
+Jerome Queck. Accurate references such as “forked from Clarifold” are allowed,
+but modified distributions must use a different product name and icon and must
+not imply endorsement or official origin. See
+[third-party notices](THIRD_PARTY_NOTICES.md) for shipped dependency and
+Verifier Environment attributions, and the [license audit](docs/legal/dependency-and-asset-license-audit.md)
+for compatibility decisions and review triggers. Professional legal review is
+not a present beta launch requirement; it becomes appropriate before
+commercial maturity, collaboration, paid or hosted distribution, or a public
+signed and notarized release.
+
 ## What Quick Study does—and does not claim
 
 Quick Study helps Advanced Mathematics Learners uncover and examine gaps in understanding. It does not guarantee mastery, correctness, or academic outcomes. Model-generated teaching and analysis may be incomplete or wrong, and formal verification covers only the exact claims and assumptions checked by the recorded Verifier Environment. Local-first operation does not mean every optional model or research operation stays offline.

@@ -9,6 +9,31 @@
 - Keep one active implementer per Issue. Follow the claim and entry checks in the [engineering workflow](docs/agents/engineering-workflow.md) and [issue-tracker guide](docs/agents/issue-tracker.md).
 - For tracked work, reference the ticket as `Refs #<number>` in at least one branch commit and `Closes #<number>` in the pull request.
 
+## Current participation and intellectual property boundary
+
+Public product feedback, proposals, accessibility reports, mathematical
+accuracy concerns, and security reports are welcome through their documented
+channels. During the source-available development phase, Clarifold does not
+accept outside code, design, icon, documentation, or substantial
+mathematical-content contributions. Opening a pull request or offering a
+change under the repository's outbound license does not grant a contributor
+rights or create an obligation to merge it.
+
+Before the first collaborative contribution is accepted, Jerome Queck must
+classify the contributor relationship, decide whether ownership remains with
+him or moves to a Singapore entity, and put written Singapore-appropriate
+terms in place. Those terms must address copyright ownership or a sufficiently
+broad irrevocable and sublicensable commercial license, patent questions,
+trademark and brand permissions, and preserved attribution. Assignment is
+preferred when retaining a single owner is the priority. A DCO sign-off alone
+does not transfer ownership, and a commercial software permission does not
+automatically permit use of the Clarifold brand.
+
+This is an intentional future collaboration gate, not a draft contributor
+agreement. Professional legal review is deferred until collaboration is
+imminent or another legal-review trigger is reached; the gate cannot be
+repaired after accepting the contribution.
+
 ## Documentation ownership
 
 Keep each kind of repository guidance in its canonical home and link to it instead of copying a second command matrix or architecture description:
