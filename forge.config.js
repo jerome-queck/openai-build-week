@@ -92,11 +92,11 @@ async function copyFirstAvailableFile(sources, destination) {
 }
 
 async function makeVerifierFilesReadOnly(directory) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
+  await Promise.all((await readdir(directory, { withFileTypes: true })).map(async (entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) await makeVerifierFilesReadOnly(path);
     else await chmod(path, path.endsWith(join("bin", "lean")) ? 0o555 : 0o444);
-  }
+  }));
   await chmod(directory, 0o555);
 }
 
