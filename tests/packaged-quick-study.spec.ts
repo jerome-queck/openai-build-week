@@ -278,7 +278,7 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
       await expect.poll(() => page.evaluate(async () => (await window.quickStudy.getState()).modelRuntimeLifecycle), {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
       }).toMatchObject({ status: "available", operationId: restorationOperationId });
-    });
+    }, PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS);
     const synthesizeArtifact = reformulatedProof.getByRole("button", { name: /Synthesize Learning Artifact/ });
     await scenario.action("Confirm whole Learning Artifact synthesis scope", () =>
       reformulatedProof.getByRole("checkbox", { name: "Confirm this proposal may replace the whole Learning Artifact" }).check());
@@ -1113,7 +1113,7 @@ function nearestRankP95(values: number[]): number {
 
 function readCompletedVerifierLifecycleSamples(output: string): number[] {
   return output.split("\n").flatMap((line) => {
-    const match = line.match(/\[Lean integrity\] (\{.*\})$/);
+    const match = line.match(/\[Lean verification\] (\{.*\})$/);
     if (!match) return [];
     try {
       const event = JSON.parse(match[1]) as { status?: string; elapsedMs?: number };

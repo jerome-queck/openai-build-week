@@ -447,6 +447,7 @@ function registerLearningApplicationHandlers(): void {
     console.info(`[Lean verification] ${JSON.stringify({ runId: request.runId, status: "started" })}`);
     let restartModelRuntime = false;
     const restorationOperationId = randomUUID();
+    let verificationOutcome = "unknown";
     let restorationFailure: unknown = null;
     let failed = false;
     let failure: unknown;
@@ -467,11 +468,8 @@ function registerLearningApplicationHandlers(): void {
                 publish: false, operationId: restorationOperationId
               })
             : await learningApplication.runFormalVerification(sessionId, request, controller.signal);
-          const outcome = checked.verifierManifests
+          verificationOutcome = checked.verifierManifests
             .find((manifest) => manifest.id === request.runId)?.commandOutcome ?? "unknown";
-          console.info(`[Lean verification] ${JSON.stringify({
-            runId: request.runId, status: "completed", outcome, elapsedMs: Date.now() - startedAt
-          })}`);
         } finally {
           if (restartModelRuntime && !applicationShutdown) {
             try {
@@ -497,6 +495,13 @@ function registerLearningApplicationHandlers(): void {
         }
       });
       if (restorationFailure) throw restorationFailure;
+      console.info(`[Lean verification] ${JSON.stringify({
+        runId: request.runId,
+        restorationOperationId,
+        status: "completed",
+        outcome: verificationOutcome,
+        elapsedMs: Date.now() - startedAt
+      })}`);
     } catch (error) {
       if (!learningApplication.getState().runtimeAvailable) modelRuntime = null;
       failed = true;
