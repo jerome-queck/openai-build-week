@@ -449,6 +449,7 @@ function registerLearningApplicationHandlers(): void {
     const restorationOperationId = randomUUID();
     let verificationOutcome = "unknown";
     let restorationFailure: unknown = null;
+    let verifierFailure: unknown = null;
     let failed = false;
     let failure: unknown;
     try {
@@ -470,6 +471,9 @@ function registerLearningApplicationHandlers(): void {
             : await learningApplication.runFormalVerification(sessionId, request, controller.signal);
           verificationOutcome = checked.verifierManifests
             .find((manifest) => manifest.id === request.runId)?.commandOutcome ?? "unknown";
+        } catch (error) {
+          verifierFailure = error;
+          throw error;
         } finally {
           if (restartModelRuntime && !applicationShutdown) {
             try {
@@ -494,6 +498,12 @@ function registerLearningApplicationHandlers(): void {
           }
         }
       });
+      if (restorationFailure && verifierFailure) {
+        throw new AggregateError(
+          [verifierFailure, restorationFailure],
+          "Formal verification and Codex restoration both failed."
+        );
+      }
       if (restorationFailure) throw restorationFailure;
       console.info(`[Lean verification] ${JSON.stringify({
         runId: request.runId,
@@ -511,7 +521,9 @@ function registerLearningApplicationHandlers(): void {
         restorationOperationId,
         status: "failed",
         elapsedMs: Date.now() - startedAt,
-        detail: error instanceof Error ? error.message : "Formal verification failed."
+        detail: error instanceof Error ? error.message : "Formal verification failed.",
+        verifierDetail: verifierFailure instanceof Error ? verifierFailure.message : undefined,
+        restorationDetail: restorationFailure instanceof Error ? restorationFailure.message : undefined
       })}`);
     } finally {
       verifierRuns.delete(request.runId);
