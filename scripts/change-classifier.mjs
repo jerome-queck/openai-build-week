@@ -17,7 +17,7 @@ const DOCUMENTATION_PATHS = [
   /^evaluation\/README\.md$/,
   /^(?:README|CONTRIBUTING|CODING_STANDARDS|CONTEXT|AGENTS)\.md$/,
   /^(?:LICENSE|NOTICE)(?:\.|$)/,
-  /^\.(?:editorconfig|gitattributes|gitignore)$/,
+  /^\.(?:editorconfig|gitattributes|gitignore|mailmap)$/,
 ];
 
 const TEST_PATHS = [
