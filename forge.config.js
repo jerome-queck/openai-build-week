@@ -50,7 +50,11 @@ module.exports = {
   }
 };
 
-async function copyPackagedUpstreamNotices(outputPath) {
+function copyPackagedUpstreamNotices(outputPath, _electronVersion, _platform, _arch, done) {
+  copyPackagedUpstreamNoticesAsync(outputPath).then(() => done(), done);
+}
+
+async function copyPackagedUpstreamNoticesAsync(outputPath) {
   const resources = join(outputPath, "Quick Study.app", "Contents", "Resources");
   const notices = [
     {
