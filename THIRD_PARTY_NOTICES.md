@@ -36,7 +36,7 @@ before packaging and does not relicense generated Lean or mathlib artifacts.
 
 The Clarifold application, native helpers, documentation, tests, and the
 current tracked product assets are original repository material covered by
-the root [`LICENSE`](LICENSE), except where a file or notice says otherwise.
+the root [`LICENSE.md`](LICENSE.md), except where a file or notice says otherwise.
 The packaged `source-bookmark-helper` and `source-index-extractor` binaries
 are built from the repository's native helpers and remain covered by that
 same notice.
@@ -45,6 +45,16 @@ same notice.
 | --- | --- | --- | --- |
 | `source-bookmark-helper` | Repository `native/source-bookmark-helper.swift` | PolyForm-Noncommercial-1.0.0 | Packaged native helper binary under `Resources/app.asar.unpacked/dist/helpers/`; covered by the root Clarifold license and this notice |
 | `source-index-extractor` | Repository `native/source-index-extractor.swift` | PolyForm-Noncommercial-1.0.0 | Packaged native helper binary under `Resources/app.asar.unpacked/dist/helpers/`; covered by the root Clarifold license and this notice |
+
+## Adapted policy material
+
+The root [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) is adapted from the
+[Contributor Covenant 3.0](https://www.contributor-covenant.org/version/3/0/)
+and retains its required attribution. Contributor Covenant is stewarded by the
+Organization for Ethical Source and licensed under
+[CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The Clarifold
+file changes the reporting, maintainer, and enforcement details for this
+project.
 
 The repository currently has no third-party fonts, images, icon artwork, or
 other bundled visual assets. A future asset must be added only with a recorded

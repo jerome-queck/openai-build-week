@@ -16,16 +16,17 @@ review of a future distribution transaction.
 
 | Surface | Observed material | Compatibility decision | Required attribution |
 | --- | --- | --- | --- |
-| Original application, native helpers, tests, and documentation | Jerome Queck's repository material | Compatible with the root PolyForm Noncommercial 1.0.0 license; no outside contribution rights are inferred | `NOTICE` and the root `LICENSE` |
+| Original application, native helpers, tests, and documentation | Jerome Queck's repository material | Compatible with the root PolyForm Noncommercial 1.0.0 license; no outside contribution rights are inferred | `NOTICE` and the root `LICENSE.md` |
 | Production npm runtime graph | React 19.2.7, React DOM 19.2.7, and transitive scheduler 0.27.0 | MIT terms are compatible when their notices remain available; the exact runtime graph remains in `package-lock.json` | `THIRD_PARTY_NOTICES.md` and package metadata |
 | Electron runtime and Chromium | Electron 43.1.1 and its bundled Chromium distribution | Preserve Electron's and Chromium's generated notice files; do not collapse their upstream licenses into the PolyForm terms | Electron's packaged `ELECTRON_LICENSE` and `CHROMIUM_LICENSES.html` in application resources, plus `THIRD_PARTY_NOTICES.md` |
 | Verifier Environment | Lean 4.29.1 and mathlib 4.29.1 at the pinned commit | Preserve the upstream license files copied into `Resources/verifiers/`; generated proof artifacts are not relicensed | `Resources/verifiers/LICENSE`, `LICENSES/`, and `mathlib-LICENSE` |
 | Tracked visual and font assets | No third-party assets currently tracked or bundled | No unresolved asset license is present; a future asset requires a source and rights record before merge | This audit and `THIRD_PARTY_NOTICES.md` |
+| Adapted policy material | Clarifold's `CODE_OF_CONDUCT.md` adapted from Contributor Covenant 3.0 | CC BY-SA 4.0 attribution and license link remain available; project-specific reporting and enforcement text is identified as an adaptation | `CODE_OF_CONDUCT.md` and `THIRD_PARTY_NOTICES.md` |
 
-The root `LICENSE` is the exact official PolyForm Noncommercial 1.0.0 text.
+The root `LICENSE.md` is the exact official PolyForm Noncommercial 1.0.0 text.
 The package metadata uses the canonical machine-readable identifier
 `PolyForm-Noncommercial-1.0.0`, while `private: true` prevents accidental npm
-publication. The package includes `LICENSE`, `NOTICE`, and this repository's
+publication. The package includes `LICENSE.md`, `NOTICE`, and this repository's
 third-party notice index as extra resources; Electron and Verifier Environment
 upstream notices remain in their respective package locations.
 
@@ -53,6 +54,9 @@ distribution notices, and whether the software and Clarifold brand permissions
 remain separate. The current record does not claim trademark registration,
 patent protection, formal PDPA compliance, or open-source status.
 
+The broader EULA, commercial-permission, privacy, collaboration, and signed-
+distribution gates are recorded in the [future legal-boundaries record](future-legal-boundaries.md).
+
 ## Recheck procedure
 
 Before each release candidate, maintainers must:
@@ -60,7 +64,7 @@ Before each release candidate, maintainers must:
 1. run `npm audit --omit=dev --audit-level=high` and inspect the complete
    production dependency graph;
 2. run `npm run license:audit` against the exact package and inspect the
-   packaged application for `LICENSE`, `NOTICE`,
+   packaged application for `LICENSE.md`, `NOTICE`,
    `THIRD_PARTY_NOTICES.md`, Electron/Chromium notices, and Verifier Environment
    upstream license files;
 3. compare newly shipped files and assets with this audit and stop on an

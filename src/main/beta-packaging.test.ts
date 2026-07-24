@@ -19,7 +19,7 @@ describe("macOS beta release contract", () => {
   it("declares the source-available license and packages legal notices", async () => {
     const packageJson = JSON.parse(await readFile(join(process.cwd(), "package.json"), "utf8"));
     const packageLock = JSON.parse(await readFile(join(process.cwd(), "package-lock.json"), "utf8"));
-    const license = await readFile(join(process.cwd(), "LICENSE"));
+    const license = await readFile(join(process.cwd(), "LICENSE.md"));
     const notice = await readFile(join(process.cwd(), "NOTICE"), "utf8");
     const thirdPartyNotices = await readFile(join(process.cwd(), "THIRD_PARTY_NOTICES.md"), "utf8");
     const forgeConfig = require(join(process.cwd(), "forge.config.js"));
@@ -38,7 +38,7 @@ describe("macOS beta release contract", () => {
     expect(thirdPartyNotices).toContain("Lean toolchain");
     expect(thirdPartyNotices).toContain("scheduler");
     expect(forgeConfig.packagerConfig.extraResource).toEqual(expect.arrayContaining([
-      "LICENSE",
+      "LICENSE.md",
       "NOTICE",
       "THIRD_PARTY_NOTICES.md",
     ]));
@@ -163,7 +163,7 @@ async function createPackagedLicenseFixture({ runtimeLicense = "MIT", packagedVe
   await mkdir(join(appSource, "node_modules", "react"), { recursive: true });
   await mkdir(join(appSource, "node_modules", "react-dom"), { recursive: true });
   await mkdir(join(appSource, "node_modules", "scheduler"), { recursive: true });
-  await writeFile(join(resources, "LICENSE"), await readFile(join(process.cwd(), "LICENSE")));
+  await writeFile(join(resources, "LICENSE.md"), await readFile(join(process.cwd(), "LICENSE.md")));
   await writeFile(join(resources, "NOTICE"), await readFile(join(process.cwd(), "NOTICE")));
   await writeFile(join(resources, "THIRD_PARTY_NOTICES.md"), await readFile(join(process.cwd(), "THIRD_PARTY_NOTICES.md")));
   const electronLicense = Buffer.from("Copyright (c) Electron contributors\n");

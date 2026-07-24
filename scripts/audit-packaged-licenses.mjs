@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const projectRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const LICENSE_SHA256 = "ffcca38841adb694b6f380647e15f17c446a4d1656fed51a1e2041d064c94cc8";
 const NOTICE_SHA256 = "f813c9234a763c6b2d2ba7d0630baa11eb1161e85dd1e84ea778799171b34d84";
-const THIRD_PARTY_NOTICES_SHA256 = "ab006cb7c60354e1f531c85f9976e1915fa0918e6e0ea453349be2303a9a05fd";
+const THIRD_PARTY_NOTICES_SHA256 = "6b0225ece922033d243e1287514f0643a6f88a6561ad150c9d20b182f1526a08";
 const ELECTRON_LICENSE_SHA256 = "5154e165bd6c2cc0cfbcd8916498c7abab0497923bafcd5cb07673fe8480087d";
 const CHROMIUM_LICENSES_SHA256 = "4fc0507a046b9ecd0738b2dd64119b5ec8bc29ac0221b63edb693fd5fd497c87";
 const ALLOWED_NPM_RUNTIME_LICENSES = new Set(["MIT"]);
@@ -31,9 +31,9 @@ export async function auditPackagedApplication(applicationPath, options = {}) {
 
   await requireNonEmptyFile(join(resources, "ELECTRON_LICENSE"), "Electron license");
   await requireNonEmptyFile(join(resources, "CHROMIUM_LICENSES.html"), "Chromium notices");
-  const projectLicense = await requireNonEmptyFile(join(resources, "LICENSE"), "Clarifold license");
+  const projectLicense = await requireNonEmptyFile(join(resources, "LICENSE.md"), "Clarifold license");
   if (sha256(projectLicense) !== LICENSE_SHA256) {
-    throw new Error("Packaged Clarifold LICENSE does not match PolyForm Noncommercial 1.0.0.");
+    throw new Error("Packaged Clarifold LICENSE.md does not match PolyForm Noncommercial 1.0.0.");
   }
   const notice = await requireNonEmptyFile(join(resources, "NOTICE"), "Clarifold notice");
   if (sha256(notice) !== expectedDigests.notice) throw new Error("Packaged NOTICE does not match the repository legal notice.");

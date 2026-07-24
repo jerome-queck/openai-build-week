@@ -66,7 +66,7 @@ The [evaluation guide](../evaluation/README.md) owns benchmark evidence collecti
 
 `npm run package`, `npm run make:beta`, and `npm run test:smoke` produce an internal evaluation candidate for the current Mac architecture. The archive is ad-hoc signed and is not a signed, notarized ordinary-user release. Do not publish it as a public download or instruct users to bypass Gatekeeper. Developer ID signing, notarization, stapling, assessment, and a clean-machine audit remain future release gates.
 
-Every packaged application also includes Clarifold's `LICENSE`, `NOTICE`, and
+Every packaged application also includes Clarifold's `LICENSE.md`, `NOTICE`, and
 `THIRD_PARTY_NOTICES.md` at the application resource root. Electron's own
 `LICENSE` and `LICENSES.chromium.html` files are copied into the application
 resource root as `ELECTRON_LICENSE` and `CHROMIUM_LICENSES.html` before code

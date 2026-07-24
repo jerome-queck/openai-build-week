@@ -14,7 +14,7 @@ module.exports = {
       continueOnError: false
     },
     beforeCopyExtraResources: [copyPackagedUpstreamNotices],
-    extraResource: ["dist/verifiers", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"],
+    extraResource: ["dist/verifiers", "LICENSE.md", "NOTICE", "THIRD_PARTY_NOTICES.md"],
     ignore: [
       /^\/src($|\/)/,
       /^\/tests($|\/)/,

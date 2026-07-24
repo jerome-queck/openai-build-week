@@ -23,6 +23,10 @@ For an evaluation install, use the architecture-native archive produced by the d
 
 ## Privacy and source access defaults
 
+The complete current data-practices disclosure is the [privacy notice](../PRIVACY.md).
+Security reports and conduct reports use their separate private channels in
+[SECURITY.md](../SECURITY.md) and [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md).
+
 - Application state stays in the local Electron `userData` directory.
 - Linked Sources remain at their original locations. Study, indexing, export, and verification do not silently copy, replace, or modify them.
 - The ad-hoc evaluation build is not App-Sandboxed. Its last-known path is location metadata, not persistent permission. It does not claim the security-scoped persistence of a provisioned Mac App Store build.

@@ -13,7 +13,9 @@
 
 Public product feedback, proposals, accessibility reports, mathematical
 accuracy concerns, and security reports are welcome through their documented
-channels. During the source-available development phase, Clarifold does not
+channels. Read the [security policy](SECURITY.md), [privacy notice](PRIVACY.md),
+and [Code of Conduct](CODE_OF_CONDUCT.md) before using those channels. During
+the source-available development phase, Clarifold does not
 accept outside code, design, icon, documentation, or substantial
 mathematical-content contributions. Opening a pull request or offering a
 change under the repository's outbound license does not grant a contributor

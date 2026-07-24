@@ -15,7 +15,7 @@ The project does not promise mastery, mathematical correctness, or academic outc
 ## License and brand
 
 Clarifold is source available under the [PolyForm Noncommercial 1.0.0
-license](LICENSE), not open source. The license permits noncommercial use,
+license](LICENSE.md), not open source. The license permits noncommercial use,
 including personal study, research, experimentation, and use by qualifying
 noncommercial organizations. It does not grant commercial permission; request
 written permission at [licensing@jeromegroup.org](mailto:licensing@jeromegroup.org)
@@ -56,6 +56,10 @@ The repository keeps each kind of guidance in one canonical place:
 - [Development guide](docs/development.md): supported setup, commands, verification, packaging, smoke testing, and troubleshooting.
 - [Architecture guide](docs/architecture.md): stable runtime responsibilities, public seams, persistence, and trust boundaries.
 - [macOS beta guide](docs/beta-release.md): user-facing evaluation limitations, privacy, recovery, and feedback.
+- [Privacy notice](PRIVACY.md): current local-first data handling, external-service boundaries, and future privacy review triggers.
+- [Security policy](SECURITY.md): private vulnerability reporting and good-faith testing boundaries.
+- [Code of Conduct](CODE_OF_CONDUCT.md): public behavior expectations and private enforcement contact.
+- [Future legal boundaries](docs/legal/future-legal-boundaries.md): EULA, commercial, privacy, collaboration, and signed-distribution gates.
 - [Quality and learning evaluation](evaluation/README.md): candidate evidence, benchmark procedures, and the limits of learning claims.
 - [Contributing](CONTRIBUTING.md): participation boundary, maintainer workflow, branches, review, and attribution.
 - [Coding standards](CODING_STANDARDS.md): the judgement-based engineering and review contract.
@@ -64,7 +68,7 @@ Start with the [development guide](docs/development.md) for a build-from-source 
 
 ## Privacy, trust, and feedback
 
-Application state uses Electron's local `userData` directory. The supported `QUICK_STUDY_DATA_DIR` override is for isolated development or diagnosis and must not point at imported learner sources. Do not commit learner data, credentials, or local `.env` files. Optional model access and external research are separate from local source and session work; see the [beta guide](docs/beta-release.md) for the current boundaries and recovery paths.
+Application state uses Electron's local `userData` directory. The supported `QUICK_STUDY_DATA_DIR` override is for isolated development or diagnosis and must not point at imported learner sources. Do not commit learner data, credentials, or local `.env` files. Optional model access and external research are separate from local source and session work; see the [privacy notice](PRIVACY.md) and [beta guide](docs/beta-release.md) for the current boundaries and recovery paths.
 
 Use [GitHub Issues](https://github.com/jerome-queck/clarifold/issues/new) for public product feedback. Do not attach learner records, source documents, credentials, Personal Notes, or other private data. Include the beta version, macOS version, Mac model, action attempted, visible error, and whether recovery succeeded.
 
