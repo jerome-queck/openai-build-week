@@ -1385,6 +1385,35 @@ describe("Learning Application", () => {
     applications.push(relaunched);
     expect(relaunched.getState().modelRuntimeLifecycle).toMatchObject({ status: "unavailable", operationId: null });
     expect(relaunched.getState().verifierManifests).toEqual(restored.verifierManifests);
+    expect(relaunched.getState().sessions[0].learningGoal).toBe("Concurrent local edit survives restoration");
+
+    const failureOperationId = "formal-verification-restoration-failure";
+    expect(await application.pauseModelRuntimeForFormalVerification(failureOperationId)).toBe(true);
+    const failureState = application.getState();
+    const failureArtifact = failureState.sessions[0].learningArtifacts[0];
+    const failureRequest = {
+      runId: "restoration-boundary-failure-run",
+      target: "learningArtifact" as const,
+      targetId: failureArtifact.id,
+      claimId: failureArtifact.currentRevision.claims[0].claimId
+    };
+    await application.runFormalVerification(failureState.sessions[0].id, failureRequest, undefined, {
+      publish: false, operationId: failureOperationId
+    });
+    await application.beginModelRuntimeRestoration(failureOperationId);
+    const failingReplacement = new DeterministicModelRuntime({
+      learningGoal: "Unused", scope: "Unused", initialTeachingDirection: "Unused",
+      requiresConfirmation: false, confirmationReason: null
+    }, true);
+    failingReplacement.getAuthentication = async () => { throw new Error("Codex restoration failed."); };
+    await expect(application.restoreModelRuntime(failingReplacement, failureOperationId))
+      .rejects.toThrow("Codex restoration failed.");
+    expect(application.getState().modelRuntimeLifecycle).toMatchObject({
+      status: "failed", operationId: failureOperationId
+    });
+    expect(application.getState().verifierManifests).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: failureRequest.runId })])
+    );
   });
 
   it("removes and reinstalls Lean without relabeling historical verification evidence", async () => {

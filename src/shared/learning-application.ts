@@ -541,6 +541,8 @@ interface DeferredFormalVerification {
   claimRevisionId: string;
   verificationGaps: VerificationGap[];
   verificationEscalation: VerificationEscalation;
+  baseVerificationGaps: VerificationGap[];
+  baseVerificationEscalation: VerificationEscalation;
   verifierEnvironmentStatus: VerifierEnvironmentState["status"] | null;
   verifierEnvironmentError: string | null;
 }
@@ -1738,10 +1740,7 @@ export class LearningApplication {
   }
 
   private refreshVerifierManifestReferences(): void {
-    for (const environment of this.state.verifierEnvironment.environments) {
-      environment.manifestReferences = this.state.verifierManifests
-        .filter((manifest) => manifest.environment.id === environment.environment.id).length;
-    }
+    refreshVerifierManifestReferencesForState(this.state);
   }
 
   private unreferencedVerifierEnvironmentIds(): string[] {
@@ -2162,6 +2161,8 @@ export class LearningApplication {
       claimRevisionId: revision.id,
       verificationGaps,
       verificationEscalation,
+      baseVerificationGaps: structuredClone(claim.verificationGaps),
+      baseVerificationEscalation: structuredClone(claim.verificationEscalation),
       verifierEnvironmentStatus: result.outcome === "versionMismatch" ? "cleanupRequired" : null,
       verifierEnvironmentError: result.outcome === "versionMismatch" ? result.diagnostics : null
     };
@@ -3294,7 +3295,7 @@ export class LearningApplication {
           };
           session.anchoredTeachingCards.push(card);
           session.activeTeachingCardId = card.id;
-          if (isExplanation && this.state.modelAccess.status === "available") {
+    if (isExplanation && this.state.modelRuntimeLifecycle.status === "available") {
             await this.beginAnchoredTeaching(session, anchor, card.currentRevision);
           } else if (isExplanation) {
             card.currentRevision.status = "failed";
@@ -3335,7 +3336,7 @@ export class LearningApplication {
           };
           session.anchoredTeachingCards.push(card);
         }
-        if (annotation.purpose === "tutorFeedback" && card && this.state.modelAccess.status === "available"
+        if (annotation.purpose === "tutorFeedback" && card && this.state.modelRuntimeLifecycle.status === "available"
           && !this.modelWorks.has(session.id) && card.currentRevision.status !== "streaming") {
           const previous = structuredClone(card.currentRevision);
           if (previous.status !== "idle") {
@@ -3345,7 +3346,7 @@ export class LearningApplication {
           session.activeTeachingCardId = card.id;
           await this.beginAnchoredTeaching(session, requireSourceAnchor(session, action.sourceAnchorId), card.currentRevision,
             previous.status === "idle" ? null : previous.content);
-        } else if (annotation.purpose === "tutorFeedback" && card && this.state.modelAccess.status !== "available") {
+        } else if (annotation.purpose === "tutorFeedback" && card && this.state.modelRuntimeLifecycle.status !== "available") {
           card.currentRevision.status = "failed";
           card.currentRevision.error = "Model teaching is unavailable. Tutor Feedback is saved for a later Teaching Move.";
           card.currentRevision.retryable = true;
@@ -4776,7 +4777,7 @@ export class LearningApplication {
         break;
       }
       case "savePendingQuestion": {
-        if (this.state.modelAccess.status === "available") {
+        if (this.state.modelRuntimeLifecycle.status === "available" && this.state.modelAccess.status === "available") {
           throw new Error("Submit the Ask Bar question while model access is available.");
         }
         const session = this.requireActiveSession();
@@ -8074,10 +8075,7 @@ function applyFormalVerificationDeltaToState(
     state.verifierEnvironment.status = delta.verifierEnvironmentStatus;
     state.verifierEnvironment.error = delta.verifierEnvironmentError;
   }
-  for (const environment of state.verifierEnvironment.environments) {
-    environment.manifestReferences = state.verifierManifests
-      .filter((manifest) => manifest.environment.id === environment.environment.id).length;
-  }
+  refreshVerifierManifestReferencesForState(state);
   const session = state.sessions.find((candidate) => candidate.id === delta.sessionId);
   if (!session) return;
   let revision: TeachingCardRevision | LearningArtifactRevision;
@@ -8093,8 +8091,40 @@ function applyFormalVerificationDeltaToState(
   } catch {
     return;
   }
-  claim.verificationGaps = structuredClone(delta.verificationGaps);
-  claim.verificationEscalation = structuredClone(delta.verificationEscalation);
+  const currentGaps = claim.verificationGaps;
+  if (JSON.stringify(currentGaps) === JSON.stringify(delta.baseVerificationGaps)) {
+    claim.verificationGaps = structuredClone(delta.verificationGaps);
+  } else {
+    const currentIds = new Set(currentGaps.map((gap) => gap.id));
+    const deltaIds = new Set(delta.verificationGaps.map((gap) => gap.id));
+    const removedIds = new Set(delta.baseVerificationGaps
+      .filter((gap) => !deltaIds.has(gap.id)).map((gap) => gap.id));
+    const addedGaps = delta.verificationGaps.filter((gap) => !currentIds.has(gap.id));
+    claim.verificationGaps = [
+      ...currentGaps.filter((gap) => !removedIds.has(gap.id)),
+      ...structuredClone(addedGaps)
+    ];
+  }
+  if (JSON.stringify(claim.verificationEscalation) === JSON.stringify(delta.baseVerificationEscalation)) {
+    claim.verificationEscalation = structuredClone(delta.verificationEscalation);
+  } else {
+    const evidenceEscalation = escalationForEvidence(claim.verificationEvidence, claim.verificationGaps);
+    claim.verificationEscalation = {
+      recommended: claim.verificationEscalation.recommended || delta.verificationEscalation.recommended || evidenceEscalation.recommended,
+      reasons: [...new Set([
+        ...claim.verificationEscalation.reasons,
+        ...delta.verificationEscalation.reasons,
+        ...evidenceEscalation.reasons
+      ])]
+    };
+  }
+}
+
+function refreshVerifierManifestReferencesForState(state: LearningApplicationState): void {
+  for (const environment of state.verifierEnvironment.environments) {
+    environment.manifestReferences = state.verifierManifests
+      .filter((manifest) => manifest.environment.id === environment.environment.id).length;
+  }
 }
 
 function migrateModelRuntimeLifecycle(value: unknown, runtimeAvailable: boolean): ModelRuntimeLifecycle {

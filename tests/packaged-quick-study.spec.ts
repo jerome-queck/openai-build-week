@@ -268,13 +268,15 @@ test("packaged verifier and artifact journey keeps lifecycle evidence across rei
     await scenario.action("Resume session after Lean reinstall", () => page.getByRole("button", { name: "Resume Learning Session", exact: true }).press("Enter"));
     await scenario.action("Check exact claim after Lean reinstall", () => claimTrust.getByRole("button", { name: "Check exact claim 1 with bundled Lean" }).press("Enter"));
     await expect(claimTrust.getByRole("article", { name: "Verifier Manifest" })).toHaveCount(2, { timeout: 60_000 });
+    const restorationOperationId = await page.evaluate(() => window.quickStudy.getState().modelRuntimeLifecycle.operationId);
+    expect(restorationOperationId).toEqual(expect.any(String));
     await scenario.action("Wait for Codex runtime restoration after Lean verification", async () => {
       await expect(page.getByRole("status", { name: "Model access" })).toContainText("Model teaching available", {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
       });
-      await expect.poll(() => page.evaluate(() => window.quickStudy.getState().modelRuntimeLifecycle.status), {
+      await expect.poll(() => page.evaluate(() => window.quickStudy.getState().modelRuntimeLifecycle), {
         timeout: PACKAGED_VERIFIER_LIFECYCLE_BUDGET_MS
-      }).toBe("available");
+      }).toMatchObject({ status: "available", operationId: restorationOperationId });
     });
     const synthesizeArtifact = reformulatedProof.getByRole("button", { name: /Synthesize Learning Artifact/ });
     await scenario.action("Confirm whole Learning Artifact synthesis scope", () =>
