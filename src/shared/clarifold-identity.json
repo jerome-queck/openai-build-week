@@ -3,6 +3,9 @@
   "packageName": "clarifold",
   "version": "0.2.0",
   "bundleIdentifier": "org.jeromegroup.clarifold",
+  "contactDomain": "jeromegroup.org",
+  "licensingContact": "licensing@jeromegroup.org",
+  "betaArtifactName": "internal-candidate-not-for-distribution",
   "descriptor": "The advanced mathematics learning workbench",
   "promise": "Turn the feeling of understanding into evidence",
   "legacyProductName": "Quick Study",
@@ -13,5 +16,12 @@
   "codexPathVariable": "CLARIFOLD_CODEX_PATH",
   "leanPathVariable": "CLARIFOLD_LEAN_PATH",
   "runtimeCacheDirectoryName": "clarifold-lean",
-  "runtimeClientName": "clarifold"
+  "runtimeClientName": "clarifold",
+  "compatibility": {
+    "legacyDataDirectory": {
+      "owner": "Jerome Queck",
+      "removalCondition": "Remove in the next breaking beta after the one-beta transition.",
+      "auditTrail": "docs/research/clarifold-identity-migration.md"
+    }
+  }
 }

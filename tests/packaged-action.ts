@@ -94,7 +94,7 @@ export async function runPackagedAction<T>(
 export async function readBoundedPackagedBackendState(page: Page, timeoutMs = 2_000): Promise<unknown> {
   return runBoundedPackagedAction(
     "Collect packaged backend state receipt",
-    () => page.evaluate(() => (window as unknown as Window & { quickStudy: { getState(): Promise<unknown> } }).quickStudy.getState()),
+    () => page.evaluate(() => (window as unknown as Window & { clarifold: { getState(): Promise<unknown> } }).clarifold.getState()),
     timeoutMs
   ).catch((error) => ({ unavailable: String(error) }));
 }

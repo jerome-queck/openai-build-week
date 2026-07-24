@@ -59,7 +59,8 @@ describe("Clarifold data migration", () => {
       applicationVersion: "0.2.0",
       startedAt: "2026-07-24T01:02:03.000Z",
       completedAt: "2026-07-24T01:02:03.000Z",
-      outcome: "migrated"
+      outcome: "migrated",
+      retryState: "idempotent"
     });
     expect(await readdir(dirname(destinationDirectory))).not.toContain("Clarifold.migration-staging");
   });
@@ -107,6 +108,9 @@ describe("Clarifold data migration", () => {
 
     expect(result).toMatchObject({ outcome: "failed", reason: "insufficient-space" });
     expect(result.stages).toContain("recovery");
+    expect(JSON.parse(await readFile(`${destinationDirectory}.migration-recovery.json`, "utf8"))).toMatchObject({
+      outcome: "failed", reason: "insufficient-space", retryState: "safe-to-retry"
+    });
     await expect(readFile(join(sourceDirectory, "learning-application.json"))).resolves.toBeTruthy();
     await expect(readdir(destinationDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
@@ -121,6 +125,56 @@ describe("Clarifold data migration", () => {
     await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
       .resolves.toMatchObject({ outcome: "blocked", reason: "source-incomplete" });
     await expect(readdir(destinationDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("recovers an abandoned lock owned by a dead process", async () => {
+    const root = await temporaryDirectory("clarifold-migration-stale-lock-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    await createLearnerState(sourceDirectory);
+    const lockDirectory = `${destinationDirectory}.migration-lock`;
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(join(lockDirectory, "owner.json"), JSON.stringify({ pid: 999_999_999 }), "utf8");
+
+    await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
+      .resolves.toMatchObject({ outcome: "migrated" });
+  });
+
+  it("does not delete staging output without its Clarifold ownership marker", async () => {
+    const root = await temporaryDirectory("clarifold-migration-staging-collision-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    await createLearnerState(sourceDirectory);
+    const stagingDirectory = `${destinationDirectory}.migration-staging`;
+    await mkdir(stagingDirectory, { recursive: true });
+    await writeFile(join(stagingDirectory, "unrelated.txt"), "leave me\n", "utf8");
+
+    await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
+      .resolves.toMatchObject({ outcome: "failed", reason: "staging-collision" });
+    await expect(readFile(join(stagingDirectory, "unrelated.txt"), "utf8")).resolves.toBe("leave me\n");
+  });
+
+  it("blocks concurrent launches while the first launch owns the guard", async () => {
+    const root = await temporaryDirectory("clarifold-migration-concurrent-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    await createLearnerState(sourceDirectory);
+    let releaseValidation!: () => void;
+    let signalValidationStarted!: () => void;
+    const validationStarted = new Promise<void>((resolve) => { signalValidationStarted = resolve; });
+    const validationRelease = new Promise<void>((resolve) => { releaseValidation = resolve; });
+    const first = migrateQuickStudyData({
+      sourceDirectory,
+      destinationDirectory,
+      applicationVersion: "0.2.0",
+      onStage: (stage) => { if (stage === "verification") signalValidationStarted(); },
+      validateStagedDirectory: async () => validationRelease
+    });
+    await validationStarted;
+    await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
+      .resolves.toMatchObject({ outcome: "blocked", reason: "concurrent-launch" });
+    releaseValidation();
+    await expect(first).resolves.toMatchObject({ outcome: "migrated" });
   });
 
   async function temporaryDirectory(prefix: string): Promise<string> {

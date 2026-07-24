@@ -31,7 +31,7 @@ import {
   resolveClarifoldRuntimeConfiguration,
   type ClarifoldRuntimeConfiguration
 } from "../shared/clarifold-identity";
-import { legacyClarifoldDataDirectory, migrateQuickStudyData } from "./clarifold-data-migration";
+import { legacyQuickStudyDataDirectory, migrateQuickStudyData } from "./clarifold-data-migration";
 
 let learningApplication: LearningApplication;
 let modelRuntime: ModelRuntime | null = null;
@@ -663,7 +663,7 @@ void app.whenReady().then(async () => {
   );
   if (runtimeConfiguration.dataDirectorySource === "default") {
     const migration = await migrateQuickStudyData({
-      sourceDirectory: legacyClarifoldDataDirectory(runtimeConfiguration.dataDirectory),
+      sourceDirectory: legacyQuickStudyDataDirectory(runtimeConfiguration.dataDirectory),
       destinationDirectory: runtimeConfiguration.dataDirectory,
       applicationVersion: CLARIFOLD_IDENTITY.version,
       onStage: (stage) => console.info(`[Clarifold migration] ${stage}`)

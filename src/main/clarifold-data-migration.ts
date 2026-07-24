@@ -1,12 +1,15 @@
 import { statfs } from "node:fs/promises";
 import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { atomicWriteFile } from "../shared/atomic-file";
 import { CLARIFOLD_IDENTITY } from "../shared/clarifold-identity";
 import { LearningApplication } from "../shared/learning-application";
 
 const MIGRATION_RECEIPT_NAME = "migration-receipt.json";
 const MIGRATION_STAGING_SUFFIX = ".migration-staging";
 const MIGRATION_LOCK_SUFFIX = ".migration-lock";
+const MIGRATION_STAGING_MARKER_NAME = ".clarifold-migration-staging.json";
+const MIGRATION_RECOVERY_RECEIPT_SUFFIX = ".migration-recovery.json";
 
 export type MigrationStage =
   | "discovery"
@@ -38,6 +41,19 @@ export interface MigrationReceipt {
   readonly startedAt: string;
   readonly completedAt: string;
   readonly outcome: "migrated";
+  readonly retryState: "idempotent";
+}
+
+export interface MigrationRecoveryReceipt {
+  readonly schemaVersion: 1;
+  readonly source: string;
+  readonly destination: string;
+  readonly applicationVersion: string;
+  readonly updatedAt: string;
+  readonly outcome: "blocked" | "failed";
+  readonly reason: MigrationReason;
+  readonly retryState: "safe-to-retry" | "manual-intervention-required";
+  readonly message: string;
 }
 
 export interface MigrationResult {
@@ -59,6 +75,34 @@ export interface ClarifoldDataMigrationOptions {
 }
 
 export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptions): Promise<MigrationResult> {
+  const observedStages: MigrationStage[] = [];
+  const observeStage = (stage: MigrationStage): void => {
+    if (observedStages.at(-1) !== stage) observedStages.push(stage);
+    options.onStage?.(stage);
+  };
+  try {
+    const result = await migrateQuickStudyDataInternal({ ...options, onStage: observeStage });
+    if (result.outcome === "blocked" || result.outcome === "failed") {
+      await writeRecoveryReceipt(options, result).catch(() => undefined);
+    } else if (result.outcome === "migrated" || result.outcome === "already-migrated") {
+      await removeMatchingRecoveryReceipt(options).catch(() => undefined);
+    }
+    return result;
+  } catch (error) {
+    observeStage("recovery");
+    observeStage("complete");
+    const result: MigrationResult = {
+      outcome: "failed",
+      stages: [...observedStages],
+      reason: "activation-failed",
+      message: `Clarifold could not safely prepare its application data: ${errorMessage(error)}.`
+    };
+    await writeRecoveryReceipt(options, result).catch(() => undefined);
+    return result;
+  }
+}
+
+async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOptions): Promise<MigrationResult> {
   const sourceDirectory = normalizedDirectory(options.sourceDirectory, "source");
   const destinationDirectory = normalizedDirectory(options.destinationDirectory, "destination");
   if (sourceDirectory === destinationDirectory) throw new Error("Migration source and destination must differ.");
@@ -115,23 +159,18 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
   await mkdir(dirname(destinationDirectory), { recursive: true });
   let lockHeld = false;
   try {
-    try {
-      await mkdir(lockPath);
-      lockHeld = true;
-      await writeFile(join(lockPath, "owner.json"), `${JSON.stringify({ pid: process.pid, startedAt: (options.now ?? (() => new Date()))().toISOString() })}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600
-      });
-    } catch (error) {
-      if (isAlreadyExists(error)) return result("blocked", "concurrent-launch", "Another Clarifold launch is already preparing this migration.");
-      throw error;
+    if (!await acquireMigrationLock(lockPath, options.now ?? (() => new Date()))) {
+      return result("blocked", "concurrent-launch", "Another Clarifold launch is already preparing this migration.");
     }
+    lockHeld = true;
 
     const stagingDirectory = `${destinationDirectory}${MIGRATION_STAGING_SUFFIX}`;
     const existingStaging = await pathStatus(stagingDirectory);
     if (existingStaging.exists) {
       if (!existingStaging.isDirectory) return result("failed", "staging-collision", "Clarifold found an unexpected migration staging path and left it untouched.");
+      if (!await hasMatchingStagingMarker(stagingDirectory, sourceDirectory, destinationDirectory)) {
+        return result("failed", "staging-collision", "Clarifold found staging output it did not create and left it untouched.");
+      }
       await rm(stagingDirectory, { recursive: true, force: true });
     }
 
@@ -143,7 +182,11 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
 
     emit("staging-copy");
     try {
-      await copyDirectory(sourceDirectory, stagingDirectory);
+      await mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
+      await writeFile(join(stagingDirectory, MIGRATION_STAGING_MARKER_NAME), `${JSON.stringify({
+        schemaVersion: 1, source: sourceDirectory, destination: destinationDirectory
+      })}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      await copyDirectoryContents(sourceDirectory, stagingDirectory);
     } catch (error) {
       await removeOwnedStaging(stagingDirectory);
       return result("failed", "copy-failed", `Clarifold could not stage the legacy data: ${errorMessage(error)}.`);
@@ -166,7 +209,8 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
       applicationVersion: options.applicationVersion,
       startedAt,
       completedAt: now().toISOString(),
-      outcome: "migrated"
+      outcome: "migrated",
+      retryState: "idempotent"
     };
     await writeFile(join(stagingDirectory, MIGRATION_RECEIPT_NAME), `${JSON.stringify(migrationReceipt, null, 2)}\n`, {
       encoding: "utf8",
@@ -182,6 +226,7 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
       }
       if (currentDestination.exists) await rm(destinationDirectory, { recursive: false });
       await rename(stagingDirectory, destinationDirectory);
+      await rm(join(destinationDirectory, MIGRATION_STAGING_MARKER_NAME), { force: true });
     } catch (error) {
       await removeOwnedStaging(stagingDirectory);
       return result("failed", "activation-failed", `Clarifold could not activate the staged data: ${errorMessage(error)}.`);
@@ -192,7 +237,7 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
   }
 }
 
-export function legacyClarifoldDataDirectory(defaultDataDirectory: string): string {
+export function legacyQuickStudyDataDirectory(defaultDataDirectory: string): string {
   const normalizedDefault = normalizedDirectory(defaultDataDirectory, "default");
   return join(dirname(normalizedDefault), CLARIFOLD_IDENTITY.legacyDataDirectoryName);
 }
@@ -242,15 +287,16 @@ async function validateApplicationDirectory(path: string): Promise<void> {
   }
 }
 
-async function copyDirectory(source: string, destination: string): Promise<void> {
-  const sourceInfo = await lstat(source);
-  if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) throw new Error("the source is not a real directory");
-  await mkdir(destination, { recursive: false, mode: 0o700 });
+async function copyDirectoryContents(source: string, destination: string): Promise<void> {
   for (const entry of await readdir(source, { withFileTypes: true })) {
     const sourcePath = join(source, entry.name);
     const destinationPath = join(destination, entry.name);
     if (entry.isSymbolicLink()) throw new Error(`the source contains an unsupported symbolic link (${entry.name})`);
-    if (entry.isDirectory()) await copyDirectory(sourcePath, destinationPath);
+    if (entry.name === MIGRATION_STAGING_MARKER_NAME) throw new Error(`the source contains a reserved migration marker (${entry.name})`);
+    if (entry.isDirectory()) {
+      await mkdir(destinationPath, { recursive: false, mode: 0o700 });
+      await copyDirectoryContents(sourcePath, destinationPath);
+    }
     else if (entry.isFile()) await copyFile(sourcePath, destinationPath);
     else throw new Error(`the source contains an unsupported filesystem entry (${entry.name})`);
   }
@@ -271,19 +317,86 @@ async function availableSpaceBytes(path: string): Promise<number> {
   return Number(filesystem.bavail) * Number(filesystem.bsize);
 }
 
+async function acquireMigrationLock(lockPath: string, now: () => Date): Promise<boolean> {
+  try {
+    await mkdir(lockPath);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+    const owner = await readMigrationLockOwner(lockPath);
+    if (owner && processIsAlive(owner.pid)) return false;
+    if (!owner && (await readdir(lockPath)).length > 0) return false;
+    await rm(lockPath, { recursive: true, force: true });
+    try {
+      await mkdir(lockPath);
+    } catch (retryError) {
+      if (isAlreadyExists(retryError)) return false;
+      throw retryError;
+    }
+  }
+  try {
+    await writeFile(join(lockPath, "owner.json"), `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
+      encoding: "utf8", flag: "wx", mode: 0o600
+    });
+    return true;
+  } catch (error) {
+    await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function readMigrationLockOwner(path: string): Promise<{ pid: number } | null> {
+  try {
+    const value = JSON.parse(await readFile(join(path, "owner.json"), "utf8")) as Record<string, unknown>;
+    return Number.isInteger(value.pid) && Number(value.pid) > 0 ? { pid: Number(value.pid) } : null;
+  } catch (error) {
+    if (isMissing(error) || error instanceof SyntaxError) return null;
+    throw error;
+  }
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
+  }
+}
+
 async function removeOwnedStaging(path: string): Promise<void> {
   try {
-    const info = await lstat(path);
-    if (info.isDirectory() && !info.isSymbolicLink()) await rm(path, { recursive: true, force: true });
+    if (await hasAnyStagingMarker(path)) await rm(path, { recursive: true, force: true });
   } catch (error) {
     if (!isMissing(error)) throw error;
+  }
+}
+
+async function hasAnyStagingMarker(path: string): Promise<boolean> {
+  try {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink()) return false;
+    const marker = await readFile(join(path, MIGRATION_STAGING_MARKER_NAME), "utf8");
+    return marker.trim().length > 0;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+async function hasMatchingStagingMarker(path: string, source: string, destination: string): Promise<boolean> {
+  try {
+    const marker = JSON.parse(await readFile(join(path, MIGRATION_STAGING_MARKER_NAME), "utf8")) as Record<string, unknown>;
+    return marker.schemaVersion === 1 && marker.source === source && marker.destination === destination;
+  } catch (error) {
+    if (isMissing(error) || error instanceof SyntaxError) return false;
+    throw error;
   }
 }
 
 async function readMigrationReceipt(path: string): Promise<MigrationReceipt | null> {
   try {
     const raw = JSON.parse(await readFile(join(path, MIGRATION_RECEIPT_NAME), "utf8")) as Record<string, unknown>;
-    if (raw.schemaVersion !== 1 || raw.outcome !== "migrated"
+    if (raw.schemaVersion !== 1 || raw.outcome !== "migrated" || raw.retryState !== "idempotent"
       || typeof raw.source !== "string" || typeof raw.destination !== "string"
       || typeof raw.applicationVersion !== "string" || typeof raw.startedAt !== "string"
       || typeof raw.completedAt !== "string") return null;
@@ -291,6 +404,39 @@ async function readMigrationReceipt(path: string): Promise<MigrationReceipt | nu
   } catch (error) {
     if (isMissing(error) || error instanceof SyntaxError) return null;
     throw error;
+  }
+}
+
+async function writeRecoveryReceipt(options: ClarifoldDataMigrationOptions, result: MigrationResult): Promise<void> {
+  if (!result.reason || (result.outcome !== "blocked" && result.outcome !== "failed") || !isAbsolute(options.destinationDirectory)) return;
+  const destination = resolve(options.destinationDirectory);
+  const receipt: MigrationRecoveryReceipt = {
+    schemaVersion: 1,
+    source: isAbsolute(options.sourceDirectory) ? resolve(options.sourceDirectory) : options.sourceDirectory,
+    destination,
+    applicationVersion: options.applicationVersion,
+    updatedAt: (options.now ?? (() => new Date()))().toISOString(),
+    outcome: result.outcome,
+    reason: result.reason,
+    retryState: result.reason === "destination-conflict" || result.reason === "staging-collision"
+      ? "manual-intervention-required" : "safe-to-retry",
+    message: result.message ?? "Clarifold could not complete the data migration."
+  };
+  await mkdir(dirname(destination), { recursive: true });
+  await atomicWriteFile(`${destination}${MIGRATION_RECOVERY_RECEIPT_SUFFIX}`, `${JSON.stringify(receipt, null, 2)}\n`, {
+    encoding: "utf8", mode: 0o600
+  });
+}
+
+async function removeMatchingRecoveryReceipt(options: ClarifoldDataMigrationOptions): Promise<void> {
+  if (!isAbsolute(options.destinationDirectory)) return;
+  const destination = resolve(options.destinationDirectory);
+  const path = `${destination}${MIGRATION_RECOVERY_RECEIPT_SUFFIX}`;
+  try {
+    const receipt = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    if (receipt.schemaVersion === 1 && receipt.destination === destination) await rm(path, { force: true });
+  } catch (error) {
+    if (!isMissing(error) && !(error instanceof SyntaxError)) throw error;
   }
 }
 

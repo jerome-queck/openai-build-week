@@ -21,6 +21,8 @@ The [evaluation guide](../evaluation/README.md) owns live model samples, blinded
 
 For an evaluation install, use the architecture-native archive produced by the development guide and copy Clarifold's current internal `Clarifold.app` artifact to `/Applications` or another local Applications folder. The current archive is ad-hoc signed but not Developer ID signed or notarized. It is therefore suitable for local and CI evaluation, not public internet distribution; do not bypass organizational Gatekeeper policy to install it. Developer ID signing, notarization, and a post-notarization rerun are required before calling any artifact a public beta.
 
+On the first default launch, Clarifold checks for the prior Quick Study application-data directory. If the Clarifold destination is absent or empty, it stages and validates a copy, records a migration receipt, and activates the destination atomically. The old Quick Study directory remains unchanged as a rollback source. A populated destination, incomplete or invalid source, insufficient space, interrupted copy, permissions failure, or concurrent launch stops automatic migration and shows recovery guidance; Clarifold never merges or deletes either directory. Explicit `CLARIFOLD_DATA_DIR` test or development paths, including the deprecated one-beta `QUICK_STUDY_DATA_DIR` alias, never inspect or migrate the default directories.
+
 ## Privacy and source access defaults
 
 The complete current data-practices disclosure is the [privacy notice](../PRIVACY.md).
@@ -38,8 +40,8 @@ Security reports and conduct reports use their separate private channels in
 - If Codex, authentication, quota, or network access is unavailable, use Local Working Mode and save Pending Questions for explicit later submission.
 - If a Linked Source is missing or moved, use Retry or Locate again. Quick Study retains its identity and associations and does not reconstruct unavailable content from an index or fingerprint.
 - If Lean installation or removal is interrupted, use the visible retry or cleanup action. Historical Verifier Manifests and proof evidence remain intact.
-- If Quick Study quits with unfinished Agent Tasks, reopen the app and explicitly resume the checkpoint. Relaunch never resumes model spending automatically.
-- Back up the local application-data directory before destructive machine repair. Linked Sources require their own normal backup because Quick Study does not own or duplicate them.
+- If Clarifold quits with unfinished Agent Tasks, reopen the app and explicitly resume the checkpoint. Relaunch never resumes model spending automatically.
+- Back up the local Clarifold application-data directory before destructive machine repair. Linked Sources require their own normal backup because Clarifold does not own or duplicate them.
 
 ## Known limitations
 
