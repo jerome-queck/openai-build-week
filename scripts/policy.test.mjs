@@ -11,6 +11,18 @@ test("repository public issue intake matches the supported community boundary", 
   assert.deepEqual(await validatePublicIssueIntake({ rootDir: process.cwd() }), []);
 });
 
+test("public issue intake policy rejects an incomplete fixture repository", async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), "clarifold-issue-intake-"));
+  await mkdir(path.join(rootDir, ".github", "ISSUE_TEMPLATE"), { recursive: true });
+  await writeFile(path.join(rootDir, ".github", "ISSUE_TEMPLATE", "config.yml"), "blank_issues_enabled: true\n");
+
+  const errors = await validatePublicIssueIntake({ rootDir });
+
+  assert.match(errors.join("\n"), /blank issues must be disabled/);
+  assert.match(errors.join("\n"), /missing contact route/);
+  assert.match(errors.join("\n"), /missing issue form: \.github\/ISSUE_TEMPLATE\/bug_report\.yml/);
+});
+
 test("classifies documentation-only changes without requiring packaging", () => {
   const result = classifyChangedPaths([
     "README.md",

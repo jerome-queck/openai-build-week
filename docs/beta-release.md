@@ -1,4 +1,4 @@
-# Quick Study macOS beta
+# Clarifold macOS beta
 
 This is an evaluation beta for the supported Apple Silicon baseline. It is not a public production release and makes no causal learning-effectiveness claim.
 
@@ -6,7 +6,7 @@ This is an evaluation beta for the supported Apple Silicon baseline. It is not a
 
 - Apple Silicon Mac with macOS 14 Sonoma or later.
 - At least 16 GB memory and 12 GB free disk space for the application, local data, indexes, and the bundled verifier.
-- Network access and a supported Codex authentication path are needed for model-backed teaching. ChatGPT sign-in and OpenAI API-key sign-in are owned by Codex; Quick Study does not store either credential.
+- Network access and a supported Codex authentication path are needed for model-backed teaching. ChatGPT sign-in and OpenAI API-key sign-in are owned by Codex; Clarifold does not store either credential.
 - Local Working Mode, Linked Sources, Session Records, annotations, search, artifacts, export, and installed Lean checks remain usable without Codex access.
 
 The automated release lane runs on GitHub's `macos-14` runner with Node 24. The final local installed-artifact audit records the exact Mac, OS, candidate commit, archive digest, and operational measurements with the release evidence described in [`evaluation/README.md`](../evaluation/README.md).

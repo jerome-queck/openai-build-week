@@ -4,7 +4,7 @@ Clarifold is a local-first macOS mathematical learning workbench for Advanced Ma
 
 The built-in Quick Study Study Workspace is the home for loose work. Learners can later file a session into a named Study Workspace and Study Mission without replacing the session or losing its Learning Goal, Session Target, or return context.
 
-Quick Study keeps learner work local by default. Linked Sources remain at their original locations, Personal Notes stay private from ordinary teaching, and model-dependent work is explicit, bounded, cancellable, and recoverable. Teaching output can become a source-linked Learning Artifact or Reformulated Proof with revision provenance, while exact formal verification is shown only for claims actually checked by the recorded Verifier Environment.
+Clarifold keeps learner work local by default. Linked Sources remain at their original locations, Personal Notes stay private from ordinary teaching, and model-dependent work is explicit, bounded, cancellable, and recoverable. Teaching output can become a source-linked Learning Artifact or Reformulated Proof with revision provenance, while exact formal verification is shown only for claims actually checked by the recorded Verifier Environment.
 
 ## Current status
 
@@ -37,9 +37,9 @@ not a present beta launch requirement; it becomes appropriate before
 commercial maturity, collaboration, paid or hosted distribution, or a public
 signed and notarized release.
 
-## What Quick Study does—and does not claim
+## What Clarifold does—and does not claim
 
-Quick Study helps Advanced Mathematics Learners uncover and examine gaps in understanding. It does not guarantee mastery, correctness, or academic outcomes. Model-generated teaching and analysis may be incomplete or wrong, and formal verification covers only the exact claims and assumptions checked by the recorded Verifier Environment. Local-first operation does not mean every optional model or research operation stays offline.
+Clarifold helps Advanced Mathematics Learners uncover and examine gaps in understanding. It does not guarantee mastery, correctness, or academic outcomes. Model-generated teaching and analysis may be incomplete or wrong, and formal verification covers only the exact claims and assumptions checked by the recorded Verifier Environment. Local-first operation does not mean every optional model or research operation stays offline.
 
 ## Accessibility
 
