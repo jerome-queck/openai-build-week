@@ -15,7 +15,7 @@ const DOCUMENTATION_PATHS = [
   /^\.github\/(?:ISSUE_TEMPLATE|pull_request_template\.md)/,
   /^docs\//,
   /^evaluation\/README\.md$/,
-  /^(?:README|CONTRIBUTING|CODING_STANDARDS|CONTEXT|AGENTS)\.md$/,
+  /^(?:README|CONTRIBUTING|CODING_STANDARDS|CONTEXT|AGENTS|CODE_OF_CONDUCT|PRIVACY|SECURITY)\.md$/,
   /^(?:LICENSE\.md|NOTICE|THIRD_PARTY_NOTICES\.md)(?:\.|$)/,
   /^\.(?:editorconfig|gitattributes|gitignore|mailmap)$/,
 ];

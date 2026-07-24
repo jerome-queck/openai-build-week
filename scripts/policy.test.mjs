@@ -8,7 +8,16 @@ import { classifyChangedPaths } from "./change-classifier.mjs";
 import { validateDocumentation } from "./check-documentation.mjs";
 
 test("classifies documentation-only changes without requiring packaging", () => {
-  const result = classifyChangedPaths(["README.md", "docs/development.md", "THIRD_PARTY_NOTICES.md", ".mailmap"]);
+  const result = classifyChangedPaths([
+    "README.md",
+    "CODE_OF_CONDUCT.md",
+    "PRIVACY.md",
+    "SECURITY.md",
+    "LICENSE.md",
+    "docs/development.md",
+    "THIRD_PARTY_NOTICES.md",
+    ".mailmap",
+  ]);
 
   assert.equal(result.classification, "documentation-only");
   assert.equal(result.artifactAffected, false);
