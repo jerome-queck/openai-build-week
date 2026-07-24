@@ -1,3 +1,4 @@
+import { randomUUID, createHash } from "node:crypto";
 import { statfs } from "node:fs/promises";
 import { copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
@@ -83,7 +84,11 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
   try {
     const result = await migrateQuickStudyDataInternal({ ...options, onStage: observeStage });
     if (result.outcome === "blocked" || result.outcome === "failed") {
-      await writeRecoveryReceipt(options, result).catch(() => undefined);
+      try {
+        await writeRecoveryReceipt(options, result);
+      } catch (error) {
+        return recoveryReceiptFailure(result, error);
+      }
     } else if (result.outcome === "migrated" || result.outcome === "already-migrated") {
       await removeMatchingRecoveryReceipt(options).catch(() => undefined);
     }
@@ -97,9 +102,22 @@ export async function migrateQuickStudyData(options: ClarifoldDataMigrationOptio
       reason: "activation-failed",
       message: `Clarifold could not safely prepare its application data: ${errorMessage(error)}.`
     };
-    await writeRecoveryReceipt(options, result).catch(() => undefined);
+    try {
+      await writeRecoveryReceipt(options, result);
+    } catch (receiptError) {
+      return recoveryReceiptFailure(result, receiptError);
+    }
     return result;
   }
+}
+
+function recoveryReceiptFailure(result: MigrationResult, error: unknown): MigrationResult {
+  return {
+    ...result,
+    outcome: "failed",
+    reason: "activation-failed",
+    message: `${result.message ?? "Clarifold could not complete the data migration."} Recovery receipt could not be persisted: ${errorMessage(error)}.`
+  };
 }
 
 async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOptions): Promise<MigrationResult> {
@@ -181,6 +199,7 @@ async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOpti
     }
 
     emit("staging-copy");
+    const sourceSnapshot = await snapshotDirectory(sourceDirectory);
     try {
       await mkdir(stagingDirectory, { recursive: false, mode: 0o700 });
       await writeFile(join(stagingDirectory, MIGRATION_STAGING_MARKER_NAME), `${JSON.stringify({
@@ -195,9 +214,13 @@ async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOpti
     emit("verification");
     try {
       await (options.validateStagedDirectory ?? validateApplicationDirectory)(stagingDirectory);
+      if (await snapshotDirectory(sourceDirectory) !== sourceSnapshot) {
+        throw new Error("the legacy Quick Study data changed while it was being migrated");
+      }
     } catch (error) {
       await removeOwnedStaging(stagingDirectory);
-      return result("failed", "validation-failed", `Clarifold rejected the staged data: ${errorMessage(error)}.`);
+      const reason = errorMessage(error).includes("changed while it was being migrated") ? "copy-failed" : "validation-failed";
+      return result("failed", reason, `Clarifold rejected the staged data: ${errorMessage(error)}.`);
     }
 
     const now = options.now ?? (() => new Date());
@@ -212,9 +235,8 @@ async function migrateQuickStudyDataInternal(options: ClarifoldDataMigrationOpti
       outcome: "migrated",
       retryState: "idempotent"
     };
-    await writeFile(join(stagingDirectory, MIGRATION_RECEIPT_NAME), `${JSON.stringify(migrationReceipt, null, 2)}\n`, {
+    await atomicWriteFile(join(stagingDirectory, MIGRATION_RECEIPT_NAME), `${JSON.stringify(migrationReceipt, null, 2)}\n`, {
       encoding: "utf8",
-      flag: "wx",
       mode: 0o600
     });
 
@@ -247,6 +269,13 @@ interface DirectoryStatus {
   readonly isDirectory: boolean;
   readonly meaningful: boolean;
 }
+
+interface MigrationLockOwner {
+  readonly pid: number;
+  readonly token?: string;
+}
+
+const MALFORMED_LOCK_GRACE_MS = 30_000;
 
 async function directoryStatus(path: string): Promise<DirectoryStatus> {
   const status = await pathStatus(path);
@@ -302,6 +331,33 @@ async function copyDirectoryContents(source: string, destination: string): Promi
   }
 }
 
+async function snapshotDirectory(path: string): Promise<string> {
+  const entries: Array<{ path: string; kind: "directory" | "file" | "symlink" | "other"; digest?: string }> = [];
+  const visit = async (currentPath: string, relativePath: string): Promise<void> => {
+    const children = (await readdir(currentPath, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of children) {
+      const entryPath = join(currentPath, entry.name);
+      const entryRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) {
+        entries.push({ path: entryRelativePath, kind: "symlink" });
+      } else if (entry.isDirectory()) {
+        entries.push({ path: entryRelativePath, kind: "directory" });
+        await visit(entryPath, entryRelativePath);
+      } else if (entry.isFile()) {
+        entries.push({
+          path: entryRelativePath,
+          kind: "file",
+          digest: createHash("sha256").update(await readFile(entryPath)).digest("hex")
+        });
+      } else {
+        entries.push({ path: entryRelativePath, kind: "other" });
+      }
+    }
+  };
+  await visit(path, "");
+  return JSON.stringify(entries);
+}
+
 async function directorySize(path: string): Promise<number> {
   let total = 0;
   for (const entry of await readdir(path, { withFileTypes: true })) {
@@ -318,18 +374,28 @@ async function availableSpaceBytes(path: string): Promise<number> {
 }
 
 async function acquireMigrationLock(lockPath: string, now: () => Date): Promise<boolean> {
+  const lockContents = (): string => `${JSON.stringify({ pid: process.pid, token: randomUUID(), startedAt: now().toISOString() })}\n`;
   try {
-    await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
+    await writeFile(lockPath, lockContents(), {
       encoding: "utf8", flag: "wx", mode: 0o600
     });
     return true;
   } catch (error) {
     if (!isAlreadyExists(error)) throw error;
-    const owner = await readMigrationLockOwner(lockPath);
-    if (!owner || processIsAlive(owner.pid)) return false;
-    await rm(lockPath, { force: true });
+    const reclaimPath = `${lockPath}.reclaim`;
+    if (!await acquireMigrationLockReclaimer(reclaimPath, now)) return false;
     try {
-      await writeFile(lockPath, `${JSON.stringify({ pid: process.pid, startedAt: now().toISOString() })}\n`, {
+      const owner = await readMigrationLockOwner(lockPath);
+      if (!await isStaleMigrationLock(lockPath, owner, now())) return false;
+      const observedOwner = owner;
+      const currentOwner = await readMigrationLockOwner(lockPath);
+      if (!sameLockOwner(observedOwner, currentOwner)) return false;
+      await rm(lockPath, { force: true });
+    } finally {
+      await rm(reclaimPath, { force: true }).catch(() => undefined);
+    }
+    try {
+      await writeFile(lockPath, lockContents(), {
         encoding: "utf8", flag: "wx", mode: 0o600
       });
       return true;
@@ -340,10 +406,42 @@ async function acquireMigrationLock(lockPath: string, now: () => Date): Promise<
   }
 }
 
-async function readMigrationLockOwner(path: string): Promise<{ pid: number } | null> {
+async function acquireMigrationLockReclaimer(path: string, now: () => Date): Promise<boolean> {
+  try {
+    await writeFile(path, `${JSON.stringify({ pid: process.pid, token: randomUUID(), startedAt: now().toISOString() })}\n`, {
+      encoding: "utf8", flag: "wx", mode: 0o600
+    });
+    return true;
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+    const owner = await readMigrationLockOwner(path);
+    if (owner && processIsAlive(owner.pid)) return false;
+    return false;
+  }
+}
+
+async function isStaleMigrationLock(path: string, owner: MigrationLockOwner | null, now: Date): Promise<boolean> {
+  if (owner) return !processIsAlive(owner.pid);
+  try {
+    const info = await lstat(path);
+    return now.getTime() - info.mtimeMs >= MALFORMED_LOCK_GRACE_MS;
+  } catch (error) {
+    if (isMissing(error)) return false;
+    throw error;
+  }
+}
+
+function sameLockOwner(left: MigrationLockOwner | null, right: MigrationLockOwner | null): boolean {
+  if (!left || !right || left.pid !== right.pid) return left === right;
+  return left.token === right.token;
+}
+
+async function readMigrationLockOwner(path: string): Promise<MigrationLockOwner | null> {
   try {
     const value = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-    return Number.isInteger(value.pid) && Number(value.pid) > 0 ? { pid: Number(value.pid) } : null;
+    return Number.isInteger(value.pid) && Number(value.pid) > 0
+      ? { pid: Number(value.pid), ...(typeof value.token === "string" ? { token: value.token } : {}) }
+      : null;
   } catch (error) {
     if (isMissing(error) || error instanceof SyntaxError) return null;
     throw error;

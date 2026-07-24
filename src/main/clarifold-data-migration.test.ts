@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -133,10 +133,25 @@ describe("Clarifold data migration", () => {
     const destinationDirectory = join(root, "Clarifold");
     await createLearnerState(sourceDirectory);
     const lockDirectory = `${destinationDirectory}.migration-lock`;
-    await writeFile(lockDirectory, JSON.stringify({ pid: 999_999_999 }), "utf8");
+    await writeFile(lockDirectory, JSON.stringify({ pid: 999_999_999, token: "stale-lock" }), "utf8");
 
     await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
       .resolves.toMatchObject({ outcome: "migrated" });
+  });
+
+  it("serializes concurrent reclamation of an abandoned lock", async () => {
+    const root = await temporaryDirectory("clarifold-migration-stale-lock-race-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    await createLearnerState(sourceDirectory);
+    await writeFile(`${destinationDirectory}.migration-lock`, JSON.stringify({ pid: 999_999_999, token: "stale-lock" }), "utf8");
+
+    const results = await Promise.all([
+      migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }),
+      migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" })
+    ]);
+    expect(results.filter((result) => result.outcome === "migrated")).toHaveLength(1);
+    expect(results.filter((result) => result.reason === "concurrent-launch")).toHaveLength(1);
   });
 
   it("does not delete staging output without its Clarifold ownership marker", async () => {
@@ -197,6 +212,7 @@ describe("Clarifold data migration", () => {
       sessions: Array<{ learningGoal: string }>;
       sources: Array<{ kind: string; link?: { canonicalPath: string } }>;
     };
+    const sourceSnapshot = await readFile(join(sourceDirectory, "learning-application.json"), "utf8");
 
     await expect(migrateQuickStudyData({ sourceDirectory, destinationDirectory, applicationVersion: "0.2.0" }))
       .resolves.toMatchObject({ outcome: "migrated" });
@@ -209,7 +225,26 @@ describe("Clarifold data migration", () => {
       expect.objectContaining({ kind: "linkedSource", link: expect.objectContaining({ canonicalPath: linkedSourcePath }) })
     ]));
     expect(rolledBack.getState().sessions).toHaveLength(sourceState.sessions.length);
+    expect(await readFile(join(sourceDirectory, "learning-application.json"), "utf8")).toBe(sourceSnapshot);
     expect(await readFile(linkedSourcePath, "utf8")).toBe("externally owned\n");
+    await expect(readFile(join(destinationDirectory, "externally-owned-notes.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails safely when the legacy source changes during staging", async () => {
+    const root = await temporaryDirectory("clarifold-migration-source-change-");
+    const sourceDirectory = join(root, "Quick Study");
+    const destinationDirectory = join(root, "Clarifold");
+    await createLearnerState(sourceDirectory);
+
+    await expect(migrateQuickStudyData({
+      sourceDirectory,
+      destinationDirectory,
+      applicationVersion: "0.2.0",
+      validateStagedDirectory: async () => {
+        await appendFile(join(sourceDirectory, "learning-application.json"), "\n", "utf8");
+      }
+    })).resolves.toMatchObject({ outcome: "failed", reason: "copy-failed" });
+    await expect(readdir(destinationDirectory)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   async function temporaryDirectory(prefix: string): Promise<string> {
